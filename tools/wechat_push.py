@@ -243,10 +243,11 @@ def gen_quant_fallback(key, vclass, fetch_date, raw_pct, live_snippet="", source
     novelty_label = "首发" if novelty >= 75 else "转载/跟踪"
 
     return {
-        "sentiment": {"display": sentiment_display, "desc": "由新闻对应文本片段的情绪，排除无关主体干扰"},
-        "event": {"label": event, "desc": "精准匹配业绩、并购、监管等场景"},
-        "relevance": {"display": f"{relevance}/100", "desc": "衡量新闻与标的的关联程度，过滤无效噪音"},
-        "novelty": {"display": f"{novelty}/100 ({novelty_label})", "desc": "区分新闻首发与转载，识别信息冲击强度"},
+        # 四项指标的口径说明在 03 栏表头统一给一次，卡片里只留读数（与网页版同一口径）
+        "sentiment": {"display": sentiment_display},
+        "event": {"label": event},
+        "relevance": {"display": f"{relevance}/100"},
+        "novelty": {"display": f"{novelty}/100 ({novelty_label})"},
     }
 
 def quant_html_inline(quant):
@@ -262,10 +263,10 @@ def quant_html_inline(quant):
         f'<div style="background:{WECHAT_PANEL_SOFT};color:{WECHAT_TEXT_SOFT};border:1px dashed {WECHAT_VIOLET};border-radius:4px;'
         f'padding:9px 11px;margin-top:9px;font-size:11px;line-height:1.7">'
         f'<div style="color:{WECHAT_CYAN};font-weight:700;font-size:12px">◆ 核心量化指标</div>'
-        f'◦ <strong>实体级情感得分：</strong>{s.get("display","—")} — {s.get("desc","")}<br/>'
-        f'◦ <strong>新闻细分事件分类：</strong>{e.get("label","综合")} — {e.get("desc","")}<br/>'
-        f'◦ <strong>相关性得分：</strong>{r.get("display","—")} — {r.get("desc","")}<br/>'
-        f'◦ <strong>新颖度得分：</strong>{n.get("display","—")} — {n.get("desc","")}'
+        f'◦ <strong>实体级情感得分：</strong>{s.get("display","—")}<br/>'
+        f'◦ <strong>新闻细分事件分类：</strong>{e.get("label","综合")}<br/>'
+        f'◦ <strong>相关性得分：</strong>{r.get("display","—")}<br/>'
+        f'◦ <strong>新颖度得分：</strong>{n.get("display","—")}'
         f'</div>'
     )
 
@@ -823,8 +824,7 @@ def build_single_wechat_html(now=None):
                     '⚠️ 未读到 <strong>macro_data.json</strong>：构建步骤 '
                     f'<code style="background:#151e33;color:{WECHAT_CYAN};border:1px solid {WECHAT_BORDER};padding:1px 4px;">python3 macro_data.py</code> '
                     '未执行，或公开快讯源当次全部失败。<br/>'
-                    '本栏<strong>不再回填历史叙事</strong>（旧文案写死在模板里正是上一版正文长期过期的根因），'
-                    '只保留下方当次抓取的实时行情；宏观结论以每次重建后的最新一版为准。'
+                    '本栏<strong>不再回填历史叙事</strong>，只保留下方当次抓取的实时行情。'
                     + (f'<br/><span style="color:#9aa6c3;font-size:10px;">本次判定：{avail["detail"]}'
                        f'（{avail["reason"]}）</span>' if avail.get('detail') else '')
                     + '<br/><br/>' +
@@ -987,7 +987,8 @@ def build_single_wechat_html(now=None):
   {h(f'03 / 社区论坛热评 ({len(communities)} 大平台详尽深入全景研判 · 每日动态抓取 · 含跨域配对)')}
   {box(
     '<strong style="color:#edf2ff;">核心主线共识</strong>：' + community_thread_line + '<br/>' +
-    f'<span style="color:#9aa6c3;font-size:10px;">社区抓取日期 {_community_fetch_date} · {community_fetch_status()} · {len(communities)} 源动态抓取已上线（中英文 / 不同类型），每次构建自动刷新</span>'
+    f'<span style="color:#9aa6c3;font-size:10px;">社区抓取日期 {_community_fetch_date} · {community_fetch_status()} · {len(communities)} 源动态抓取已上线（中英文 / 不同类型），每次构建自动刷新</span><br/>'
+    '<span style="color:#9aa6c3;font-size:10px;">指标口径：情感 = 文本片段情绪（排除无关主体）· 事件 = 业绩 / 并购 / 监管等场景 · 相关性 = 新闻与标的关联度 · 新颖度 = 首发 vs 转载。</span>'
     + quant_pair.render_wechat(quant_pair.recommend(community_thread_line, _quotes, hint='hk_tape')) + fig_community)}
 
   {COMMUNITY_SLOT}
@@ -1009,7 +1010,7 @@ def build_single_wechat_html(now=None):
     <strong style="color:{NEON};font-size:13px;">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</strong><br/>
     全网境内外为你寻找蛛丝马迹 — 提供全景视野分析，由多模型协同推理决策。<br/>
     <span style="color:#9aa6c3;font-size:10px;">生成时间：{ts_full} · 行情/社区/舆情/宏观快讯均为本次构建现抓 · 宏观快讯时效：{macro_freshness_note} · 字符配图与正文同一份当次数据 · 100K 完整单页版</span><br/>
-    <span style="color:#9aa6c3;font-size:10px;">{quant_pair.RULE}（全文各处「◆ AI 量化」块共用同一口径，故只在此处列一次）</span>
+    {quant_pair.rule_note_wechat()}
   </div>
 
 </div>'''

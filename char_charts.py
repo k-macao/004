@@ -201,11 +201,10 @@ def quotes_chart(quotes):
     pts = _quote_pcts(quotes)
     title = '涨跌幅 diverging barh（零线居中）'
     if not pts:
-        return _rows_html(title, [], 'matplotlib Axes.barh 的发散版。没有涨跌幅就不画柱。'), _plain(title, [], '')
+        return _rows_html(title, [], '没有涨跌幅就不画柱。'), _plain(title, [], '')
     limit = max(1.0, max(abs(v) for _, v in pts))
     rows = [(name, diverging_bar(v, limit), f'{_fmt(v)}%') for name, v in pts]
-    note = (f'满刻度 ±{limit:.2f}%。+ 在零线右侧，- 在左侧。'
-            '缺涨跌幅的标的不补 0。对照 matplotlib 发散柱，数值标在柱端。')
+    note = (f'满刻度 ±{limit:.2f}%。+ 在零线右侧，- 在左侧；缺涨跌幅的标的不补 0。')
     return _rows_html(title, rows, note), _plain(title, rows, note)
 
 
@@ -229,9 +228,8 @@ def forces_chart(scan):
     if long_score is not None and (rows or verdict):
         rows.append(('做多合成分', diverging_bar(long_score, 100, half=10),
                      f'{_fmt(long_score, 1)} {verdict.get("stance") or ""}'.strip()))
-    note = ('力量分柱长按 0–100 固定刻度（#利好 =利空 .中性），不按当日最大值拉伸。'
-            '做多合成分零线居中，阈值 −10 防御 / +10 轻仓试多 / +25 可做多。'
-            '对照 matplotlib ordered bar 与发散柱。')
+    note = ('力量分柱按 0–100 固定刻度（#利好 =利空 .中性）；做多合成分零线居中，'
+            '阈值 −10 防御 / +10 轻仓试多 / +25 可做多。')
     if not rows:
         return _rows_html(title, [], note), _plain(title, [], note)
     return _rows_html(title, rows, note), _plain(title, rows, note)
@@ -343,8 +341,7 @@ def sentiment_chart(sd):
         spark = ''.join(SPARK[min(3, int((v - lo) / span * 4))] for v in vals)
         last = series[-1]
         rows.append(('情绪序列', spark, str(last.get('date') or '')[:10]))
-    note = ('温度柱刻度 0–100，50 为中性。净情感零线居中。'
-            '序列只画数值，不写来源。对照 matplotlib bar、stacked bar、plot。')
+    note = '温度柱刻度 0–100，50 为中性；净情感零线居中，序列只画数值、不写来源。'
     return _rows_html(title, rows, note), _plain(title, rows, note)
 
 
@@ -357,8 +354,7 @@ def forecast_chart(data):
     forecasts = (data or {}).get('forecasts') or []
     title = 'AI 预测 diverging bar（预期涨跌幅）+ 置信度 barh'
     note_base = ('预期涨跌幅零线居中，满刻度 ±1.5σ（模型对单日预测的硬上限）；'
-                 '置信度柱按 0–100% 固定刻度。对照 matplotlib 发散柱与 ordered barh。'
-                 '本图与正文同一次预测，缺数据不补 0。')
+                 '置信度柱按 0–100% 固定刻度。本图与正文同一次预测，缺数据不补 0。')
     if not forecasts:
         return _rows_html(title, [], note_base), _plain(title, [], note_base)
 

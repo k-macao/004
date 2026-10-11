@@ -3,25 +3,19 @@
 """每日 VIX 恐慌指数：统一分析与网页 / 微信渲染。
 
 本模块只解释当次 ``market_data.json`` 里的 ``quotes.VIX``，不联网、不缓存、
-也不回填历史读数。定义与边界参考 CTAAgents/notes 的《VIX 研究综合综述》：
+也不回填历史读数：
 
-* VIX 是 SPX 期权市场对未来 30 天波动率的风险中性定价，以年化百分数表示；
-* ``VIX²`` 更接近风险中性测度 Q 下的预期方差，不等于现实测度 P 下的
-  已实现波动率，也不是崩盘概率；
-* VIX 抬升可同时来自客观波动预期、风险厌恶 / 方差风险溢价、情绪与流动性；
-  因此本栏只报“波动定价压力”，不把一个读数翻译成确定的涨跌方向。
-
-展示分档是本项目为了每日阅读而设的实践阈值，不是 Cboe 官方评级或交易信号。
+* VIX 是 SPX 期权市场对未来 30 天隐含波动率的风险中性定价，以年化百分数表示；
+* ``VIX × √(30/365)`` 只给未来 30 天的一标准差幅度，不给涨跌方向；
+* ``VIX²`` 更接近风险中性 Q 测度下的预期方差，不等于现实 P 测度下的已实现波动率；
+* 展示分档只为本报告每日阅读设置，不参与 01 合成分 / 04 预测 / 配对推荐。
 """
 
 import html
 import math
 
-SOURCE_URL = 'https://github.com/CTAAgents/notes'
-SOURCE_LABEL = 'CTAAgents/notes《VIX 研究综合综述》'
-
 # 展示层实践分档。上界采用左闭右开：12.00 属于“常态”，20.00 属于“升温”。
-# 这些阈值只帮助阅读，不参与 panorama / forecast / 交易推荐。
+# 这些阈值只帮助阅读，不参与 panorama / forecast / 配对推荐。
 DISPLAY_BANDS = (
     (12.0, 'very-low', '极低波动定价', '期权保险价格处于低位；低读数不代表尾部风险消失。'),
     (20.0, 'normal', '常态波动定价', '市场仍在常态波动区间内，继续结合日变动与期限结构观察。'),
@@ -95,8 +89,6 @@ def analyze(market):
             'available': False,
             'reason': 'missing_quote',
             'as_of': quote.get('as_of') or '',
-            'source_url': SOURCE_URL,
-            'source_label': SOURCE_LABEL,
         }
 
     change = _number(quote.get('chg'))
@@ -121,43 +113,30 @@ def analyze(market):
         'expected_30d_pct': expected_30d,
         'expected_30d_text': f'±{expected_30d:.2f}%',
         'gauge_pct': gauge_pct,
-        'source_url': SOURCE_URL,
-        'source_label': SOURCE_LABEL,
     }
 
 
 def _web_explanation(data):
-    """网页端稳定的三层说明；无行情时也保留定义，不伪造当日解读。"""
+    """网页端一行口径；无行情时也保留定义，不伪造当日解读。"""
     if data.get('available'):
-        conversion = (
-            f'当前 {data["level_text"]} 表示期权市场按年化约 {data["level_text"]}% '
-            f'定价未来波动；按 √时间粗略折算，未来 30 天一标准差幅度约 '
-            f'<strong>{data["expected_30d_text"]}</strong>。这是幅度，不是涨跌方向。'
-        )
+        conversion = (f'当前 {data["level_text"]} → 年化 {data["level_text"]}%，'
+                      f'按 √时间折算未来 30 天幅度约 '
+                      f'<strong>{data["expected_30d_text"]}</strong>（幅度，不是涨跌方向）。')
     else:
-        conversion = (
-            '当次 VIX 行情未获取，因此不展示点位、日变动或幅度换算；本栏不会沿用上一版读数。'
-        )
-    return f'''
-  <div class="vix-explain-grid">
-    <article><strong>它测量什么</strong><span>由一篮子 SPX 虚值看涨 / 看跌期权按模型自由方差法合成，表示未来 30 天隐含波动率的市场定价，并以年化百分数报价。</span></article>
-    <article><strong>今天怎么读</strong><span>{conversion}</span></article>
-    <article><strong>不要误读</strong><span>VIX² 更接近风险中性测度 Q 下的预期方差；它不等于现实测度 P 下的已实现波动、崩盘概率或纯情绪，现货指数也不等同于 VIX 期货 / ETP 的可交易价格。抬升还可能来自风险厌恶、方差风险溢价与流动性。</span></article>
-  </div>'''
+        conversion = '当次行情未获取，不展示点位、日变动与幅度换算。'
+    return (f'<div class="vix-note">口径：{conversion}'
+            'VIX 由一篮子 SPX 虚值期权合成，是未来 30 天隐含波动率的年化定价；'
+            'VIX² 更接近风险中性 Q 测度的预期方差，不等于现实 P 测度的已实现波动或崩盘概率。</div>')
 
 
 def render_web(data):
     """渲染网页版 00 栏。所有动态文本均来自 ``analyze`` 的当次模型。"""
     data = data if isinstance(data, dict) else {'available': False}
-    source = (f'<a href="{html.escape(data.get("source_url") or SOURCE_URL, quote=True)}" '
-              f'target="_blank" rel="noopener noreferrer">'
-              f'{html.escape(data.get("source_label") or SOURCE_LABEL)}</a>')
     if not data.get('available'):
         return f'''<section class="vix-panel vix-missing" aria-label="每日 VIX 恐慌指数未获取">
   <div class="vix-live-row"><span class="vix-symbol">CBOE VIX</span><strong class="vix-value">—</strong><span class="vix-chip">今日未获取</span></div>
-  <div class="vix-alert">⚠️ market_data.json 中没有可用的 VIX 当次行情。本栏不回填历史点位、不把缺失解释成“平静”。运行 <code>python3 market_data.py</code> 后重建即可恢复。</div>
+  <div class="vix-alert">⚠️ market_data.json 没有可用的 VIX 当次行情：本栏不回填历史点位、不把缺失解释成“平静”。运行 <code>python3 market_data.py</code> 后重建即可恢复。</div>
   {_web_explanation(data)}
-  <div class="vix-source">说明口径参考 {source}；展示分档为本报告的实践阅读阈值，不是 Cboe 官方评级或交易信号。</div>
 </section>'''
 
     band = data['band'] or {'code': 'unknown', 'label': '未分档', 'explanation': ''}
@@ -180,15 +159,12 @@ def render_web(data):
   </div>
   <div class="vix-summary"><strong>今日判读：</strong>{summary}<span>行情日期 {as_of} · {html.escape(trend['sentence'])}</span></div>
   {_web_explanation(data)}
-  <div class="vix-source">说明口径参考 {source}；VIX 只度量波动定价，不单独给出股票方向。分档为本报告实践阈值，不是 Cboe 官方评级或交易信号。</div>
 </section>'''
 
 
 def render_wechat(data, cyan='#4fe5ff', danger='#ff6b7d', neon='#b6ff4a'):
     """渲染微信内联样式版；比网页精简，但保留 Q/P 与非方向性边界。"""
     data = data if isinstance(data, dict) else {'available': False}
-    source_url = html.escape(data.get('source_url') or SOURCE_URL, quote=True)
-    source_label = html.escape(data.get('source_label') or SOURCE_LABEL)
     shell = ('background:#10172a;color:#dce5fb;border:1px solid #2b3855;'
              f'border-left:3px solid {cyan};border-radius:5px;padding:12px 14px;'
              'margin:10px 0;font-size:12px;line-height:1.82;')
@@ -197,12 +173,10 @@ def render_wechat(data, cyan='#4fe5ff', danger='#ff6b7d', neon='#b6ff4a'):
         return (f'<div style="{shell}">'
                 f'<div style="color:{cyan};font-weight:700;font-size:13px;">◆ CBOE VIX　'
                 f'<span style="color:{danger};">今日未获取</span></div>'
-                'market_data.json 中没有可用的 VIX 当次行情；本栏不回填历史点位、'
+                'market_data.json 没有可用的 VIX 当次行情：本栏不回填历史点位、'
                 '不把缺失解释成“平静”。<br/>'
                 '<strong>口径：</strong>VIX 是 SPX 期权市场对未来 30 天隐含波动率的年化定价；'
-                'VIX² 更接近 Q 测度预期方差，不等于 P 测度已实现波动或崩盘概率。<br/>'
-                f'<span style="{meta}">说明参考 <a href="{source_url}" style="color:{cyan};">'
-                f'{source_label}</a>；分档不是 Cboe 官方评级或交易信号。</span></div>')
+                'VIX² 接近 Q 测度预期方差，不等于 P 测度已实现波动或崩盘概率。</div>')
 
     trend = data['trend'] or {'code': 'unknown', 'label': '日变动未获取'}
     band = data['band'] or {'label': '未分档', 'explanation': ''}
@@ -216,14 +190,10 @@ def render_wechat(data, cyan='#4fe5ff', danger='#ff6b7d', neon='#b6ff4a'):
             'padding:1px 6px;border:1px solid #435d55;">'
             f'{html.escape(band["label"])} · {html.escape(trend["label"])}</strong>　'
             f'{html.escape(band.get("explanation") or "")}</div>'
-            f'· <strong>幅度换算：</strong>年化 {data["level_text"]}%；按 √时间粗略折算，未来 30 天一标准差约 '
-            f'<strong>{data["expected_30d_text"]}</strong>（只表示幅度，不表示方向）。<br/>'
-            '· <strong>定义：</strong>由一篮子 SPX 虚值期权按模型自由方差法合成，度量未来 30 天隐含波动率的市场定价。<br/>'
-            '· <strong>边界：</strong>VIX² 更接近风险中性 Q 测度预期方差，不等于现实 P 测度已实现波动、'
-            '崩盘概率或纯情绪；现货指数也不等同于 VIX 期货 / ETP 的交易价格。上升还可能包含风险厌恶、'
-            '方差风险溢价与流动性。<br/>'
-            f'<span style="{meta}">行情日期 {as_of} · 说明参考 <a href="{source_url}" style="color:{cyan};">'
-            f'{source_label}</a> · 展示分档为实践阈值，不是 Cboe 官方评级或交易信号。</span></div>')
+            f'· <strong>口径：</strong>年化 {data["level_text"]}%；√时间折算未来 30 天幅度约 '
+            f'<strong>{data["expected_30d_text"]}</strong>（只表示幅度）。VIX 由 SPX 虚值期权合成，'
+            '度量未来 30 天隐含波动率定价；VIX² 接近 Q 测度预期方差，不等于 P 测度已实现波动或崩盘概率。<br/>'
+            f'<span style="{meta}">行情日期 {as_of}</span></div>')
 
 
 def render_plain(data):

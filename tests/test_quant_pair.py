@@ -4,6 +4,7 @@
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _p in (REPO_ROOT, os.path.join(REPO_ROOT, 'tools')):
@@ -226,6 +227,52 @@ class TestAttachedAfterContent(unittest.TestCase):
         self.assertNotIn('数据不足', html)
         self.assertEqual(html.count('跨域组合：'), len(communities))
         self.assertEqual(html.count('推荐：'), len(communities))
+
+
+class TestAnnotationTextIsNotRepeated(unittest.TestCase):
+    """说明文字瘦身：同一句话整页只印一次（口径挪到页脚 / 表头），卡片只留数据。"""
+
+    def _page(self):
+        with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as fh:
+            template = fh.read()
+        now = datetime(2026, 10, 8, 1, 0, tzinfo=timezone.utc)
+        data = {'fetch_date': '2026-10-08',
+                **_quotes(HSTECH=1.4, NDQ=0.2, GOLD=1.2, USDCNH=-0.3, HSI=0.6, SPX=0.4)}
+        return bs.substitute(template, bs.build_tokens(data, now))
+
+    def test_pair_rule_is_printed_once_in_the_page_footer(self):
+        page = self._page()
+        head = quant_pair.RULE.split('|z|', 1)[0]
+        self.assertEqual(1, page.count(head), '配对口径整页只印一次（页脚）')
+        self.assertEqual(1, page.count(quant_pair.OUTLOOK_NOTE),
+                         '48h 预测口径同样只印一次')
+
+    def test_quant_metric_glosses_are_printed_once_in_the_section_head(self):
+        cards = bs.build_quant_html({
+            'sentiment': {'display': '+0.11 (中性)', 'desc': '由新闻对应文本片段的情绪，排除无关主体干扰'},
+            'event': {'label': '资金流向', 'desc': '精准匹配业绩、并购、监管等场景'},
+            'relevance': {'display': '97/100', 'desc': '衡量新闻与标的的关联程度，过滤无效噪音'},
+            'novelty': {'display': '58/100 (转载/跟踪)', 'desc': '区分新闻首发与转载，识别信息冲击强度'},
+        })
+        self.assertIn('+0.11 (中性)', cards)
+        for gloss in ('排除无关主体干扰', '过滤无效噪音', '识别信息冲击强度'):
+            self.assertNotIn(gloss, cards, '四项指标口径只在 03 栏表头给一次')
+        with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as fh:
+            self.assertIn('指标口径', fh.read())
+
+    def test_cards_drop_the_strategy_logic_gloss(self):
+        rec = quant_pair.recommend('美联储利率与黄金', _quotes(GOLD=1.2, USDCNH=-0.3), hint='fed')
+        self.assertIn(rec['why'], quant_pair.render_web(rec))
+        self.assertNotIn(rec['logic'], quant_pair.render_web(rec))
+        self.assertNotIn(rec['logic'], quant_pair.render_wechat(rec))
+
+    def test_brief_compact_keeps_strategy_and_call_only(self):
+        rec = quant_pair.recommend('恒生科技 恒指', _quotes(HSTECH=1.4, NDQ=0.2))
+        brief = quant_pair.render_web(rec, compact=True, brief=True)
+        self.assertIn('跨域组合', brief)
+        self.assertIn('推荐', brief)
+        self.assertNotIn('风险因子', brief)
+        self.assertNotIn('风险因子', quant_pair.render_wechat(rec, compact=True, brief=True))
 
 
 if __name__ == '__main__':

@@ -110,10 +110,12 @@ KEYWORD_WEIGHT = 6
 Z_ENTRY = 1.0
 Z_STRONG = 1.8
 
-RULE = ('规则：价差 = 涨跌幅A − 涨跌幅B；z = 价差 / 残差波动'
-        '（σ 为策略参数里的典型日波动，ρ 为预设相关系数）。'
-        '两腿必须跨域（港股 / 美股 / 贵金属 / 能源 / 汇率，同域价格差不算组合）。'
-        '|z|<1 观望，z≤−1 做多A做空B，z≥1 做空A做多B。不构成投资建议。')
+# 口径说明整页只印一次（网页在页脚、微信在文末），不再逐块重复：
+#   ① RULE 是配对规则，② OUTLOOK_NOTE 是 48h 三行预测的口径边界。
+RULE = ('两腿须跨域；价差 = 涨跌幅A − 涨跌幅B，z = 价差 / 残差波动'
+        '（σ 为策略参数里的典型日波动）。|z|<1 观望，z≤−1 做多A做空B，z≥1 做空A做多B。'
+        '行情不足整段隐藏，不构成投资建议。')
+OUTLOOK_NOTE = '48h 风险因子 / 走势 / 展望三行均为规则化推导，置信度未校准。'
 
 # 每条策略恰好两只标的、且两腿跨域（见上方 DOMAIN）。hints 是栏目/频道/力量 key，
 # keywords 从正文里找策略。同一个「域对」可以有多条策略，但组合本身不重复。
@@ -421,12 +423,12 @@ def _forecast_outlook(strategy, leg_a, leg_b, z):
     confidence = min(0.62, 0.35 + min(abs(spread_z), 2.0) * 0.08)
     direction = '偏上涨' if projected > 0.08 else ('偏下跌' if projected < -0.08 else '区间震荡')
     strength = '高' if abs(spread_z) >= 1.8 else ('中' if abs(spread_z) >= 1 else '低')
-    risk = (f'波动{strength}（48h代理±{vol_48h:.2f}%）；资金流/情绪按当次涨跌弱代理：{direction}；'
-            '宏观事件未接实时日历，方向未知。')
-    short = (f'48h{direction}，中枢{_fmt_pct(projected)}，波动区间±{vol_48h:.2f}%，'
-             f'置信度{confidence:.0%}（未校准）。')
+    risk = (f'波动{strength}（48h代理±{vol_48h:.2f}%）；资金流/情绪弱代理：{direction}；'
+            '宏观未接日历。')
+    short = (f'48h{direction}，中枢{_fmt_pct(projected)}，区间±{vol_48h:.2f}%，'
+             f'置信度{confidence:.0%}。')
     long_dir = '中性偏多' if (pa + pb) > 0.2 else ('中性偏空' if (pa + pb) < -0.2 else '中性')
-    long = f'48h后展望：{long_dir}；低置信度情景，缺少多日序列，趋势持续性未知。'
+    long = f'48h后：{long_dir}（低置信度）。'
     return {'risk': risk, 'short': short, 'long': long}
 
 
@@ -564,8 +566,19 @@ def _gate(rec):
     return False
 
 
-def render_web(rec, compact=False, note=''):
+def rule_note_web(label='AI 量化 · 配对交易'):
+    """整页只印一次的配对口径（页脚），各卡片不再逐块重复。"""
+    return f'{label}口径（全文各块共用）：{_esc(RULE)} {_esc(OUTLOOK_NOTE)}'
+
+
+def render_web(rec, compact=False, note='', brief=False, show_rule=False):
     """网页版。compact=True 时收成一行，仍包含策略 / 标的组合 / 推荐。
+
+    brief=True 只留策略 / 跨域组合 / 推荐（三大关注面与噪音小节已在上面出现过
+    同一组标的与三行预测，不再重复铺一遍）。
+
+    口径与免责说明默认不逐块重复：整页由 rule_note_web() 在页脚印一次
+    （show_rule=True 可让单独出现的块自带规则）。
 
     行情不足（两腿涨跌幅不齐）时整段隐藏：返回空串，不渲染「数据不足」段。
     """
@@ -573,14 +586,16 @@ def render_web(rec, compact=False, note=''):
         return ''
     note_html = f'<div class="ai-quant-meta">{_esc(note)}</div>' if note else ''
     if compact:
+        tail = ('' if brief else
+                ' · 风险因子(48h)：' + _esc(rec['outlook']['risk'])
+                + ' · 走势预测(48h)：' + _esc(rec['outlook']['short'])
+                + ' · 未来展望：' + _esc(rec['outlook']['long']))
         return (
             '<div class="ai-quant ai-quant-compact" data-ai-quant="1">'
             '<strong>◆ AI 量化</strong> · 策略：' + _esc(rec['strategy_name'])
             + ' · 跨域组合：' + _esc(rec.get('domain_pair', '')) + ' · ' + _esc(rec['pair_label'])
             + ' · 推荐：' + _esc(rec['stance']) + '。' + _esc(rec['recommendation'])
-            + ' · 风险因子(48h)：' + _esc(rec['outlook']['risk'])
-            + ' · 走势预测(48h)：' + _esc(rec['outlook']['short'])
-            + ' · 未来展望：' + _esc(rec['outlook']['long'])
+            + tail
             + (f' <span class="ai-quant-meta">{_esc(note)}</span>' if note else '')
             + '</div>'
         )
@@ -599,9 +614,9 @@ def render_web(rec, compact=False, note=''):
         f'    <li><strong>推荐：</strong>{_esc(rec["stance"])}。{_esc(rec["recommendation"])}'
         f'（置信度 {conf}%）</li>\n'
         '  </ul>\n'
-        f'  <div class="ai-quant-meta">{_esc(rec["why"])} {_esc(rec["logic"])}</div>\n'
-        f'  <div class="ai-quant-meta">{_esc(rec["rule"])}</div>\n'
-        '  <ul class="ai-quant-list ai-quant-forecast">'
+        f'  <div class="ai-quant-meta">{_esc(rec["why"])}</div>\n'
+        + (f'  <div class="ai-quant-meta">口径：{_esc(rec["rule"])}</div>\n' if show_rule else '')
+        + '  <ul class="ai-quant-list ai-quant-forecast">'
         f'<li><strong>风险因子预测 · 未来48小时：</strong>{_esc(rec["outlook"]["risk"])}</li>'
         f'<li><strong>走势预测 · 未来48小时：</strong>{_esc(rec["outlook"]["short"])}</li>'
         f'<li><strong>未来预测 · 48小时之后：</strong>{_esc(rec["outlook"]["long"])}</li>'
@@ -614,6 +629,7 @@ def render_web(rec, compact=False, note=''):
 def render_web_list(recs, note=''):
     """一条内容里有多组标的时，合成一块 AI 量化，每组一行。
 
+    口径与免责说明同样不在这里重复（整页由 rule_note_web() 印一次）。
     行情不足的那些条先被整段隐藏；全部隐藏时本块不产出内容。
     """
     recs = [r for r in (recs or []) if r and not _gate(r)]
@@ -635,7 +651,6 @@ def render_web_list(recs, note=''):
         '<div class="ai-quant" data-ai-quant="1">\n'
         '  <div class="ai-quant-title">◆ AI 量化 · 配对交易<span>两标的组合</span></div>\n'
         '  <ul class="ai-quant-list">\n    ' + '\n    '.join(items) + '\n  </ul>\n'
-        f'  <div class="ai-quant-meta">{_esc(RULE)}</div>\n'
         f'{tail}</div>'
     )
 
@@ -645,11 +660,11 @@ def render_web_list(recs, note=''):
 # ---------------------------------------------------------------------------
 # 微信单页有 10 万字符硬上限、95,000 推送门禁。整篇推送里挂着 50 块 AI 量化，
 # 重复的内联样式与逐块重复的规则说明加起来是全文最大的一笔开销（实测占约四分之一）。
-# 所以微信版做了两件纯样式/排版的瘦身，**信息一条没删**：
+# 所以微信版做了两件纯样式/排版的瘦身：
 #   ① 四行要点从四个 <div> 合成一段 <br/> 分隔的文本，省掉四组重复 style；
 #   ② 规则说明不再逐块重复 —— 由 rule_note_wechat() 在推送里整篇只印一次
 #      （show_rule=True 可让单独出现的块自带规则）。
-# 网页版没有字符上限，保持原样逐块带规则，不受影响。
+# 网页版同样只在页脚印一次（rule_note_web()），口径与免责说明不再逐卡重复。
 _WX_BOX = ('background:#11182b;color:#dce5fb;border:1px solid #6f55b8;border-left:3px solid #ff4d9a;'
            'border-radius:4px;padding:9px 11px;margin-top:9px;font-size:11px;line-height:1.7')
 _WX_COMPACT = ('background:#11182b;color:#dce5fb;border:1px solid #2b3855;border-radius:3px;'
@@ -660,15 +675,17 @@ _WX_META = 'color:#9aa6c3;font-size:10px;margin-top:6px'
 
 
 def rule_note_wechat(label='AI 量化 · 配对交易'):
-    """整篇推送只印一次的配对规则说明（各处 AI 量化块共用同一口径）。"""
-    return (f'<div style="{_WX_META}">{_esc(label)}规则（全文各块共用同一口径）：{_esc(RULE)}</div>')
+    """整篇推送只印一次的配对口径说明（各处 AI 量化块共用同一口径）。"""
+    return (f'<div style="{_WX_META}">{_esc(label)}口径（全文各块共用）：{_esc(RULE)} '
+            f'{_esc(OUTLOOK_NOTE)}</div>')
 
 
-def render_wechat(rec, compact=False, note='', show_rule=False):
+def render_wechat(rec, compact=False, note='', show_rule=False, brief=False):
     """微信版：全内联样式，口径与网页版一致。
 
-    show_rule 默认关闭：规则说明由 rule_note_wechat() 在整篇里印一次，
-    避免同一段 100 字的规则在 20 多个块里重复（微信单页字符预算很紧）。
+    show_rule 默认关闭：口径说明由 rule_note_wechat() 在整篇里印一次，
+    避免同一段规则在 20 多个块里重复（微信单页字符预算很紧）。
+    brief=True 只留策略 / 跨域组合 / 推荐（与网页端同一口径）。
 
     与网页版同一闸门：行情不足（两腿涨跌幅不齐）时整段隐藏，返回空串。
     """
@@ -677,14 +694,16 @@ def render_wechat(rec, compact=False, note='', show_rule=False):
     note_html = (f'<div style="color:#9aa6c3;font-size:10px;margin-top:4px;">{_esc(note)}</div>'
                  if note else '')
     if compact:
+        tail = ('' if brief else
+                ' · 风险因子(48h)：' + _esc(rec['outlook']['risk'])
+                + ' · 走势预测(48h)：' + _esc(rec['outlook']['short'])
+                + ' · 未来展望：' + _esc(rec['outlook']['long']))
         return (
             f'<div style="{_WX_COMPACT}">'
             '<strong style="color:#4fe5ff;">◆ AI 量化</strong> · 策略：' + _esc(rec['strategy_name'])
             + ' · 跨域组合：' + _esc(rec.get('domain_pair', '')) + ' · ' + _esc(rec['pair_label'])
             + ' · 推荐：' + _esc(rec['stance']) + '。' + _esc(rec['recommendation'])
-            + ' · 风险因子(48h)：' + _esc(rec['outlook']['risk'])
-            + ' · 走势预测(48h)：' + _esc(rec['outlook']['short'])
-            + ' · 未来展望：' + _esc(rec['outlook']['long'])
+            + tail
             + ((' · ' + _esc(note)) if note else '')
             + '</div>'
         )
@@ -703,8 +722,8 @@ def render_wechat(rec, compact=False, note='', show_rule=False):
         f'◦ <strong>风险因子预测·未来48小时：</strong>{_esc(rec["outlook"]["risk"])}<br/>'
         f'◦ <strong>走势预测·未来48小时：</strong>{_esc(rec["outlook"]["short"])}<br/>'
         f'◦ <strong>未来预测·48小时之后：</strong>{_esc(rec["outlook"]["long"])}'
-        f'<div style="{_WX_META}">{_esc(rec["why"])} {_esc(rec["logic"])}</div>'
-        + (f'<div style="{_WX_META}">{_esc(rec["rule"])}</div>' if show_rule else '')
+        f'<div style="{_WX_META}">{_esc(rec["why"])}</div>'
+        + (f'<div style="{_WX_META}">口径：{_esc(rec["rule"])}</div>' if show_rule else '')
         + f'{note_html}</div>'
     )
 
