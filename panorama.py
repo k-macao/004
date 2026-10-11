@@ -656,8 +656,8 @@ def scan(market=None, macro=None, sentiment=None, community=None, now=None, top_
             'adjust': adjust,
             'trigger': trigger,
             'score_text': score_text_of(long_score, can_long),
-            'rule': ('合成分 = Σ(方向 × 力量分 × 权重) / Σ(力量分 × 权重)，噪音力量不计入；'
-                     '≥25 可做多 / ≥10 轻仓试多 / −10~10 观望 / ≤−10 防御。'),
+            'rule': ('合成分 = Σ(方向 × 力量分 × 权重) / Σ(力量分 × 权重)，噪音不计入；'
+                     '≥25 可做多 / ≥10 轻仓 / −10~10 观望 / ≤−10 防御'),
             'ai_quant': verdict_ai,
         },
     }
@@ -677,8 +677,8 @@ def _ev_line(e):
     return _esc(d + e.get('text', '') + tail)
 
 
-HEAD_NOTE = ('扫描口径：力量分 = 45% 幅度 + 30% 印证度 + 25% 时效；'
-             '≥55 为重点、35~55 为次要、<35 或未过噪音阈值为噪音（噪音不参与做多结论）。')
+HEAD_NOTE = ('口径：力量分 = 45% 幅度 + 30% 印证度 + 25% 时效；'
+             '≥55 重点 / 35~55 次要 / <35 或未过噪音阈值均计噪音。')
 
 _FOCUS_HINT = {
     '宏观事件': 'macro_growth',
@@ -716,10 +716,10 @@ def render_web(data):
 
     if not data['forces']:
         parts.append('<div class="pub-sub">◆ 今日未获取足够数据 —— 本栏不编故事</div>'
-                     '<div style="font-size:12px;line-height:1.8;">四路数据（行情 / 宏观快讯 / 舆情因子 / 社区研判）'
-                     '当次全部缺失，按反陈旧口径本栏<strong>不回填历史叙事</strong>。'
-                     '恢复命令：<code>python3 market_data.py &amp;&amp; python3 macro_data.py &amp;&amp; '
-                     'python3 community_data.py &amp;&amp; python3 sentiment_factors.py --live</code>。</div>')
+                     '<div style="font-size:12px;line-height:1.8;">四路数据当次全部缺失，'
+                     '本栏<strong>不回填历史叙事</strong>。恢复命令：'
+                     '<code>python3 market_data.py &amp;&amp; python3 macro_data.py &amp;&amp; '
+                     'python3 community_data.py</code>。</div>')
         return '\n'.join(parts)
 
     parts.append('<div class="pub-sub">◆ 推动股价的 5 大力量（按当次证据强度排序）</div>')
@@ -741,7 +741,7 @@ def render_web(data):
     for fc in data['focus']:
         focus_bits.append(
             f'<li><strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}'
-            + quant_pair.render_web(_focus_ai(fc, data), compact=True)
+            + quant_pair.render_web(_focus_ai(fc, data), compact=True, brief=True)
             + '</li>')
     parts.append('<ul class="pixel-list">' + ''.join(focus_bits) + '</ul>')
 
@@ -750,8 +750,8 @@ def render_web(data):
     if noise:
         parts.append('<ul class="pixel-list">' + ''.join(
             f'<li><strong>{_esc(n["name"])}</strong>（{n["score"]} 分）—— {_esc(n["read"])}'
-            + quant_pair.render_web(_force_ai(n, data), compact=True,
-                                    note='本段已判为噪音，配对结果只作对照，不单独作为做多依据。')
+            + quant_pair.render_web(_force_ai(n, data), compact=True, brief=True,
+                                    note='噪音段：配对只作对照，不作为做多依据。')
             + '</li>'
             for n in noise) + '</ul>')
     else:
@@ -773,8 +773,8 @@ def render_web(data):
         + ''.join(f'<div style="margin-top:6px;">{r}</div>' for r in reasons)
         + ''.join(f'<div style="margin-top:6px;">{_esc(t)}</div>' for t in v['trigger'])
         + ''.join(f'<div class="pub-meta" style="margin-top:4px;">调整项：{_esc(a)}</div>' for a in v['adjust'])
-        + f'<div class="pub-meta" style="margin-top:8px;">{_esc(v["rule"])}　'
-          '本栏为规则化推导，不构成投资建议。</div>'
+        + f'<div class="pub-meta" style="margin-top:8px;">{_esc(v["rule"])}'
+          '（规则化推导，不构成投资建议）</div>'
         + quant_pair.render_web(v.get('ai_quant') or _focus_ai(
             {'category': '是否可以做多', 'summary': v.get('stance') or ''}, data),
             note='配对推荐独立于上方做多合成分，两腿行情不全时不给方向。')
@@ -802,8 +802,7 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
 
     if not data['forces']:
         out.append(sub('◆ 今日未获取足够数据 —— 本栏不编故事')
-                   + '四路数据（行情 / 宏观快讯 / 舆情因子 / 社区研判）当次全部缺失，'
-                     '按反陈旧口径<strong>不回填历史叙事</strong>；'
+                   + '四路数据当次全部缺失，本栏<strong>不回填历史叙事</strong>；'
                      '恢复后重建即可恢复完整扫描。</div>')
         return ''.join(out)
 
@@ -825,7 +824,7 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
     out.append('<br/>' + sub('◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化'))
     out.append(''.join(
         f'· <strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}'
-        + quant_pair.render_wechat(_focus_ai(fc, data), compact=True)
+        + quant_pair.render_wechat(_focus_ai(fc, data), compact=True, brief=True)
         + '<br/>'
         for fc in data['focus']))
 
@@ -847,7 +846,7 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
         out.append('<br/>' + _esc(t))
     for a in v['adjust']:
         out.append('<br/><span style="color:#9aa6c3;font-size:10.5px;">调整项：' + _esc(a) + '</span>')
-    out.append(meta(_esc(v['rule']) + '　本栏为规则化推导，不构成投资建议。'))
+    out.append(meta(_esc(v['rule']) + '（规则化推导，不构成投资建议）'))
     out.append(quant_pair.render_wechat(v.get('ai_quant') or _focus_ai(
         {'category': '是否可以做多', 'summary': v.get('stance') or ''}, data),
         note='配对推荐独立于上方做多合成分，两腿行情不全时不给方向。'))

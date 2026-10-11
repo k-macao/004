@@ -27,7 +27,7 @@
   - 若不存在，则保留模板原有静态社区内容（仅日期占位符会被刷新），保证向后兼容
 
 每日 VIX 注入 (00 节):
-  - 由 vix_daily.py 读取当次 quotes.VIX，统一生成点位、日变动、实践分档、30 日幅度换算与 Q/P 边界说明
+  - 由 vix_daily.py 读取当次 quotes.VIX，统一生成点位、日变动、实践分档、30 日幅度换算与一行 Q/P 口径
   - VIX 缺失时明确显示「今日未获取」，绝不回填历史点位，也不把缺失解释成低恐慌
 
 全景扫描注入 (01 节):
@@ -193,6 +193,7 @@ def build_tokens(data, now, community_data=None, sentiment_data=None):
     for i in range(1, 50):   # 49 大社区（14 原有 + 20 前次新增 + 15 本次扩容）
         tokens[f'{{{{CD_{i:02d}}}}}'] = cd
 
+    tokens['{{QUANT_RULE}}'] = quant_pair.rule_note_web()
     tokens['{{FETCH_STATUS}}'] = _fetch_status(data)
     tokens['{{COMMUNITY_FETCH_STATUS}}'] = _community_fetch_status(community_data)
     tokens.update(_community_tokens(community_data))
@@ -348,7 +349,11 @@ def find_leftovers(html):
 
 
 def build_quant_html(quant):
-    """构建核心量化指标 HTML（网页版）—— 每条新闻/社区卡片后追加"""
+    """构建核心量化指标 HTML（网页版）—— 每条新闻/社区卡片后追加。
+
+    四项指标的口径说明（情感 / 事件 / 相关性 / 新颖度）在 03 栏表头统一给出一次，
+    卡片里只留数值与标签，避免 49 张卡片把同四句话重复 49 遍。
+    """
     if not quant:
         return ""
     sentiment = quant.get('sentiment', {})
@@ -357,22 +362,18 @@ def build_quant_html(quant):
     novelty = quant.get('novelty', {})
 
     s_display = sentiment.get('display', '—')
-    s_desc = sentiment.get('desc', '由新闻对应文本片段的情绪，排除无关主体干扰')
     e_label = event.get('label', '综合')
-    e_desc = event.get('desc', '精准匹配业绩、并购、监管等场景')
     r_display = relevance.get('display', '—')
-    r_desc = relevance.get('desc', '衡量新闻与标的的关联程度，过滤无效噪音')
     n_display = novelty.get('display', '—')
-    n_desc = novelty.get('desc', '区分新闻首发与转载，识别信息冲击强度')
 
     return (
         f'  <div class="quant-metrics">\n'
         f'    <div class="quant-metrics-title">◆ 核心量化指标</div>\n'
         f'    <ul class="quant-metrics-list">\n'
-        f'      <li><strong>实体级情感得分：</strong>{s_display} — {s_desc}</li>\n'
-        f'      <li><strong>新闻细分事件分类：</strong>{e_label} — {e_desc}</li>\n'
-        f'      <li><strong>相关性得分：</strong>{r_display} — {r_desc}</li>\n'
-        f'      <li><strong>新颖度得分：</strong>{n_display} — {n_desc}</li>\n'
+        f'      <li><strong>实体级情感得分：</strong>{s_display}</li>\n'
+        f'      <li><strong>新闻细分事件分类：</strong>{e_label}</li>\n'
+        f'      <li><strong>相关性得分：</strong>{r_display}</li>\n'
+        f'      <li><strong>新颖度得分：</strong>{n_display}</li>\n'
         f'    </ul>\n'
         f'  </div>'
     )

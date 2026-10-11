@@ -401,14 +401,10 @@ button, a { -webkit-tap-highlight-color:transparent; }
 .vix-summary { margin:0 0 13px; padding:9px 11px; color:var(--muted-strong); background:rgba(6,10,22,.5); border-left:3px solid var(--cyan); border-radius:3px; font-size:12px; }
 .vix-summary strong { color:var(--ink); }
 .vix-summary > span { display:block; margin-top:2px; color:var(--muted); font:10px/1.5 var(--mono); }
-.vix-explain-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
-.vix-explain-grid article { min-width:0; padding:11px 12px; background:rgba(6,10,22,.43); border:1px solid var(--border); border-radius:5px; }
-.vix-explain-grid strong { display:block; margin-bottom:4px; color:var(--cyan); font-size:11.5px; }
-.vix-explain-grid span { display:block; color:var(--muted-strong); font-size:11px; line-height:1.75; }
+.vix-note { margin-top:10px; color:var(--muted-strong); font-size:11px; line-height:1.75; }
+.vix-note strong { color:var(--ink); }
 .vix-alert { margin:11px 0 13px; padding:9px 11px; color:var(--muted-strong); background:rgba(255,107,125,.07); border-left:3px solid var(--danger); border-radius:3px; font-size:11.5px; }
 .vix-missing .vix-chip { color:#fff; background:var(--danger); }
-.vix-source { margin-top:10px; color:var(--muted); font:10px/1.7 var(--mono); }
-.vix-source a { color:var(--cyan); text-decoration:underline; text-underline-offset:2px; }
 .pub-heading {
   display:flex;
   align-items:center;
@@ -655,7 +651,6 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
   .opening-reading { margin-top:17px; }
   .vix-panel { padding:16px 14px; }
   .vix-chip { width:100%; margin-left:0; text-align:center; }
-  .vix-explain-grid { grid-template-columns:1fr; }
   .vix-gauge-labels { font-size:8px; }
   .pub-heading { margin-top:31px; font-size:18px; }
   .pub-box, .quant-box, .pub-card { padding:14px; }
@@ -776,6 +771,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
       <button class="filter-tab" onclick="filterCards('mixed', this)">多空分歧 ({{CF_MIXED}})</button>
       <span class="filter-result" id="filterResult"><i></i>{{COMMUNITY_TOTAL}} SOURCE FEEDS</span>
     </div>
+    <div class="pub-meta" style="margin:0 0 8px;">指标口径：情感 = 文本片段情绪（排除无关主体）· 事件 = 业绩 / 并购 / 监管等场景 · 相关性 = 新闻与标的关联度 · 新颖度 = 首发 vs 转载。</div>
     <div id="communityList">
 <!-- COMMUNITY_LIST:BEGIN -->
 <article class="pub-card" data-verdict="mixed">
@@ -994,15 +990,10 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
     <h2 class="pub-heading">03B / 舆情·新闻因子：多平台采集 → 标的匹配 (Sentiment &amp; News Factor Bench)</h2>
     <div class="pub-box">
       <div class="pub-sub">◆ 现成因子口径与本次读数（多量化平台合并采集 · 对外不显示数据来源）</div>
-      <p style="margin:0 0 8px;">本节点不是论坛印象，而是<strong>可回测的因子数值</strong>：由
-        <code>sentiment_factors.py</code> 每次构建前从多家量化平台采集<strong>现成舆情 / 新闻因子</strong>并合成 ——
-        平台已给<strong>原生情感字段</strong>（情感方向 + 正 / 中 / 负权重 + 主体相关度）时优先采用平台口径，
-        权限未开通时自动降级到<strong>热度类因子 + 自建中文金融词库</strong>打分；
-        采集回来的每条新闻再按关键词<strong>匹配到 02 节的行情标的与日报主题</strong>
-        （恒指 / 恒科 / 国企 / 标普 / 纳指 / 道指 / 黄金 / 原油 / 人民币，
-        以及美联储与美元流动性、内房与政策、高息防御、地缘与供应链四个主题），匹配结果见下表。
-        全链路纯标准库、单接口失败自动降级不阻断；<strong>数据来源不在对外输出中展示</strong>
-        （来源明细仅保留在仓库内部构建产物与评测档案里）。</p>
+      <p style="margin:0 0 8px;">由 <code>sentiment_factors.py</code> 每次构建前采集多家量化平台的
+        <strong>现成舆情 / 新闻因子</strong>（平台已给原生情感字段时优先采用，权限未开通时降级到
+        热度类因子 + 自建中文金融词库），再按关键词<strong>匹配到 02 节行情标的与日报主题</strong>，结果见下表。
+        单接口失败自动降级不阻断；数据来源不在对外输出中展示。</p>
       <p style="margin:0;">
         <span class="lead">舆情温度计 {{SENT_TEMP}} · {{SENT_LABEL}}</span>&nbsp;
         净情感 {{SENT_NET}} · 负面占比 {{SENT_NEG}} · 热度 {{SENT_HEATZ}} · 风险分 {{SENT_RISK}} ·
@@ -1041,6 +1032,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
   <footer class="footer">
     <div class="author">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</div>
     <p id="pageGenTime">生成时间：{{TS_FULL}} · 24h 内最新可读取内容 · 100K 完整单页直推版 · 含核心量化指标 · AI 量化配对</p>
+    <p>{{QUANT_RULE}}</p>
   </footer>
 
 </div>

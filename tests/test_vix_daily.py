@@ -59,14 +59,17 @@ class TestVixModel(unittest.TestCase):
         self.assertAlmostEqual(24.60 * (30 / 365) ** 0.5,
                                data['expected_30d_pct'], places=8)
 
-    def test_band_edges_are_explicit_and_not_official_signal(self):
+    def test_band_edges_are_explicit(self):
         self.assertEqual('极低波动定价', vix_daily.classify(11.99)['label'])
         self.assertEqual('常态波动定价', vix_daily.classify(12.00)['label'])
         self.assertEqual('风险定价升温', vix_daily.classify(20.00)['label'])
         self.assertEqual('高压恐慌定价', vix_daily.classify(30.00)['label'])
         self.assertEqual('极端压力定价', vix_daily.classify(40.00)['label'])
         web = vix_daily.render_web(vix_daily.analyze(market()))
-        self.assertIn('不是 Cboe 官方评级或交易信号', web)
+        # 分档只是本报告的阅读阈值：既不再挂外部来源，也不自称官方评级 / 交易信号
+        self.assertIn('12–20 常态', web)
+        for bad in ('CTAAgents', 'Cboe 官方评级', 'github.com'):
+            self.assertNotIn(bad, web)
 
     def test_missing_never_becomes_calm_or_zero(self):
         data = vix_daily.analyze({'quotes': {}})
@@ -79,15 +82,18 @@ class TestVixModel(unittest.TestCase):
         self.assertNotIn('极低波动定价', plain)
         self.assertNotIn('0.00', plain)
 
-    def test_explanation_follows_q_p_boundary(self):
+    def test_explanation_is_one_line_and_keeps_q_p_boundary(self):
+        """说明文字收成一行：口径 / Q-P 边界保留，长卡片与外部来源不再出现。"""
         web = vix_daily.render_web(vix_daily.analyze(market()))
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', web))
-        for phrase in ('未来 30 天', '年化', '风险中性测度 Q', '现实测度 P',
-                       '不是涨跌方向', '方差风险溢价'):
+        for phrase in ('未来 30 天', '年化', '风险中性', '不是涨跌方向'):
             self.assertIn(phrase, plain)
-        self.assertIn(vix_daily.SOURCE_URL, web)
         self.assertIn('24.60', plain)
         self.assertIn('2026-10-07', plain)
+        self.assertNotIn('vix-explain-grid', web)
+        self.assertNotIn('vix-source', web)
+        for bad in ('CTAAgents', '说明参考', 'Cboe 官方评级'):
+            self.assertNotIn(bad, web)
 
 
 class TestVixWebIntegration(unittest.TestCase):
@@ -145,7 +151,8 @@ class TestVixWechatIntegration(unittest.TestCase):
 
         self.assertIn('00 / 每日 VIX 恐慌指数', rendered)
         self.assertIn('24.60', rendered)
-        self.assertIn('风险中性 Q 测度', rendered)
+        self.assertIn('口径', rendered)
+        self.assertNotIn('CTAAgents', rendered)
         self.assertLess(rendered.index('00 / 每日 VIX 恐慌指数'),
                         rendered.index('01 / 每日全球全景扫描'))
         self.assertLess(len(rendered), wp.CONTENT_SAFE_LIMIT)

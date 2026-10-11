@@ -478,7 +478,7 @@ class TestForecastRendering(unittest.TestCase):
                         '加了 04 栏之后仍须留在推送门禁之内，否则每日推送会被整条拦下')
 
     def test_repeated_pair_rule_is_printed_once_not_per_block(self):
-        """腾预算的手段之一：配对规则整篇只印一次，不在 20 多个 AI 量化块里重复。"""
+        """腾预算的手段之一：配对口径整篇只印一次，不在 20 多个 AI 量化块里重复。"""
         import quant_pair
         # 本测试要数块，因此明确给当日行情：行情不足时配对段一律整段隐藏（另见 test_quant_pair）。
         env = {'FORECAST_HISTORY': self.hist,
@@ -491,14 +491,18 @@ class TestForecastRendering(unittest.TestCase):
         finally:
             for k, v in saved.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-        self.assertEqual(html.count(quant_pair.RULE), 1,
-                         '配对规则在微信单页里应当只出现一次（页脚），其余块共用同一口径')
+        self.assertEqual(html.count(quant_pair.OUTLOOK_NOTE), 1,
+                         '配对口径在微信单页里应当只出现一次（文末），其余块共用同一口径')
+        self.assertEqual(html.count(quant_pair.RULE.split('|z|', 1)[0]), 1,
+                         '规则正文同样只在文末印一次')
         self.assertGreaterEqual(html.count('AI 量化'), 14, '规则去重不得连带把 AI 量化块删掉')
-        # 网页版没有字符上限，规则仍逐块保留（渲染会把 < 转义，比对规则的前半段即可）
+        # 网页版同一口径：卡片不逐块重复，整页由页脚 rule_note_web() 印一次
         head = quant_pair.RULE.split('|z|', 1)[0]
         rec = quant_pair.recommend('恒生科技 恒指',
                                    {'HSTECH': {'pct': 1.4}, 'NDQ': {'pct': 0.2}})
-        self.assertIn(head, quant_pair.render_web(rec))
+        self.assertNotIn(head, quant_pair.render_web(rec), '网页卡片不再逐块铺规则')
+        self.assertIn(head, quant_pair.rule_note_web(), '口径挪到页脚统一给一次')
+        self.assertIn(head, quant_pair.render_web(rec, show_rule=True))
         self.assertNotIn(head, quant_pair.render_wechat(rec))
         self.assertIn(head, quant_pair.render_wechat(rec, show_rule=True))
         # 行情不足（两腿不齐）时整段隐藏，规则说明也不跟着漏出来

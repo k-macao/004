@@ -124,14 +124,11 @@ HISTORY_LIMIT = 600            # 存档上限，超出按 made_on 从旧到新�
 SETTLE_EXPIRE_DAYS = 10        # 目标日过去这么多天仍未结算 → 判为「未结算·作废」，不计入命中率
 MIN_REVIEW_SAMPLE = 10         # 样本不足这个数只报样本量，不下命中率结论
 
-RULE = ('规则：μ(σ) = 动量项 + 联动项 + 情绪项 + 宏观项，截断 ±1.5σ；'
-        '预期涨跌幅 = μ(σ) × σ，预测区间 = 预期涨跌幅 ± 1.0σ。'
-        '|μ(σ)| < 0.15 判震荡，不给方向。σ 为策略参数里的典型日波动，不是当日行情事实。'
-        '本栏为规则化推导，不构成投资建议。')
+RULE = ('口径：μ(σ) = 动量 + 联动 + 情绪 + 宏观项，截断 ±1.5σ；预期涨跌幅 = μ(σ) × σ，'
+        '区间 = ±1.0σ；|μ(σ)| < 0.15 判震荡。规则化推导，不构成投资建议。')
 
-LOOKAHEAD_NOTE = ('未来函数口径：只用基准日收盘及之前的公开数据推下一交易日，'
-                  '目标日严格晚于基准日；预测先落盘、后结算，'
-                  '绝不用当次行情给当次预测打分（那是 look-ahead bias，不是预测）。')
+LOOKAHEAD_NOTE = ('未来函数口径：只用基准日及之前的公开数据推下一交易日，预测先落盘、后结算，'
+                  '不用当次行情给当次预测打分。')
 
 
 # ---------------------------------------------------------------------------
@@ -838,9 +835,8 @@ def _review_web(rev):
     return ('<div class="pub-sub" style="margin-top:12px;">◆ 历史预测回看（先存档 · 后结算）</div>'
             f'<div style="font-size:12px;line-height:1.8;">{_esc(rev.get("text") or "")}</div>'
             + (f'<ul class="pixel-list">{rows}</ul>' if rows else '')
-            + '<div class="pub-meta">只对「目标日已抓到实际行情」的预测计分；'
-              f'目标日过去 {SETTLE_EXPIRE_DAYS} 天仍未结算的（假期顺延等）判为作废，不计入命中率，'
-              '也绝不用当次行情给当次预测打分。</div>')
+            + '<div class="pub-meta">只对目标日已抓到实际行情的预测计分；'
+              f'逾期 {SETTLE_EXPIRE_DAYS} 天未结算的作废，不计入命中率。</div>')
 
 
 def _wechat_table(data, green):
@@ -967,7 +963,7 @@ def _review_wechat(rev, green='#4fe5ff'):
         for v in (rev.get('by_symbol') or [])[:6])
     return (head + _esc(rev.get('text') or '') + '<br/>' + rows
             + f'<div style="color:#9aa6c3;font-size:10.5px;margin-top:4px;line-height:1.7;">'
-              '只对「目标日已抓到实际行情」的预测计分，绝不用当次行情给当次预测打分。</div>')
+              '只对目标日已抓到实际行情的预测计分，不用当次行情给当次预测打分。</div>')
 
 
 # ---------------------------------------------------------------------------
