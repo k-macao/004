@@ -719,10 +719,10 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
     </section>
 
     <div class="push-wrap">
-      <div class="push-title">微信推送 · 一对多群组单页完整直推 (oai.1 群)</div>
-      <p class="push-tip">点击下方按钮，将本报告<strong>行情 + {{COMMUNITY_TOTAL}} 社区 · 含核心量化指标 · 每条内容后附跨域 AI 量化配对</strong>推送到「oai.1」群组。</p>
+      <div class="push-title">微信推送 · 一对一专属单页完整直推 (Token 本人)</div>
+      <p class="push-tip">点击下方按钮，将本报告<strong>行情 + {{COMMUNITY_TOTAL}} 社区 · 含核心量化指标 · 每条内容后附跨域 AI 量化配对</strong>推送给 Token 对应的微信本人。</p>
       <button class="pixel-push-btn" id="pushBtn" onclick="manualPush()">▶ 立即推送微信单页完整版</button>
-      <div class="terminal-log-box" id="pushStatus">STATUS &gt; 一对多群组推送已就绪 (oai.1)<span>▌</span></div>
+      <div class="terminal-log-box" id="pushStatus">STATUS &gt; 一对一专属推送已就绪 (Token 本人)<span>▌</span></div>
     </div>
 
     <h2 class="pub-heading" id="battlefield">01 / 每日全球全景扫描 (Daily Global Panorama Scan · 5 大推动力量)</h2>
@@ -1050,13 +1050,13 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
  ],
  "pages_url": "https://k-macao.github.io/03/",
  "generated_at": "2026-10-07 08:51 UTC",
- "mode": "one-to-many"
+ "mode": "one-to-one"
 }
 </script>
 <!-- WECHAT-EMBED:END -->
 <script>
   const PUSHPLUS_TOKEN = '507a6c0cf9cf46229f5f3c5107a967cc';
-  const PUSHPLUS_TOPIC = 'oai.1';
+  const PUSHPLUS_TOPIC = '';
 
   function utcStampFull(d) { d = d || new Date(); return d.toISOString().replace('T',' ').substring(0,19) + ' UTC'; }
 
@@ -1122,7 +1122,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
       if (PUSHPLUS_TOPIC) body.append('topic', PUSHPLUS_TOPIC);
       await fetch('https://www.pushplus.plus/send', { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body.toString() });
       btn.textContent = '✔ 已成功推送';
-      status.innerHTML = '<span>SUCCESS &gt; 已推送 (oai.1 · ' + tsFull + ') 请在微信查收。</span><span>▌</span>';
+      status.innerHTML = '<span>SUCCESS &gt; 已推送 (Token 本人 · ' + tsFull + ') 请在微信查收。</span><span>▌</span>';
     } catch (err) {
       console.error('推送失败', err);
       btn.textContent = '✖ 推送失败';
