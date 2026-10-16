@@ -560,7 +560,7 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `tests/test_panorama.py` | 01 栏回归（13 项，零联网）：5 大力量与栏目要素齐全、多/空/横盘三种行情结论必须不同、噪音不计入做多合成分、突发风险分下调做多结论、四路数据缺失时降级为「本栏不编故事」、网页 `PANORAMA` 注入幂等、旧栏目名与写死历史内容不得回归 |
 | `build_site.py` | **动态建站**：把 `report.html` 模板中的 `{{占位符}}` 替换为最新行情/抓取日期/时间戳（含 03 节社区口径 `{{COMMUNITY_TOTAL}}` / `{{COMMUNITY_TYPE_TOTAL}}` / `{{CF_*}}`：源数、类型数与多空家数现算，缺数据才退回模板 14 源口径），把 `panorama.py` 的全景扫描注入 01 节 `<!-- PANORAMA -->` 占位区（哨兵 `<!-- /PANORAMA -->` 保证幂等），把 `community_data.json` 的 49 条最新研判注入 `<!-- COMMUNITY_LIST -->` 标记，把 `macro_data.json` 的快讯注入 02 节 `<!-- MACROLIST -->` 占位区（缺数据→「今日未获取」，回填哨兵 `<!-- /MACROLIST -->` 保证幂等），并把「因子读数 + 标的匹配（不含来源）」注入 `<!-- SENTIMENT_LIST -->` 标记，并把 `forecast.py` 的下一交易日预测注入 04 节 `<!-- FORECAST -->` 占位区（哨兵 `<!-- /FORECAST -->` 保证幂等，同时把当次预测写进 `forecast_history.json`；`--forecast-no-history` / `--check` 不落盘） |
 | `report.html` | 报告**模板源文件**（**电竞指挥中心 × 战术 HUD** · 深色海军蓝底 + 霓虹青 / 能量绿 / 战术紫 / 洋红高亮 · 响应式战情卡片），内含"手动推送"按钮与 01 节 `<!-- PANORAMA -->`、`<!-- COMMUNITY_LIST:BEGIN/END -->`、02 节 `<!-- MACROLIST -->`、04 节 `<!-- FORECAST -->` 动态注入标记；仓库中始终保持模板版本，构建产物不提交（误提交构建产物时 `git checkout -- report.html` 恢复） |
-| `tools/wechat_push.py` | 微信推送工具：读取 `market_data.json` + `community_data.json` 双动态数据，转为微信兼容的**深色电竞 HUD 单页内联样式 HTML**，以深海军蓝 + 电光青 / 荧光绿 / 战术紫 / 警戒红呈现，经 PushPlus **一对多**群组推送（群组编码 `oai.1`）；**03 栏由 `fit_community_block()` 为 49 源按剩余预算选详略**（完整版 → 标准版 → 精简版 → 紧凑版 → 名录版，每一档都保留全部源、跨域配对与「最新读取」标记）；04 栏由 `fit_forecast_block()` 在「完整版 → 精简版 → 一行摘要 → 只留指引」之间选一版；两者合计仍落在 95,000 推送门禁之内 |
+| `tools/wechat_push.py` | 微信推送工具：读取 `market_data.json` + `community_data.json` 双动态数据，转为微信兼容的**深色电竞 HUD 单页内联样式 HTML**，以深海军蓝 + 电光青 / 荧光绿 / 战术紫 / 警戒红呈现，经 PushPlus **一对一**专属推送（仅 Token 本人接收）；**03 栏由 `fit_community_block()` 为 49 源按剩余预算选详略**（完整版 → 标准版 → 精简版 → 紧凑版 → 名录版，每一档都保留全部源、跨域配对与「最新读取」标记）；04 栏由 `fit_forecast_block()` 在「完整版 → 精简版 → 一行摘要 → 只留指引」之间选一版；两者合计仍落在 95,000 推送门禁之内 |
 | `.github/workflows/m.yml` | CI：动态抓取行情+校验+社区+宏观快讯 → 动态建站（三注入） → 部署 Pages + 一键触发微信单页推送 + **每天北京时间 09:00 定时自动推送** |
 | `docs/macro-ci-workflow.patch` | **待人工应用的 workflow 补丁**（GitHub App 无 `workflows` 权限）：三个 job 各加 `macro_data.py` 抓取步骤（失败不阻断、摘要进 Step Summary）+ `verify_quotes.py` 门禁（deploy 非阻断并公开 `verify_report.json`；wechat/daily FAIL 直接阻断推送） |
 
@@ -579,10 +579,10 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 - **标题与署名**：网页标题为「章鱼 AI·全景分析（量化策略多因子分析）」，**微信推送标题为「章鱼 AI·全景分析（量化策略多因子分析）」**（推送卡片顶部大标题同步使用该名称），副标题「全网 AI 调研境内境外数据，由多个大模型混合部署」，**标题去除 pushplus 与时间戳**。正文末尾署名：**作者：章鱼 ai · 仅供参考，分析研究**，并附多模型协同说明。
 - **01 节每日全球全景扫描**：栏目为「**每日全球全景扫描** (Daily Global Panorama Scan)」——扫一遍今天全球市场，总结**推动股价的 5 大力量**，重点关注**宏观事件 / 板块轮动 / 情绪变化**，逐条标注**哪些是重点、哪些是噪音**与**如何利好利空**，最后给出**是否可以做多**的结论。**网页与微信推送两端同步呈现**（`report.html` 的 `<!-- PANORAMA -->` 注入区与 `tools/wechat_push.py` 的 `panorama_block`）。
 
-## 微信推送 (PushPlus · 一对多群组单页完整版 · 49 源动态 · 跨域配对)
+## 微信推送 (PushPlus · 一对一专属单页完整版 · 49 源动态 · 跨域配对)
 
 - **推送标题**：「章鱼 AI·全景分析（量化策略多因子分析）」。三处保持同步 —— `tools/wechat_push.py` 的 `TITLE` 常量（命令行 `--push` / `--emit` / `--embed`）、`report.html` 内嵌负载 `wechat-parts` 的 `title`、网页按钮 `manualPush()` 的 `pushTitle`；推送卡片顶部大标题亦为同一名称。
-- **一对多群组推送**：默认推送到 **`oai.1` 群组**，群内所有关注该群组的微信成员同步接收；需先在 PushPlus 后台「一对多推送」中创建群组编码 `oai.1`，成员扫码关注该群组后即可收推送。
+- **一对一专属推送**：默认仅推送给 **Token 对应的微信本人**，请求不携带 `topic`，无需创建或关注群组。
 - **页面只推一个微信页**：点击"手动推送"立即发送**单页完整微信卡片**，开头 VIX 专栏、既有完整章节与 49 大社区论坛研判一次性送达，无需拆条分发与 15s 等待；49 源按剩余字符预算自动选详略（见下），**任何一档都不会删源**。
 - **⏰ 推送前时间核对**：每一次推送前均重新抓取行情+社区数据，并读取当前时间；标题与正文中的"生成时间 / 时间核对"等全部时间戳**实时刷新为最新时间**后再发送（网页按钮与命令行推送均已内置）。
 - **📅 推送前频道最新内容核对**：**每一次推送都重新抓取并逐条检查** 49 个频道内容是否为频道最新（`community_data.py` 每次生成当天日期），不因当天已抓取过而复用历史结果；任一频道缺少「最新读取」标记、检查失败或结果非当天，**手动推送**拒绝推送；**定时推送** (`--scheduled`) 则仅警告不阻断，确保每天 09:00 定时任务可运行。
@@ -596,7 +596,7 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 - **验证转换效果**：`python3 tools/wechat_push.py --dry-run`
 - **重新内嵌内容**：报告更新后，运行 `python3 tools/wechat_push.py --embed`（幂等）。
 
-Token 维护在 `report.html` 的 `PUSHPLUS_TOKEN` 常量中，网页按钮与推送工具共用。群组编码 `PUSHPLUS_TOPIC` 默认为 `'oai.1'`（一对多群组推送，网页按钮与命令行工具共用该常量）；如需改回一对一专属推送，将其留空 `''` 即可。
+Token 维护在 `report.html` 的 `PUSHPLUS_TOKEN` 常量中，网页按钮与推送工具共用。群组编码 `PUSHPLUS_TOPIC` 默认为 `''`（一对一专属推送，网页按钮与命令行工具共用该常量）。命令行按 `--topic` > 环境变量 `PUSHPLUS_TOPIC` > 页面常量解析；如环境中曾设置群组编码，请清除该变量，或使用 `--topic ''` 强制一对一（空值也会覆盖环境变量）。
 
 ## 🖥️ 极趣墨水屏同步 — E-Ink Sync (新增 · 复用 k-macao/10_sync 接口)
 

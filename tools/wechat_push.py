@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 微信推送工具 (一对多群组 oai.1 · 单页详尽完整版 · 49 源动态抓取)
+章鱼 AI·全景分析（量化策略多因子分析） — 微信推送工具 (一对一专属推送 · 单页详尽完整版 · 49 源动态抓取)
 
 将 report.html 转换为微信 (PushPlus HTML 模板) 兼容的内联样式 HTML，
 生成 wechat.json 供网页按钮使用，并可直接推送至 PushPlus。
 
 核心特点:
-  • 一对多群组推送: 默认推送至 oai.1 群组 (PUSHPLUS_TOPIC='oai.1')，群内所有关注成员同步接收。
+  • 一对一专属推送: 默认 PUSHPLUS_TOPIC=''，仅 Token 对应的微信本人接收。
   • 单页完整推送: 每次只推一条完整微信卡片 (单页全文)，解除 19,000 限制 (上限 100,000 字符)，无需分条分发与等待。
   • 每次推送均重新抓取: 不复用上一轮抓取结果；推送前逐条核对 49 个频道的「最新读取」标记，抓取失败/缺项时不得推送。
   • 00 栏每日 VIX 恐慌指数: 当次抓取 Cboe VIX 点位与日变动，按期权市场未来 30 天隐含波动率
@@ -36,12 +36,12 @@
 用法:
   python3 tools/wechat_push.py --emit _site/wechat.json     # 只生成微信版 JSON
   python3 tools/wechat_push.py --embed                       # 把推送内容内嵌进 report.html
-  python3 tools/wechat_push.py --push                        # 直接推送到微信 (一对多群组, 严格日期校验)
+  python3 tools/wechat_push.py --push                        # 直接推送到微信 (一对一专属, 严格日期校验)
   python3 tools/wechat_push.py --push --scheduled            # 每天 09:00 (北京时间) 定时推送 (宽松日期校验)
   python3 tools/wechat_push.py --dry-run                     # 验证转换效果与字数统计
 
 Token 解析顺序: --token 参数 > 环境变量 PUSHPLUS_TOKEN > report.html 内的 PUSHPLUS_TOKEN 常量
-群组编码解析顺序: --topic 参数 > 环境变量 PUSHPLUS_TOPIC > report.html 内的 PUSHPLUS_TOPIC 常量 (默认 'oai.1' 即一对多群组推送)
+群组编码解析顺序: --topic 参数 > 环境变量 PUSHPLUS_TOPIC > report.html 内的 PUSHPLUS_TOPIC 常量 (默认空字符串，即一对一专属推送；显式 --topic '' 可覆盖环境变量)
 """
 import argparse
 import hashlib
@@ -1103,14 +1103,14 @@ def find_token(source_html, arg_token=None):
     return ''
 
 def find_topic(source_html, arg_topic=None):
-    """群组编码: 默认取 report.html 的 PUSHPLUS_TOPIC 常量 (当前 'oai.1', 一对多群组推送)。"""
-    if arg_topic:
-        return arg_topic
-    env_topic = os.environ.get('PUSHPLUS_TOPIC', '').strip()
-    if env_topic:
-        return env_topic
+    """群组编码: 默认留空（一对一）；显式空参数/环境变量可覆盖后续配置。"""
+    if arg_topic is not None:
+        return arg_topic.strip()
+    if 'PUSHPLUS_TOPIC' in os.environ:
+        return os.environ['PUSHPLUS_TOPIC'].strip()
     if os.path.exists(source_html):
-        html = open(source_html, encoding='utf-8').read()
+        with open(source_html, encoding='utf-8') as f:
+            html = f.read()
         m = re.search(r"PUSHPLUS_TOPIC\s*=\s*'([0-9A-Za-z_.\-]*)'", html)
         if m:
             return m.group(1).strip()
@@ -1177,16 +1177,16 @@ def run_push_preflight(strict=False, timeout=8, report_path=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 微信推送工具 (一对多群组 oai.1 · 单页详尽完整版 · 49 源动态)')
+    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 微信推送工具 (一对一专属推送 · 单页详尽完整版 · 49 源动态)')
     ap.add_argument('--source', default=SOURCE_HTML, help='报告 HTML 文件路径')
     ap.add_argument('--emit', metavar='PATH', help='写出 wechat.json 的路径')
     ap.add_argument('--embed', action='store_true',
                     help='把单页推送负载内嵌进 report.html (供页面按钮直接读取)')
-    ap.add_argument('--push', action='store_true', help='推送到 PushPlus (一对多群组单页)')
+    ap.add_argument('--push', action='store_true', help='推送到 PushPlus (默认一对一专属单页)')
     ap.add_argument('--scheduled', action='store_true',
                     help='定时自动推送模式: 抓取日期非当天仅警告不阻断 (供每天 09:00 定时任务使用)')
     ap.add_argument('--token', default='', help='PushPlus token (可选)')
-    ap.add_argument('--topic', default='', help='PushPlus 群组编码 (可选, 默认取 report.html 的 PUSHPLUS_TOPIC, 当前 oai.1; 留空则回退一对一)')
+    ap.add_argument('--topic', default=None, help="PushPlus 群组编码 (默认留空，一对一；显式 --topic '' 强制一对一)")
     ap.add_argument('--dry-run', action='store_true', help='只转换, 打印字数统计与预览')
     ap.add_argument('--skip-verify', action='store_true',
                     help='跳过推送前全来源数据校验 (不推荐; 校验 FAIL 默认阻断推送)')
@@ -1225,12 +1225,13 @@ def main():
             print(f'错误: 第 {i} 条超过安全长度 {len(c)} > {CONTENT_SAFE_LIMIT}', file=sys.stderr)
             sys.exit(2)
 
+    topic = find_topic(args.source, args.topic)
     payload = {
         'title': parts[0][0],
         'parts': [{'title': t, 'content': c} for t, c in parts],
         'pages_url': PAGES_URL,
         'generated_at': ts,
-        'mode': 'one-to-many',
+        'mode': 'one-to-many' if topic else 'one-to-one',
     }
 
     if args.emit:
@@ -1249,7 +1250,6 @@ def main():
         if not token:
             print('错误: 未找到 PushPlus token', file=sys.stderr)
             sys.exit(3)
-        topic = find_topic(args.source, args.topic)
         mode = f'一对多 (群组 {topic})' if topic else '一对一专属推送 (Token 本人)'
         print(f'推送模式: {mode} · 单页完整微信卡片 (十万字符级无压缩深度报告)')
         print(f'⏰ 推送前时间核对: {ts_full} — 确认正文时间戳为最新时间后开始发送')
