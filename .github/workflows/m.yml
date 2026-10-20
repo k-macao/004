@@ -5,6 +5,7 @@
 #   1. push 到 main            → 动态抓取行情+社区 → 动态建站 → 部署 Pages + 推送完整报告到微信
 #   2. Actions 页面手动运行     → 同上, 可用 wechat_push 开关选择是否推送微信
 #   3. 每天北京时间 09:00 定时   → 自动重建站点 + 推送完整报告到微信 (无需手动操作)
+#   4. 每 5 分钟循环 (schedule */5) → 循环抓取 + 重建 + 部署 Pages + 推送页面内容到微信 (循环播放)
 #
 # 动态抓取管线 (每次运行均执行, 真正上线 — 行情+社区双动态):
 #   market_data.py      → market_data.json      (Yahoo Finance / Stooq 多源回退抓取最新行情)
@@ -26,6 +27,9 @@ on:
   # ⏰ 每天北京时间 (UTC+8) 上午 09:00 自动推送 → 即 UTC 01:00
   schedule:
     - cron: '0 1 * * *'
+    # 🔄 每 5 分钟循环推送 (循环播放): 重新抓取行情+社区 → 重建报告 → 部署 Pages → daily 任务把页面内容推送微信
+    #    注意: 若单次运行超过 5 分钟, 新 run 排队等上一条跑完 (不互相取消), 实际节奏 ≈ 最快每 5 分钟一轮
+    - cron: '*/5 * * * *'
   workflow_dispatch:
     inputs:
       wechat_push:
@@ -40,8 +44,11 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  # push/手动触发: 沿用 'pages' 组 (新 run 取消旧 run, 行为不变)
+  # 定时触发: 独立组 + 不取消 → 5 分钟循环中若上一轮抓取较慢, 下一轮排队等待而不是把在跑的推送杀掉,
+  # 上一轮一结束立即开始下一轮, 形成连续循环播放
+  group: ${{ github.event_name == 'schedule' && 'pages-schedule-loop' || 'pages' }}
+  cancel-in-progress: ${{ github.event_name != 'schedule' }}
 
 jobs:
   # ---------- 任务 1: 动态抓取 + 动态构建 + 部署到 GitHub Pages ----------
@@ -205,7 +212,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $CODE
 
-  # ---------- 任务 3: 每天北京时间 09:00 定时自动抓取 + 重建 + 推送 ----------
+  # ---------- 任务 3: 定时触发自动抓取 + 重建 + 推送 (每天 09:00 + 每 5 分钟循环) ----------
   # 仅 schedule 触发时运行, 避免 push/手动触发时与 wechat 任务重复推送
   daily:
     if: ${{ github.event_name == 'schedule' }}
@@ -269,7 +276,7 @@ jobs:
           set -e
           echo "$OUT"
           {
-            echo '### 📲 微信推送结果（定时 09:00）'
+            echo '### 📲 微信推送结果（定时 09:00 / 5 分钟循环）'
             echo '```text'
             echo "$OUT"
             echo '```'
