@@ -1,5 +1,5 @@
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 49 大社区动态抓取 (community_data.py)
+章鱼 AI·舆情004 — 49 大社区动态抓取 (community_data.py)
 
 每次构建/推送前自动抓取 **49 大社区**最新研判（14 原有 + 20 前次新增 + 15 本次扩容），
 生成 community_data.json，供 build_site.py 与 tools/wechat_push.py 动态注入，
@@ -1015,7 +1015,7 @@ def offline_dataset(market=None, now=None, mode='fallback'):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 49 大社区动态抓取')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 49 大社区动态抓取')
     ap.add_argument('--json', default='community_data.json', help='输出 JSON 路径')
     ap.add_argument('--market-data', default=MARKET_DATA_DEFAULT, help='行情数据 JSON 路径')
     ap.add_argument('--timeout', type=float, default=10, help='单次请求超时秒数')

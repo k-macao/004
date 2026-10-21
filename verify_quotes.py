@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 推送前全来源数据准确性校验 (verify_quotes.py)
+章鱼 AI·舆情004 — 推送前全来源数据准确性校验 (verify_quotes.py)
 
 在微信推送 (tools/wechat_push.py --push) 之前，对 market_data.json 中
 全部行情标的做多来源交叉校验，只有数据可信才允许推送：
@@ -412,7 +412,7 @@ def run_preflight(data_path=None, timeout=8, strict=False, report_path=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 推送前全来源数据准确性校验')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 推送前全来源数据准确性校验')
     ap.add_argument('--data', default=os.path.join(REPO_ROOT, 'market_data.json'),
                     help='待校验的 market_data.json 路径')
     ap.add_argument('--json', dest='report_json', default=None,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 量化平台舆情/新闻因子适配器 (sentiment_adapters.py)
+章鱼 AI·舆情004 — 量化平台舆情/新闻因子适配器 (sentiment_adapters.py)
 ==========================================================================
 
 把 聚宽 / 米筐 / 掘金 / 优矿 / Tushare / 东财 / 金十 / 数库 的舆情·新闻接口，
@@ -778,7 +778,7 @@ def check_auth(source_id):
 
 if __name__ == '__main__':
     import argparse
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 舆情/新闻因子适配器自检')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 舆情/新闻因子适配器自检')
     ap.add_argument('--mode', choices=['live', 'mock', 'off'], default='mock')
     ap.add_argument('--source', default='', help='只测某个源 id（默认全测）')
     args = ap.parse_args()

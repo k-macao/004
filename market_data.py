@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 动态行情抓取 (market_data.py)
+章鱼 AI·舆情004 — 动态行情抓取 (market_data.py)
 
 每次构建/推送前自动抓取最新行情，生成 market_data.json，
 供 build_site.py 与 tools/wechat_push.py 动态注入，实现「动态抓取真正上线」：
@@ -236,7 +236,7 @@ def cross_check_stooq(quotes, timeout=10):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 动态行情抓取')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 动态行情抓取')
     ap.add_argument('--json', default='market_data.json', help='输出 JSON 路径')
     ap.add_argument('--timeout', type=int, default=10, help='单次请求超时秒数')
     ap.add_argument('--demo', action='store_true', help='写入模拟行情（本地联调/演示）')

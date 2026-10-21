@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI · 全景分析 — Scrapling 框架模型移植 (scrapling_core.py)
+章鱼 AI·舆情004 — Scrapling 框架模型移植 (scrapling_core.py)
 
 本模块把 GitHub 上 **Scrapling 0.4.15**（https://github.com/D4Vinci/Scrapling，BSD-3-Clause）
 的抓取框架模型**原样移植为零依赖（仅标准库）实现**，供本项目在 GitHub Actions 里

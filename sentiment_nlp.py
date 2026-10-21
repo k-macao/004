@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 自建舆情/新闻情感打分层 (sentiment_nlp.py)
+章鱼 AI·舆情004 — 自建舆情/新闻情感打分层 (sentiment_nlp.py)
 ================================================================
 
 为什么需要这一层：
@@ -366,7 +366,7 @@ def _self_test():
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 自建舆情情感打分层')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 自建舆情情感打分层')
     ap.add_argument('--text', help='对单条文本打分')
     ap.add_argument('--json', help='对 JSON（新闻数组或 {"items": [...]}）聚合打分')
     ap.add_argument('--half-life', type=float, default=24.0, help='时间衰减半衰期（小时），0 = 不衰减')
