@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 动态建站 (build_site.py)
+章鱼 AI·舆情004 — 动态建站 (build_site.py)
 
 读取 market_data.json + community_data.json (+ sentiment_data.json + macro_data.json)，
 把 report.html 模板中的 {{占位符}} 替换为最新抓取数据，并动态注入 00 节每日 VIX 恐慌指数、
@@ -975,7 +975,7 @@ def inject_sentiment(template, block_html):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 动态建站（行情+社区+舆情三动态+量化指标+跨域配对）')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 动态建站（行情+社区+舆情三动态+量化指标+跨域配对）')
     ap.add_argument('--data', default='market_data.json', help='行情数据 JSON 路径')
     ap.add_argument('--community', default='community_data.json', help='社区数据 JSON 路径')
     ap.add_argument('--sentiment', default='sentiment_data.json',

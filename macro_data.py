@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 宏观/财经快讯动态抓取 (macro_data.py)
+章鱼 AI·舆情004 — 宏观/财经快讯动态抓取 (macro_data.py)
 =============================================================
 
 **为什么新增这一层**（2026-09-16 核查结论）：微信推送 `02 / 全球经济与财经动态`
@@ -744,7 +744,7 @@ def text_report(data):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 宏观/财经快讯动态抓取（02 栏数据源）')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 宏观/财经快讯动态抓取（02 栏数据源）')
     ap.add_argument('--json', default=DEFAULT_OUT, help='输出 JSON 路径（默认 macro_data.json）')
     ap.add_argument('--days', type=int, default=MAX_AGE_DAYS_DEFAULT,
                     help=f'时效窗口（天），超出即丢弃；默认 {MAX_AGE_DAYS_DEFAULT}')

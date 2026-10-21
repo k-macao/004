@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 量化平台「现成舆情/新闻因子」API 接入实测工具
+章鱼 AI·舆情004 — 量化平台「现成舆情/新闻因子」API 接入实测工具
 =====================================================
 
 对 sentiment_sources.SOURCES 里的每个数据源，按 9 个阶段逐项实测并给出接入判定：
@@ -430,7 +430,7 @@ def render_markdown(items, meta):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 量化平台舆情/新闻因子 API 接入实测')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 量化平台舆情/新闻因子 API 接入实测')
     ap.add_argument('--live', action='store_true', help='真实调用（需境内出口 + 凭据）')
     ap.add_argument('--mock', '--demo', dest='mock', action='store_true',
                     help='录制报文回放 + 文档基线评测（默认）')

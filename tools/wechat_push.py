@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 微信推送工具 (一对一专属推送 · 单页详尽完整版 · 49 源动态抓取)
+章鱼 AI·舆情004 — 微信推送工具 (一对一专属推送 · 单页详尽完整版 · 49 源动态抓取)
 
 将 report.html 转换为微信 (PushPlus HTML 模板) 兼容的内联样式 HTML，
 生成 wechat.json 供网页按钮使用，并可直接推送至 PushPlus。
@@ -79,7 +79,7 @@ except Exception:                                          # 注册表缺失/异
 SOURCE_HTML = os.path.join(REPO_ROOT, 'report.html')
 PAGES_URL = 'https://k-macao.github.io/03/'
 PUSH_URL = 'https://www.pushplus.plus/send'
-TITLE = '章鱼 AI·全景分析（量化策略多因子分析）'
+TITLE = '章鱼 AI·舆情004'
 # 解除限制，支持 100,000 字符
 CONTENT_LIMIT = 100000
 CONTENT_SAFE_LIMIT = 95000
@@ -1177,7 +1177,7 @@ def run_push_preflight(strict=False, timeout=8, report_path=None):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 微信推送工具 (一对一专属推送 · 单页详尽完整版 · 49 源动态)')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 微信推送工具 (一对一专属推送 · 单页详尽完整版 · 49 源动态)')
     ap.add_argument('--source', default=SOURCE_HTML, help='报告 HTML 文件路径')
     ap.add_argument('--emit', metavar='PATH', help='写出 wechat.json 的路径')
     ap.add_argument('--embed', action='store_true',

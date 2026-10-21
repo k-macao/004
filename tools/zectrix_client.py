@@ -24,7 +24,7 @@ from PIL import Image, ImageDraw, ImageFont
 # ---------------------------------------------------------------------------
 # 配置（与 10_sync 保持一致，允许环境变量覆盖）
 # ---------------------------------------------------------------------------
-BOARD_TITLE = os.environ.get("ZECTRIX_BOARD_TITLE", "章鱼 AI·全景分析（量化策略多因子分析）")
+BOARD_TITLE = os.environ.get("ZECTRIX_BOARD_TITLE", "章鱼 AI·舆情004")
 HEADER_SHOW_SOURCE = False
 HEADER_SHOW_PART = False
 HEADER_PREFIX = ""
@@ -252,7 +252,7 @@ def source_label(source, override=None):
     return SOURCE_LABELS.get(source, source or "资讯")
 
 def make_page_header(label, part, board_title=None):
-    main = (board_title or BOARD_TITLE or "").strip() or "章鱼 AI·全景分析（量化策略多因子分析）"
+    main = (board_title or BOARD_TITLE or "").strip() or "章鱼 AI·舆情004"
     text = f"{HEADER_PREFIX}{main}"
     label = (label or "").strip()
     if HEADER_SHOW_SOURCE and label and label != main:

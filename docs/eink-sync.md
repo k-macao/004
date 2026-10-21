@@ -150,11 +150,11 @@ ls -lh page_*.png
 
 ## 📌 顶栏文案
 
-四页统一显示 **章鱼 AI·全景分析（量化策略多因子分析）**（与 10_sync 一致，可通过环境变量覆盖）：
+四页统一显示 **章鱼 AI·舆情004**（与 10_sync 一致，可通过环境变量覆盖）：
 
 ```bash
-export ZECTRIX_BOARD_TITLE="章鱼 AI·全景分析（量化策略多因子分析）"
-python3 tools/eink_push.py --mode report --title "章鱼 AI·全景分析（量化策略多因子分析）"
+export ZECTRIX_BOARD_TITLE="章鱼 AI·舆情004"
+python3 tools/eink_push.py --mode report --title "章鱼 AI·舆情004"
 ```
 
 如需恢复来源标签/页码，编辑 `tools/zectrix_client.py` 顶部开关：

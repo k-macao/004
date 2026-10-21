@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI · 全景分析 — 社区爬虫 (community_spider.py)
+章鱼 AI·舆情004 — 社区爬虫 (community_spider.py)
 
 用 **Scrapling 框架模型**（见 `scrapling_core.py` 的移植说明）抓取社区模块的每一个源头：
 

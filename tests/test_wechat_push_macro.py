@@ -129,7 +129,7 @@ class TestMacroSection(unittest.TestCase):
         self.assertLess(len(html), wp.CONTENT_SAFE_LIMIT, '全量深色主题仍须满足推送字符安全线')
 
     def test_push_title_is_consistent(self):
-        title = '章鱼 AI·全景分析（量化策略多因子分析）'
+        title = '章鱼 AI·舆情004'
         self.assertEqual(wp.TITLE, title)
         self.assertIn(title, _render(_no_data_env(self._tmp.name)))
         with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as f:
@@ -155,7 +155,7 @@ class TestMacroSection(unittest.TestCase):
             import zectrix_client as zc
         except ImportError as exc:            # 墨水屏可选依赖（requests / Pillow）未安装
             self.skipTest(f'墨水屏依赖缺失: {exc}')
-        title = '章鱼 AI·全景分析（量化策略多因子分析）'
+        title = '章鱼 AI·舆情004'
         if not os.environ.get('ZECTRIX_BOARD_TITLE'):
             self.assertEqual(zc.BOARD_TITLE, title)
         self.assertTrue(zc.make_page_header('', '').startswith(zc.HEADER_PREFIX + zc.BOARD_TITLE))

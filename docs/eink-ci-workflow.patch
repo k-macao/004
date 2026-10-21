@@ -335,7 +335,7 @@ index 31457df..569fbc4 100644
 +          set +e
 +          MODE="${{ inputs.eink_mode || 'report' }}"
 +          echo "=========================================="
-+          echo " 章鱼 AI·全景分析（量化策略多因子分析） 看板 - 墨水屏同步"
++          echo " 章鱼 AI·舆情004 看板 - 墨水屏同步"
 +          echo " 接口来源: k-macao/10_sync (tools/zectrix_client.py)"
 +          echo " 模式: $MODE"
 +          echo "=========================================="

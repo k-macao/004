@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-章鱼 AI·全景分析（量化策略多因子分析） — 舆情/新闻因子管线 (sentiment_factors.py)
+章鱼 AI·舆情004 — 舆情/新闻因子管线 (sentiment_factors.py)
 =============================================================
 
 把「量化平台现成舆情因子 + 自建情感打分层」的结果统一成 sentiment_data.json，
@@ -359,7 +359,7 @@ def run(mode='live', only=None, watchlist=None, timeout=ad.DEFAULT_TIMEOUT,
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·全景分析（量化策略多因子分析） — 量化平台舆情/新闻因子接入管线')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 量化平台舆情/新闻因子接入管线')
     ap.add_argument('--live', action='store_true', help='联网实测（默认；需凭据 + 境内出口）')
     ap.add_argument('--mock', '--demo', dest='mock', action='store_true',
                     help='用 tests/fixtures 录制报文回放（离线演示 / CI 冒烟）')
