@@ -18,8 +18,9 @@
 抽取口径（与社区数据层同一套反陈旧口径）：
   1. 先按每个源的 CSS 候选规则取标题 / 正文块；
   2. 若规则失配，走自适应指纹回捞（同一 SQLite 里按社区 key 隔离）；
-  3. 再失配，在整页里按「港股关键词命中数 + 文本长度」打分，选最相关的一段作为现场佐证；
-  4. 任何一步拿不到内容，**不编内容**：交给 community_data.py 的当次模板兜底。
+  3. 再失配，在整页里按「财经/港股关键词命中数 + 文本长度」打分，选最相关的一段作为现场佐证；
+  4. 任何一步拿不到命中财经主题词的真实正文（含风控页 / 登录墙 / 空壳页），**绝不编内容**：
+     直接标记 `ok=False`（`no_topic_snippet` 或 HTTP 状态码），交由 community_data.py 诚实标注「未获取」。
 
 用法:
   python3 community_spider.py --self-test              # 离线自检（零联网）
@@ -42,22 +43,46 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STORAGE = os.path.join(REPO_ROOT, '.scrapling', 'community_adaptive.db')
 DEFAULT_CACHE_DIR = os.path.join(REPO_ROOT, '.scrapling', 'dev_cache')
 
-# 与「社区研判」直接相关的主题词：命中越多，说明这段文本越值得当现场佐证
+# 与「社区研判」直接相关的财经/市场主题词（覆盖中英日韩德多语种）：
+# 候选片段必须至少命中 1 个主题词才允许入库，杜绝把导航栏、登录提示或无关闲聊当成社区热评。
 TOPIC_KEYWORDS = (
+    # 港股与核心标的（简繁）
     '恒指', '恒生', '港股', '恒科', '国企指数', '南向', '北水', '港元', '港交所',
-    'hang seng', 'hsi', 'hstech', 'hong kong stocks', 'hk stocks', 'china stocks',
     '恒生指數', '港股通', '中概', 'adr', '腾讯', '阿里', '美团', '小米', '比亚迪',
-    '恆指', '恆生', '港股', '比亞迪', '騰訊',
-    '항셍', '홍콩 증시', '香港株', 'ハンセン', '香港株式',
-    'fed', 'fomc', '美元', '人民币', '黄金', '原油', '半导体', '芯片',
+    '恆指', '恆生', '比亞迪', '騰訊', '牛熊', '窩輪', '窝轮', '蓝筹', '紅籌', '红筹',
+    # 中文宏观 / 交易 / 资产配置术语
+    'A股', '沪深', '美股', '纳指', '标普', '道指', '股票', '股市', '指数', '大盘',
+    '基金', 'etf', '可转债', '转债', '套利', '打新', '估值', '股息', '红利', '分红',
+    '期权', '期货', '波动率', '利率', '降息', '加息', '通胀', '非农', '美债', '央行', '联储',
+    '美元', '人民币', '离岸', '汇率', '外汇', '黄金', '原油', '油价', '大宗',
+    '半导体', '芯片', '算力', '财报', '业绩', '回购', '净流入', '净买入', '做多', '做空',
+    '加密货币', '比特币',
+    # English market / macro / asset terms
+    'hang seng', 'hsi', 'hstech', 'hong kong', 'hk stocks', 'china stocks', 'chinese equities',
+    'stock', 'stocks', 'equity', 'equities', 'market', 'markets', 'index', 'shares',
+    'fed', 'fomc', 'rate cut', 'rate hike', 'yield', 'treasury', 'bond', 'inflation', 'cpi', 'tariff',
+    'options', 'volatility', 'vix', 'futures', 'hedging', 'spread', 'quant', 'alpha',
+    'forex', 'fx', 'usd', 'cnh', 'cny', 'eur', 'gold', 'crude', 'oil',
+    'crypto', 'bitcoin', 'btc', 'eth', 'dividend', 'earnings', 'valuation', 'portfolio', 'fund',
+    # 日 / 韩 / 德语财经词
+    '항셍', '홍콩', '증시', '주식', '지수', '반도체', '금리', '환율', '코스피',
+    '香港株', 'ハンセン', '香港株式', '株価', '株式', '日経', '市場', '金利', '為替', '投資',
+    'aktien', 'börse', 'boerse', 'dax', 'zinsen', 'markt', 'anleihen', 'rendite', 'fonds',
 )
 
-# 明显不是正文的片段（导航 / 登录 / 版权 / 应用推广）
+# 明显不是正文的片段（导航 / 登录 / 版权 / 应用推广 / 反爬与 JS 空壳拦截页）
 NOISE_PATTERNS = re.compile(
     r'^(登录|注册|下载|客服|关于我们|版权|免责声明|广告|意见反馈|返回顶部|'
     r'log ?in|sign ?up|sign in|cookie|privacy policy|terms of service|'
     r'おすすめ|ログイン|会員登録|개인정보|로그인|이용약관)\b',
     re.I,
+)
+NOISE_SUBSTRINGS = (
+    'enable javascript', 'javascript is not available', 'javascript is disabled',
+    'please enable cookies', 'access denied', 'just a moment', 'cloudflare',
+    'verify you are human', 'security check', 'are you a robot', 'captcha',
+    '请开启javascript', '请启用javascript', '请登录后查看', '扫码登录',
+    '安全验证', '验证码', '访问受限', '请求过于频繁',
 )
 
 # 通用抽取阶梯：先正文容器，再文章 / 帖子 / 评论块，最后整页兜底
@@ -177,13 +202,25 @@ def strip_noise(text: str) -> str:
     return text
 
 
+def count_topic_hits(text: str) -> int:
+    """统计候选文本命中的财经/市场主题词个数（大小写不敏感）。"""
+    lowered = strip_noise(text).lower()
+    if not lowered:
+        return 0
+    return sum(1 for keyword in TOPIC_KEYWORDS if keyword.lower() in lowered)
+
+
 def score_fragment(text: str, title: str = '') -> float:
-    """给一段候选文本打分：主题词命中 + 结构长度 + 标题重合（负分项直接淘汰）。"""
+    """给一段候选文本打分：必须命中至少 1 个财经主题词且不含反爬/登录噪音，否则返回负分淘汰。"""
     text = strip_noise(text)
     if len(text) < 6 or NOISE_PATTERNS.match(text):
         return -1.0
     lowered = text.lower()
+    if any(bad in lowered for bad in NOISE_SUBSTRINGS):
+        return -1.0
     hits = sum(1 for keyword in TOPIC_KEYWORDS if keyword.lower() in lowered)
+    if hits <= 0:
+        return -0.5
     score = hits * 3.0
     score += min(len(text), MAX_SNIPPET) / 100.0
     if title:
@@ -307,7 +344,7 @@ class CommunitySpider(sc.Spider):
                         fragments = [(f'adaptive:{round(best_score, 1)}', text)]
                         adaptive_hit = True
 
-        best_text, best_score = '', -1.0
+        best_text, best_score = '', 0.0
         for selector, text in fragments:
             score = score_fragment(text, title)
             if score > best_score:
@@ -319,9 +356,16 @@ class CommunitySpider(sc.Spider):
                 if score > best_score:
                     best_text, best_score, used_selector = strip_noise(chunk), score, 'body:best-chunk'
         snippet = best_text[:MAX_SNIPPET]
+        topic_hits = count_topic_hits(snippet) if snippet else 0
+        valid_ok = bool(response.ok and snippet and topic_hits > 0)
+        err_reason = ''
+        if not response.ok:
+            err_reason = f'HTTP {response.status}'
+        elif not valid_ok:
+            err_reason = 'no_topic_snippet'
 
         # 抓取成功即更新指纹：下次改版能靠这一次的形态回捞（对应 upstream auto_save 口径）
-        if self.pool is not None and snippet:
+        if self.pool is not None and valid_ok:
             try:
                 node = response._select(used_selector).first if used_selector and not used_selector.startswith(
                     ('adaptive:', 'body:')) else None
@@ -332,9 +376,11 @@ class CommunitySpider(sc.Spider):
 
         self.results[key] = {
             'key': key, 'id': meta.get('id', ''), 'name': name, 'ctype': meta.get('ctype', ''),
-            'url': response.url, 'status': response.status, 'ok': response.ok,
-            'title': title, 'snippet': snippet, 'selector': used_selector,
-            'adaptive': adaptive_hit, 'bytes': len(response.body or b''),
+            'url': response.url, 'status': response.status, 'http_ok': bool(response.ok),
+            'ok': valid_ok, 'topic_hits': topic_hits,
+            'title': title, 'snippet': snippet if valid_ok else '', 'selector': used_selector if valid_ok else '',
+            'adaptive': adaptive_hit and valid_ok, 'bytes': len(response.body or b''),
+            'error': err_reason,
         }
         yield self.results[key]
 
@@ -374,11 +420,13 @@ def load_communities(limit: int = 0):
 def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0, retries: int = 2,
                         concurrency: int = 6, adaptive: bool = True, storage_file: str = DEFAULT_STORAGE,
                         obey_robots: bool = False, crawldir: str = None, session=None,
-                        verbose: bool = True, backend: str = 'auto'):
+                        verbose: bool = True, backend: str = 'auto',
+                        autothrottle: bool = True, max_blocked_retries: int = 2,
+                        download_delay: float = 0.15):
     """跑一轮社区抓取：返回 (结果字典, 统计字典)。
 
     结果字典形如 {key: {'snippet': ..., 'status': ..., 'adaptive': ..., 'selector': ...}}；
-    单源失败不会抛异常，只是该源没有 live 片段（由社区数据层用当次模板兜底）。
+    单源失败不会抛异常，只是该源没有 live 片段（由社区数据层诚实标注未获取）。
     """
     communities = list(communities) if communities else load_communities(limit)
     backend_name, transport = ('injected', None) if session is not None else resolve_backend(backend)
@@ -390,9 +438,11 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     spider.name = 'community'
     spider.request_timeout = timeout
     spider.request_retries = retries
+    spider.max_blocked_retries = max_blocked_retries
+    spider.autothrottle_enabled = autothrottle
     spider.concurrent_requests = max(1, concurrency)
     spider.robots_txt_obey = obey_robots
-    spider.download_delay = 0.15
+    spider.download_delay = download_delay
     # 抓取源列表可能少于并发数，按实际规模收敛并发，避免空转线程
     spider.concurrent_requests = min(spider.concurrent_requests, max(1, len(communities)))
     started = time.time()
@@ -460,6 +510,8 @@ def _self_test() -> int:
     check(stats['backend'] == 'injected', 'Spider: 注入会话时标记传输层为 injected')
     check(not results['XUEQIU']['ok'], 'Spider: 被封锁源不抛出、降级为失败项')
     check(score_fragment('版权声明') < 0, '打分器会淘汰导航/版权噪音')
+    check(score_fragment('Enable JavaScript and cookies to continue') < 0, '打分器会淘汰 JS/风控空壳文案')
+    check(score_fragment('今天的天气不错，适合出去走走看看风景') < 0, '打分器拒绝零财经主题词的无关片段')
     check(score_fragment('恒指今日收报 26,012 点，南向净买入 62 亿') > 5, '打分器偏好主题相关文本')
     print()
     print('✅ community_spider 自检全部通过' if ok else '❌ community_spider 自检存在失败项')

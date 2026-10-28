@@ -241,12 +241,16 @@ def build_report_pages(market, community, macro, sentiment):
     else:
         pages[4].append("舆情因子未生成")
 
-    # 社区
+    # 社区（仅统计实盘抓到且具备真实多空判定的源，未获取源不掺入分母或多空计数）
     comms = (community or {}).get('communities') or []
     if comms:
-        bull = sum(1 for c in comms if c.get('verdict_class')=='bull')
-        bear = sum(1 for c in comms if c.get('verdict_class')=='bear')
-        pages[4].append(f"社区 多{ bull } 空{ bear } 共{ len(comms) }源")
+        valid = [c for c in comms if c.get('verdict_class') in ('bull', 'bear', 'neutral', 'mixed')]
+        if valid:
+            bull = sum(1 for c in valid if c.get('verdict_class') == 'bull')
+            bear = sum(1 for c in valid if c.get('verdict_class') == 'bear')
+            pages[4].append(f"社区 实抓{len(valid)}/{len(comms)} 多{bull} 空{bear}")
+        else:
+            pages[4].append(f"社区 当次未抓到实盘热评(0/{len(comms)})")
 
     return pages
 

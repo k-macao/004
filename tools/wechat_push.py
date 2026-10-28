@@ -44,7 +44,7 @@ Token 解析顺序: --token 参数 > 环境变量 PUSHPLUS_TOKEN > report.html �
 群组编码解析顺序: --topic 参数 > 环境变量 PUSHPLUS_TOPIC > report.html 内的 PUSHPLUS_TOPIC 常量 (默认空字符串，即一对一专属推送；显式 --topic '' 可覆盖环境变量)
 """
 import argparse
-import hashlib
+import html as html_mod
 import http.client
 import json
 import os
@@ -90,8 +90,10 @@ EXPECTED_CHANNEL_COUNT = len(community_mod.COMMUNITIES)
 
 MINUS = '\u2212'  # U+2212 真正的减号，与全文风格一致
 
-# 49 大社区「综合站内 … 最新读取 YYYY-MM-DD」逐频道标记 (用于推送前逐条核对)
-CHANNEL_READ_RE = re.compile(r'综合站内[^<]*?最新读取\s+(20\d{2}-\d{2}-\d{2})')
+# 49 大社区逐频道「抓取核验 YYYY-MM-DD」标记（用于推送前逐条核对是否确系当天执行过抓取检查，绝不篡改旧日期）
+CHANNEL_READ_RE = re.compile(
+    r'(?:公开页实抓摘录|当次未获取|演示样本|综合站内)[^<]*?(?:抓取核验|最新读取)\s+(20\d{2}-\d{2}-\d{2})'
+)
 
 
 def load_market_data():
@@ -111,7 +113,7 @@ def load_community_data():
     """读取 community_data.py 生成的 community_data.json（49 大社区动态抓取）。
 
     路径可用环境变量 COMMUNITY_DATA 覆盖；文件缺失/损坏时返回 {}，
-    此时正文回退到内置兜底社区数据（但日期会被刷新为当天），保证离线也能正常推送。
+    此时正文按严格真实口径将 49 源全部标注为「未获取」（不伪造热评或抓取核验日期）。
     """
     path = os.environ.get('COMMUNITY_DATA', os.path.join(REPO_ROOT, 'community_data.json'))
     if not os.path.exists(path):
@@ -120,7 +122,7 @@ def load_community_data():
         with open(path, encoding='utf-8') as f:
             return json.load(f)
     except (OSError, ValueError) as e:
-        print(f'⚠️ 警告: community_data.json 读取失败，使用内置兜底社区数据: {e}', file=sys.stderr)
+        print(f'⚠️ 警告: community_data.json 读取失败，49 源按未获取降级: {e}', file=sys.stderr)
         return {}
 
 
@@ -190,65 +192,9 @@ def load_macro_data():
     return data
 
 
-def gen_quant_fallback(key, vclass, fetch_date, raw_pct, live_snippet="", source="fallback"):
-    """与 community_data.py 同逻辑的量化指标生成（用于 fallback）"""
-    hash_input = f"{key}-{fetch_date}-{raw_pct}".encode()
-    h = int(hashlib.md5(hash_input).hexdigest()[:8], 16)
-    if vclass == 'bull':
-        base = 0.35 + (h % 40) / 100.0
-    elif vclass == 'bear':
-        base = -0.65 + (h % 35) / 100.0
-    elif vclass == 'mixed':
-        base = -0.15 + (h % 40) / 100.0
-    else:
-        base = -0.12 + (h % 24) / 100.0
-    base += raw_pct * 0.05
-    base = max(-0.95, min(0.95, base))
-    sentiment_label = "偏多" if base > 0.25 else "偏空" if base < -0.25 else "中性"
-    sentiment_display = f"{base:+.2f} ({sentiment_label})"
+def _esc_w(t):
+    return html_mod.escape(str(t if t is not None else ''), quote=False)
 
-    event_map = {
-        "FUTU": "资金流向", "XUEQIU": "业绩", "LAOHU": "宏观", "EASTMONEY": "情绪面",
-        "ZHITONG": "技术面", "WALLSTREETCN": "宏观", "DISCUSS": "情绪面", "LIHKG": "技术面",
-        "JIUQUAN": "资金流向", "ANTFORTUNE": "情绪面", "REDDIT": "监管", "TRADINGVIEW": "技术面",
-        "VIC": "并购", "FINTWIT": "宏观",
-    }
-    snippet_lower = (live_snippet or "").lower()
-    if any(k in snippet_lower for k in ["业绩", "财报", "盈利", "earnings"]):
-        event = "业绩"
-    elif any(k in snippet_lower for k in ["并购", "私有化", "收购", "merger", "acquisition"]):
-        event = "并购"
-    elif any(k in snippet_lower for k in ["监管", "政策", "限购", "regulatory"]):
-        event = "监管"
-    elif any(k in snippet_lower for k in ["资金", "南向", "流入", "flow"]):
-        event = "资金流向"
-    elif any(k in snippet_lower for k in ["技术", "均线", "rsi", "macd", "金叉"]):
-        event = "技术面"
-    else:
-        event = event_map.get(key, "综合")
-
-    relevance_base = {
-        "FUTU": 92, "XUEQIU": 90, "LAOHU": 72, "EASTMONEY": 78,
-        "ZHITONG": 88, "WALLSTREETCN": 84, "DISCUSS": 65, "LIHKG": 70,
-        "JIUQUAN": 86, "ANTFORTUNE": 62, "REDDIT": 68, "TRADINGVIEW": 82,
-        "VIC": 80, "FINTWIT": 83,
-    }.get(key, 75)
-    relevance = max(45, min(98, relevance_base + (h % 11) - 5))
-
-    if source == "live":
-        novelty = 70 + (h % 30)
-    else:
-        novelty = 50 + (h % 20)
-    novelty = max(30, min(98, novelty))
-    novelty_label = "首发" if novelty >= 75 else "转载/跟踪"
-
-    return {
-        # 四项指标的口径说明在 03 栏表头统一给一次，卡片里只留读数（与网页版同一口径）
-        "sentiment": {"display": sentiment_display},
-        "event": {"label": event},
-        "relevance": {"display": f"{relevance}/100"},
-        "novelty": {"display": f"{novelty}/100 ({novelty_label})"},
-    }
 
 def quant_html_inline(quant):
     if not quant:
@@ -294,30 +240,30 @@ def _clip_text(text, limit):
 
 
 def community_card(c, level='full', quotes=None):
-    """一张社区卡片。level 决定详略（微信单页字符预算有限，49 源要挤进同一页）：
-
-        full          完整版：热评 + 战术研判 + 四行核心量化指标 + 完整 AI 量化块
-        standard      标准版：热评(220) + 研判(140) + 一行量化指标 + 精简 AI 量化块
-        compact_plus  精简版：热评(200) + 一行核心量化指标（读数不删，只压样式）+ 迷你 AI 量化
-        compact       紧凑版：热评(150) + 迷你 AI 量化
-        roster        名录版：一行一名（含跨域配对的标的组合与推荐）+ 抓取标记
-
-    四档都带「最新读取」标记与跨域配对（两标的、跨域），只是详略不同；
-    无论哪一档，数字都来自同一份当次数据。
-    """
+    """一张社区卡片（严格真实口径：实抓源展示真实摘录与词库指标，未获取源如实标注且绝不编造研判或指标）。"""
     icon = c.get('icon', '📌')
     no = c.get('id', '01')
-    name = c.get('name', '未知社区')
-    label = c.get('label', '中性')
-    vclass = c.get('vclass', 'neutral')
-    quote = c.get('quote') or ''
-    verdict = c.get('verdict') or ''
-    quant = c.get('quant') or {}
-    meta = c.get('meta') or ''
+    raw_name = c.get('name', '未知社区')
+    name = _esc_w(raw_name)
+    vclass = c.get('vclass') or c.get('verdict_class') or 'unavailable'
+    is_avail = bool(c.get('available', vclass != 'unavailable')) and vclass != 'unavailable'
+    label = _esc_w(c.get('label') or c.get('verdict_label') or ('未获取' if not is_avail else '中性'))
+    raw_quote = c.get('quote') or ''
+    raw_verdict = c.get('verdict') or ''
+    ctype = c.get('ctype') or ''
+    quant = (c.get('quant') or None) if is_avail else None
+    meta = _esc_w(c.get('meta') or '')
     signal = {'bull': WECHAT_CYAN, 'bear': WECHAT_DANGER,
-              'neutral': WECHAT_VIOLET, 'mixed': WECHAT_NEON}.get(vclass, WECHAT_VIOLET)
-    rec = quant_pair.recommend(f'{name} {quote} {verdict}', quotes or {}, hint=c.get('key'))
-    ai_compact = quant_pair.render_wechat(rec, compact=True)
+              'neutral': WECHAT_VIOLET, 'mixed': WECHAT_NEON,
+              'unavailable': '#7f8ea8'}.get(vclass, '#7f8ea8')
+    if is_avail:
+        rec = quant_pair.recommend(f'{raw_name} {ctype} {raw_quote} {raw_verdict}', quotes or {}, hint=c.get('key'))
+        ai_compact = quant_pair.render_wechat(rec, compact=True)
+    else:
+        rec = quant_pair.recommend(f'{raw_name} {ctype}', quotes or {}, hint=c.get('key'))
+        ai_compact = quant_pair.render_wechat(
+            rec, compact=True, note='社区热评未获取，配对仅依当次实时行情计算')
+
     chip = (f'<span style="background:{signal};color:#07101b;font-size:10px;font-weight:700;'
             f'padding:2px 6px;margin-left:4px;border-radius:2px">{label}</span>')
     head = (f'<div style="color:{WECHAT_TEXT};font-weight:700;font-size:13px">{icon} {no}. {name} '
@@ -326,33 +272,43 @@ def community_card(c, level='full', quotes=None):
 
     if level == 'roster':
         pair = (f'{rec.get("domain_pair", "")}｜{rec.get("pair_label", "")}｜{rec.get("stance", "")}')
-        # 行情不足时整段隐藏的同一口径：名录版也不写「…｜数据不足」，只留社区信息
         pair_html = '' if quant_pair.is_hidden(rec) else f' · 跨域配对：{pair}'
+        clip_limit = 140 if is_avail else 36
+        prefix = '实抓摘录：' if is_avail else ''
         return (
             f'<div style="border-bottom:1px solid #1b2540;padding:5px 0;font-size:11px;color:{WECHAT_TEXT_SOFT};">'
             f'{icon} <strong style="color:{WECHAT_TEXT};">{no}. {name}</strong>【{label}】'
-            f'{pair_html} · {_clip_text(quote, 60)}'
+            f'{pair_html} · {prefix}{_esc_w(_clip_text(raw_quote, clip_limit))}'
             f'<div style="color:{WECHAT_MUTED};font-size:9.5px;">{meta}</div></div>'
         )
 
+    q_label = '公开页实抓摘录：' if is_avail else '抓取状态：'
     if level == 'compact':
         body = (f'<div style="margin-top:6px;line-height:1.8">'
-                f'<strong style="color:{WECHAT_CYAN};">平台深度热评：</strong>{_clip_text(quote, 150)}</div>')
+                f'<strong style="color:{WECHAT_CYAN};">{q_label}</strong>{_esc_w(_clip_text(raw_quote, 160))}</div>')
     elif level == 'compact_plus':
         body = (f'<div style="margin-top:6px;line-height:1.8">'
-                f'<strong style="color:{WECHAT_CYAN};">平台深度热评：</strong>{_clip_text(quote, 200)}</div>')
+                f'<strong style="color:{WECHAT_CYAN};">{q_label}</strong>{_esc_w(_clip_text(raw_quote, 220))}</div>')
     elif level == 'standard':
+        v_box = (
+            f'<div style="background:{WECHAT_PANEL_SOFT};border:1px solid #24314b;border-left:3px solid {signal};'
+            f'border-radius:3px;padding:8px 10px;margin-top:8px;font-size:11.5px;color:{WECHAT_TEXT_SOFT};line-height:1.7">'
+            f'<strong style="color:{WECHAT_CYAN};">▶ 词库极性与摘录说明：</strong>{_esc_w(_clip_text(raw_verdict, 150))}</div>'
+            if (is_avail and raw_verdict) else ''
+        )
         body = (f'<div style="margin-top:6px;line-height:1.8">'
-                f'<strong style="color:{WECHAT_CYAN};">平台深度热评：</strong>{_clip_text(quote, 220)}</div>'
-                f'<div style="background:{WECHAT_PANEL_SOFT};border:1px solid #24314b;border-left:3px solid {signal};'
-                f'border-radius:3px;padding:8px 10px;margin-top:8px;font-size:11.5px;color:{WECHAT_TEXT_SOFT};line-height:1.7">'
-                f'<strong style="color:{WECHAT_CYAN};">▶ AI 深度战术研判：</strong>{_clip_text(verdict, 140)}</div>')
+                f'<strong style="color:{WECHAT_CYAN};">{q_label}</strong>{_esc_w(_clip_text(raw_quote, 240))}</div>'
+                f'{v_box}')
     else:  # full
+        v_box = (
+            f'<div style="background:{WECHAT_PANEL_SOFT};border:1px solid #24314b;border-left:3px solid {signal};'
+            f'border-radius:3px;padding:8px 10px;margin-top:8px;font-size:11.5px;color:{WECHAT_TEXT_SOFT};line-height:1.7">'
+            f'<strong style="color:{WECHAT_CYAN};">▶ 词库极性与摘录说明：</strong>{_esc_w(raw_verdict)}</div>'
+            if (is_avail and raw_verdict) else ''
+        )
         body = (f'<div style="margin-top:6px;line-height:1.8">'
-                f'<strong style="color:{WECHAT_CYAN};">平台深度热评：</strong>{quote}</div>'
-                f'<div style="background:{WECHAT_PANEL_SOFT};border:1px solid #24314b;border-left:3px solid {signal};'
-                f'border-radius:3px;padding:8px 10px;margin-top:8px;font-size:11.5px;color:{WECHAT_TEXT_SOFT};line-height:1.7">'
-                f'<strong style="color:{WECHAT_CYAN};">▶ AI 深度战术研判：</strong>{verdict}</div>')
+                f'<strong style="color:{WECHAT_CYAN};">{q_label}</strong>{_esc_w(raw_quote)}</div>'
+                f'{v_box}')
 
     quant_html = quant_html_inline(quant) if level == 'full' else (
         quant_metrics_line(quant) if level in ('standard', 'compact_plus') else '')
@@ -593,15 +549,22 @@ def build_single_wechat_html(now=None):
         return f'{ok}/{total} 项同步成功（{failed_str} 降级为 —）'
 
     def community_fetch_status():
-        """社区抓取状态文案"""
+        """社区抓取状态文案（严格真实口径：如实披露实抓成功数与未获取数）"""
         if not _cd:
-            return f'社区数据回退到内置模板 · 抓取日期 {_community_fetch_date}'
+            return '未读到 community_data.json，49 源全部标注「未获取」（不编造热评）'
         s = _cd.get('summary') or {}
-        ok, total = s.get('ok'), s.get('total')
+        ok, total = s.get('ok'), s.get('total') or len(_communities_raw)
         gen = _cd.get('generated_at') or ''
+        mode = _cd.get('mode') or ''
+        if mode == 'demo':
+            return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen}'
         if ok is None:
-            return f'社区 {len(_communities_raw)} 源已加载 · 抓取于 {gen}'
-        return f'{ok}/{total} 个社区源同步成功 · 抓取于 {gen}'
+            return f'社区 {len(_communities_raw)} 源已加载 · 生成于 {gen}'
+        if ok == 0:
+            return f'0/{total} 个社区实抓成功（未获取源均已标注，绝不回填模板）· 核验于 {gen}'
+        if ok == total:
+            return f'{ok}/{total} 个社区源实抓成功 · 抓取于 {gen}'
+        return f'{ok}/{total} 个社区实抓成功，{total - ok} 个标注「未获取」 · 抓取于 {gen}'
 
     def key(t):
         return (f'<strong style="background:#101b2c;color:{NEON};font-weight:700;'
@@ -625,44 +588,47 @@ def build_single_wechat_html(now=None):
     # 结构与 live 完全一致（只把 source 标记为 fallback），不再在推送工具里另写一份兜底文案 ——
     # 两处各写一套正是「兜底 14 源」与「动态 49 源」口径打架的根源。
     def community_record(c):
-        """community_data.json（或兜底数据集）→ 渲染层统一的记录结构。"""
-        meta = c.get('meta') or f"{c.get('meta_tpl', '综合站内 10 条讨论')} · 最新读取 {_community_fetch_date}"
-        meta = re.sub(r'最新读取\s+20\d{2}-\d{2}-\d{2}', f'最新读取 {_community_fetch_date}', meta)
-        if '最新读取' not in meta:
-            meta = f"{meta} · 最新读取 {_community_fetch_date}"
-        quant = c.get('quant')
-        if not quant:
-            try:
-                raw_pct = float((c.get('quote', '').count('%')))
-            except Exception:
-                raw_pct = 0
-            quant = gen_quant_fallback(c.get('key', ''), c.get('verdict_class', 'neutral'),
-                                       _community_fetch_date, raw_pct, c.get('quote', ''),
-                                       c.get('source', 'fallback'))
+        """community_data.json（或离线「未获取」数据集）→ 渲染层统一的记录结构。
+
+        严格真实口径：绝不覆盖或篡改每条记录原有的 meta 核验日期，也绝不为未获取源伪造 quant 指标。
+        """
+        vclass = c.get('verdict_class') or 'unavailable'
+        is_avail = bool(c.get('available', vclass != 'unavailable')) and vclass != 'unavailable'
+        ctype = c.get('ctype', '')
+        fdate = c.get('fetch_date') or ''
+        if c.get('meta'):
+            meta = c['meta']
+        elif is_avail and fdate:
+            meta = f"公开页实抓摘录 · {ctype} · 抓取核验 {fdate}"
+        elif fdate:
+            meta = f"当次未获取 · {ctype} · 抓取核验 {fdate}"
+        else:
+            meta = f"未执行社区抓取 · {ctype}"
         return {
             'icon': c.get('icon', '📌'),
             'id': c.get('id', '01'),
             'key': c.get('key', ''),
             'name': c.get('name', '未知社区'),
-            'label': c.get('verdict_label', '中性'),
-            'vclass': c.get('verdict_class', 'neutral'),
+            'available': is_avail,
+            'label': c.get('verdict_label') or ('未获取' if not is_avail else '中性'),
+            'vclass': vclass,
             'quote': c.get('quote', ''),
-            'verdict': c.get('verdict', ''),
-            'quant': quant,
+            'verdict': c.get('verdict', '') if is_avail else '',
+            'quant': c.get('quant') if is_avail else None,
             'meta': meta,
-            'ctype': c.get('ctype', ''),
+            'ctype': ctype,
         }
 
     communities = []
     if _communities_raw:
         communities = [community_record(c) for c in _communities_raw]
-        print(f'  🧩 微信推送：已加载 {len(communities)} 个动态社区源'
-              f'（来自 community_data.json，含核心量化指标与跨域配对）')
+        _live_cnt = sum(1 for c in communities if c.get('available'))
+        print(f'  🧩 微信推送：已加载 {len(communities)} 个社区目录源'
+              f'（实抓可用 {_live_cnt} 个 · 未获取 {len(communities) - _live_cnt} 个）')
     else:
         _fb = community_mod.offline_dataset(_md, now=now)
         communities = [community_record(c) for c in _fb.get('communities', [])]
-        print(f'  ⚠️ 微信推送：未找到 community_data.json，回退到 community_data.offline_dataset() '
-              f'（{len(communities)} 个源，日期已刷新为 {_community_fetch_date}，结构与 live 一致）')
+        print(f'  ⚠️ 微信推送：未找到 community_data.json，49 源按严格真实口径全部标注为「未获取」（不伪造热评或核验日期）')
 
     # ---------- 03B 舆情/新闻因子节点（sentiment_data.json 动态注入） ----------
     def sentiment_block():
@@ -757,7 +723,7 @@ def build_single_wechat_html(now=None):
 
     # ---------- 02 栏：宏观/财经快讯（macro_data.json 驱动，条目自带发布日期）----------
     # 2026-09-16 修复：本栏曾把「IMF 7 月 WEO / 7 月 29 日 FOMC / 8 月 12 日 CPI /
-    # 南向 7 月 628.69 亿 / 各行恒指目标价」等新闻句子写死在源码里，构建时原样重播，
+    # 南向资金历史单月统计 / 各行旧恒指目标价」等新闻句子写死在源码里，构建时原样重播，
     # 于是出现「页脚写当天时间、正文停在 8 月 12 日」。现在 02 栏只渲染当次抓到的快讯；
     # 抓不到就明确标注「未获取」+ 实时行情，绝不回填历史叙事（时效由 macro_data.py 保证）。
     def md_cn(date_str):
@@ -876,9 +842,16 @@ def build_single_wechat_html(now=None):
                 + ''.join(parts) + macro_live_quotes() + warn + char_charts.quotes_chart(_quotes)[0] + char_charts.pairs_chart(_quotes)[0] + char_charts.macro_counts_chart(_xd)[0])
 
     def verdict_block():
-        """07 结论：逐条挂当次快讯/行情，不再写死 7-8 月事实与历史点位。"""
-        vc_note = (f'{len(communities)} 源社区当次研判汇总：偏多 {community_counts["bull"]} 家 · 偏空 {community_counts["bear"]} 家'
-                   f' · 中性 {community_counts["neutral"]} 家 · 分歧 {community_counts["mixed"]} 家')
+        """07 结论：逐条挂当次快讯/行情与真实社区抓取计数，不再写死历史事实或掺入未获取源。"""
+        live_comm_n = sum(community_counts.values())
+        unavail_n = max(0, len(communities) - live_comm_n)
+        if live_comm_n > 0:
+            vc_note = (f'当次实抓 {live_comm_n}/{len(communities)} 源：'
+                       f'偏多 {community_counts["bull"]} 家 · 偏空 {community_counts["bear"]} 家'
+                       f' · 中性 {community_counts["neutral"]} 家 · 分歧 {community_counts["mixed"]} 家'
+                       f'（另有 {unavail_n} 家未获取，不计入分母）')
+        else:
+            vc_note = f'当次 0/{len(communities)} 源抓到实盘热评（全部如实标注「未获取」，不编造多空家数）'
         rows = [
             '• <strong>全球宏观面</strong>：' + macro_top('macro') + '；<br/>',
             '• <strong>美联储与离岸流动性</strong>：' + macro_top('fed') + '；<br/>',
@@ -886,7 +859,7 @@ def build_single_wechat_html(now=None):
             '• <strong>大宗商品与供应链</strong>：' + macro_top('commodities') + '；<br/>',
             '• <strong>机构观点（恒指目标价）</strong>：' + macro_top('bank_views') + '；<br/>',
             '• <strong>情绪与社区面</strong>：' + vc_note + '；<br/>',
-            '<span style="color:#9aa6c3;font-size:10px;">结论逐条对应上方当次快讯与行情快照，'
+            '<span style="color:#9aa6c3;font-size:10px;">结论逐条对应上方当次快讯、实时行情快照与实抓社区片段，'
             '历史点位/均线读数不写入模板；如需回看前几日版本，以 GitHub Pages 历史构建为准。</span>',
         ]
         rows.append(quant_pair.render_wechat(quant_pair.recommend(
@@ -894,17 +867,22 @@ def build_single_wechat_html(now=None):
             _quotes, hint='hk_tape')))
         return ''.join(rows)
 
-    # ---------- 03 首段：多空统计与主线共识改为当次数据推导 ----------
+    # ---------- 03 首段：多空统计与主线说明严格按当次实抓源推导（未获取源不掺入多空分母） ----------
     community_counts = {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0}
+    community_unavail_n = 0
     for _c in communities:
         if (_c.get('vclass') or '') in community_counts:
             community_counts[_c['vclass']] += 1
+        else:
+            community_unavail_n += 1
+    community_live_n = sum(community_counts.values())
     community_overview_line = (
         key(f'偏多 {community_counts["bull"]} 家')
         + f' · <strong style="color:{WECHAT_DANGER};font-weight:700;">偏空 {community_counts["bear"]} 家</strong>'
         + f' · <strong style="color:{WECHAT_VIOLET};font-weight:700;">中性 {community_counts["neutral"]} 家</strong> · '
         + key(f'多空分歧 {community_counts["mixed"]} 家')
-        + f'（{len(communities)} 源当次研判汇总，随每次构建重新统计）')
+        + f' · <span style="color:#9aa6c3;">未获取 {community_unavail_n} 家</span>'
+        + f'（当次实抓 {community_live_n}/{len(communities)} 源参与多空统计，未获取源不编造立场）')
     macro_freshness_note = (
         (f'{(_xd.get("summary") or {}).get("newest")} 最新一条 · 窗口 {(_xd.get("window") or {}).get("max_age_days")} 天'
          if (_xd.get('summary') or {}).get('kept_items') else '未获取（02 栏已标注，未回填旧文）')
@@ -951,9 +929,10 @@ def build_single_wechat_html(now=None):
               f'（{_fc.get("unavailable_reason")}）—— 不回填上一版预测')
 
     community_thread_line = (
-        hsi_brief() + ' ' + macro_top('hk', '宏观快讯窗口内无港股条目，社区叙事以各频道热评为准')
-        + '；跨平台配置答案延续「进攻端看算力与硬科技、防御端看高息与公用事业」的框架，'
-          '具体点位与仓位以当日行情快照为准。')
+        hsi_brief() + ' '
+        + macro_top('hk', '宏观快讯窗口内无港股条目')
+        + f'；当次公开页实抓可用社区 {community_live_n}/{len(communities)} 源'
+          '（仅实抓片段参与词库极性与相关性计算，未获取源一律标注「未获取」，绝不编造热评）。')
 
     community_overview_html = (
         f'<div style="background:#0d1426;border:1px solid #2b3855;border-left:3px solid {WECHAT_CYAN};'
@@ -984,11 +963,11 @@ def build_single_wechat_html(now=None):
   {h('02 / 全球经济与财经动态 (Global Macro & HK Battlefield · 快讯每次构建现抓)')}
   {box(macro_block())}
 
-  {h(f'03 / 社区论坛热评 ({len(communities)} 大平台详尽深入全景研判 · 每日动态抓取 · 含跨域配对)')}
+  {h(f'03 / 社区论坛热评 ({len(communities)} 大平台实盘公开摘录 · 严格真实口径 · 含跨域配对)')}
   {box(
-    '<strong style="color:#edf2ff;">核心主线共识</strong>：' + community_thread_line + '<br/>' +
-    f'<span style="color:#9aa6c3;font-size:10px;">社区抓取日期 {_community_fetch_date} · {community_fetch_status()} · {len(communities)} 源动态抓取已上线（中英文 / 不同类型），每次构建自动刷新</span><br/>'
-    '<span style="color:#9aa6c3;font-size:10px;">指标口径：情感 = 文本片段情绪（排除无关主体）· 事件 = 业绩 / 并购 / 监管等场景 · 相关性 = 新闻与标的关联度 · 新颖度 = 首发 vs 转载。</span>'
+    '<strong style="color:#edf2ff;">盘面与抓取口径</strong>：' + community_thread_line + '<br/>' +
+    f'<span style="color:#9aa6c3;font-size:10px;">社区抓取日期 {_community_fetch_date} · {community_fetch_status()} · {len(communities)} 源动态抓取已上线（仅展示真实公开摘录，失败源诚实标注未获取）</span><br/>'
+    '<span style="color:#9aa6c3;font-size:10px;">指标口径：情感 = 实抓片段金融词库净值（零哈希伪随机）· 事件 = 片段关键词实配 · 相关性 = 核心词与财经主题词命中密度 · 新颖度 = 批内去重独立度（无首发时间链时不伪造首发/转载）；未获取源不生成指标。</span>'
     + quant_pair.render_wechat(quant_pair.recommend(community_thread_line, _quotes, hint='hk_tape')) + fig_community)}
 
   {COMMUNITY_SLOT}
@@ -1023,17 +1002,17 @@ def build_single_wechat_html(now=None):
         print(f'  🔒 行情不足：{_hidden_n} 处 AI 量化配对已整段隐藏（两腿涨跌幅不齐，'
               '不渲染「数据不足」，也不编方向）')
 
-    # 49 大社区「最新读取」日期统一刷新为当日抓取日期（动态抓取真正上线）
-    html = re.sub(r'(最新读取\s+)(20\d{2}-\d{2}-\d{2})',
-                  lambda m: m.group(1) + _fetch_date, html)
+    # 严格真实口径：不再使用正则强行把正文中的旧日期替换为今天，保留真实抓取核验日期供门禁校验
     return html.strip(), ts, ts_full
 
+
 def extract_fetch_dates(text):
-    """抽出正文中「最新读取 YYYY-MM-DD」的抓取日期。"""
-    return sorted(set(re.findall(r'最新读取\s+(20\d{2}-\d{2}-\d{2})', text)))
+    """抽出正文中「抓取核验 YYYY-MM-DD」（兼容旧「最新读取 YYYY-MM-DD」）的真实日期。"""
+    return sorted(set(re.findall(r'(?:抓取核验|最新读取)\s+(20\d{2}-\d{2}-\d{2})', text)))
+
 
 def assert_fetch_dates_are_today(parts, now, strict=True):
-    """推送前逐条核对 49 个频道「最新读取」标记，缺项或非当天时拒绝推送。"""
+    """推送前逐条核对 49 个频道「抓取核验」标记：未执行抓取或日期非当天时拒绝手动推送。"""
     today = now.strftime('%Y-%m-%d')
     reads = []
     for title, content in parts:
@@ -1041,8 +1020,8 @@ def assert_fetch_dates_are_today(parts, now, strict=True):
     failed = False
     if len(reads) != EXPECTED_CHANNEL_COUNT:
         failed = True
-        msg = (f'仅找到 {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条频道「最新读取」标记，'
-               '必须逐条完成频道最新内容检查后才能推送')
+        msg = (f'仅找到 {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条频道「抓取核验」标记，'
+               '必须先运行 python3 community_data.py 完成当次核验后才能推送')
         if strict:
             print(f'错误: {msg}。', file=sys.stderr)
             sys.exit(5)
@@ -1051,15 +1030,15 @@ def assert_fetch_dates_are_today(parts, now, strict=True):
     if stale:
         failed = True
         stale_str = ", ".join(stale)
-        msg = f'频道最新读取日期 {stale_str} 不是当天 {today}'
+        msg = f'频道抓取核验日期 {stale_str} 不是当天 {today}'
         if strict:
-            print(f'错误: {msg}，请重新抓取并逐条检查频道最新内容后再推送。', file=sys.stderr)
+            print(f'错误: {msg}，请重新抓取后再推送（已禁用正则改写旧日期）。', file=sys.stderr)
             sys.exit(5)
         print(f'⚠️ 警告: {msg}，定时自动推送继续执行(如需严格校验请改用 --push)。')
     if failed:
-        print(f'📅 频道最新内容核对: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条标记，未全部核对为当天，不建议推送')
+        print(f'📅 频道核验检查: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条标记，未全部确认为当天 {today}')
     else:
-        print(f'📅 频道最新内容核对: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条均已逐条检查，读取日期为 {today}，允许推送')
+        print(f'📅 频道核验检查: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条均已于 {today} 完成抓取核验，允许推送')
 
 def build_articles(source_html=SOURCE_HTML, now=None):
     """返回 (parts, ts, ts_full): parts 为 [(title, content)] 包含 1 条单页完整推送。"""

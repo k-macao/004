@@ -544,7 +544,7 @@ def scan(market=None, macro=None, sentiment=None, community=None, now=None, top_
         gaps.append('宏观快讯（macro_data.json）窗口内无条目 —— 宏观事件一栏不回填历史叙事')
     if not ((sentiment or {}).get('market') or {}).get('news_count'):
         gaps.append('舆情因子（sentiment_data.json）未获取 —— 情绪读数以社区研判替代')
-    if not ((community or {}).get('communities')):
+    if not sum(_community_counts(community).values()):
         gaps.append('社区研判（community_data.json）未获取 —— 多空家数无法统计')
     coverage = round((4 - len(gaps)) / 4.0, 2)
 

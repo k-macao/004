@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""49 大社区回归（14 原有 + 20 前次新增 + 15 本次扩容）+ 跨域组合口径 + Scrapling 抓取框架接入。
+"""49 大社区回归 + 方案 A（严格真实口径 · 零幻觉防线）+ 跨域组合口径 + Scrapling 抓取框架接入。
 
-本次三项需求的回归防线：
-  1. 接入 GitHub 上的 Scrapling，分析并使用其代码框架模型（scrapling_core.py / community_spider.py）；
-  2. 社区模块改由该框架抓取（Spider + Scheduler + AutoThrottle + 自适应指纹回捞 + 封锁重试）；
-  3. 社区源头从 34 扩到 **49** —— 目录、模板、量化指标、网页注入、微信推送五处源数一致，
-     并且微信单页仍要落在 95,000 字符推送门禁之内。
-
-零联网：全部用 offline_dataset()/--demo 的当次模板数据与假传输层。
+核心防线：
+  1. 接入 Scrapling 代码框架模型（scrapling_core.py / community_spider.py），覆盖全部 49 源，
+     且打分器强制要求命中财经/市场主题词并拦截风控/JS 空壳文案；
+  2. 严格真实口径（对齐 02 宏观快讯）：
+     • 仅 `source="live"`（真实抓到公开讨论片段）展示摘录并由 `sentiment_nlp` 词库实算极性与相关性；
+     • 未抓到 / 风控拦截 / 无匹配正文一律标记 `verdict_class="unavailable"`（未获取）、`quant=None`，
+       绝不编造热评、绝不预设 10/11/17/11 多空立场、绝不使用 MD5 伪随机指标、绝不声称「综合站内 10 条」；
+     • 全失败时 `panorama.scan` 与 `forecast.predict` 均计为数据缺口，不虚增覆盖度、不注入假情绪偏置；
+     • `wechat_push.py` 严禁正则篡改旧抓取日期：当天执行过核验放行，旧快照在 `--push` 严格模式下阻断（exit 5）。
+  3. 49 源跨域组合与微信单页 95,000 字符门禁保持完好。
 """
 import contextlib
 import io
@@ -18,7 +21,7 @@ import re
 import sys
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 for _p in (REPO_ROOT, os.path.join(REPO_ROOT, 'tools')):
@@ -28,25 +31,53 @@ for _p in (REPO_ROOT, os.path.join(REPO_ROOT, 'tools')):
 import build_site as bs            # noqa: E402
 import community_data as cd        # noqa: E402
 import community_spider as cs      # noqa: E402
+import forecast as fc              # noqa: E402
+import panorama                    # noqa: E402
 import quant_pair                  # noqa: E402
 import scrapling_core as sc        # noqa: E402
 import wechat_push as wp           # noqa: E402
 
-NOW = datetime(2026, 10, 3, 3, 0, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 10, 28, 3, 0, 0, tzinfo=timezone.utc)
+TODAY = '2026-10-28'
 
-MARKET = {'fetch_date': '2026-10-03', 'quotes': {
-    'HSI': {'name': '恒生指数', 'last': 26000, 'prev_close': 25800, 'pct': 0.78, 'as_of': '2026-10-03'},
-    'HSTECH': {'name': '恒生科技指数', 'last': 5200, 'prev_close': 5150, 'pct': 0.97, 'as_of': '2026-10-03'},
-    'HSCE': {'name': '恒生中国企业指数', 'last': 9000, 'prev_close': 8940, 'pct': 0.67, 'as_of': '2026-10-03'},
-    'SPX': {'name': '标普 500', 'last': 6000, 'prev_close': 5990, 'pct': 0.17, 'as_of': '2026-10-02'},
-    'NDQ': {'name': '纳斯达克', 'last': 21000, 'prev_close': 20900, 'pct': 0.48, 'as_of': '2026-10-02'},
-    'DJI': {'name': '道琼斯', 'last': 43000, 'prev_close': 42900, 'pct': 0.23, 'as_of': '2026-10-02'},
-    'GOLD': {'name': '现货黄金', 'last': 2650, 'prev_close': 2640, 'pct': 0.38, 'as_of': '2026-10-02'},
-    'WTI': {'name': 'WTI 原油', 'last': 92, 'prev_close': 90, 'pct': 2.2, 'as_of': '2026-10-02'},
-    'BRENT': {'name': '布伦特原油', 'last': 95, 'prev_close': 93, 'pct': 2.1, 'as_of': '2026-10-02'},
-    'USDCNH': {'name': '美元/离岸人民币', 'last': 6.71, 'prev_close': 6.72, 'pct': -0.15, 'as_of': '2026-10-03'},
-    'USDCNY': {'name': '美元/在岸人民币', 'last': 6.70, 'prev_close': 6.71, 'pct': -0.15, 'as_of': '2026-10-03'},
+MARKET = {'fetch_date': TODAY, 'quotes': {
+    'HSI': {'name': '恒生指数', 'last': 26000, 'prev_close': 25800, 'pct': 0.78, 'as_of': TODAY},
+    'HSTECH': {'name': '恒生科技指数', 'last': 5200, 'prev_close': 5150, 'pct': 0.97, 'as_of': TODAY},
+    'HSCE': {'name': '恒生中国企业指数', 'last': 9000, 'prev_close': 8940, 'pct': 0.67, 'as_of': TODAY},
+    'SPX': {'name': '标普 500', 'last': 6000, 'prev_close': 5990, 'pct': 0.17, 'as_of': '2026-10-27'},
+    'NDQ': {'name': '纳斯达克', 'last': 21000, 'prev_close': 20900, 'pct': 0.48, 'as_of': '2026-10-27'},
+    'DJI': {'name': '道琼斯', 'last': 43000, 'prev_close': 42900, 'pct': 0.23, 'as_of': '2026-10-27'},
+    'GOLD': {'name': '现货黄金', 'last': 2650, 'prev_close': 2640, 'pct': 0.38, 'as_of': '2026-10-27'},
+    'WTI': {'name': 'WTI 原油', 'last': 92, 'prev_close': 90, 'pct': 2.2, 'as_of': '2026-10-27'},
+    'BRENT': {'name': '布伦特原油', 'last': 95, 'prev_close': 93, 'pct': 2.1, 'as_of': '2026-10-27'},
+    'USDCNH': {'name': '美元/离岸人民币', 'last': 6.71, 'prev_close': 6.72, 'pct': -0.15, 'as_of': TODAY},
+    'USDCNY': {'name': '美元/在岸人民币', 'last': 6.70, 'prev_close': 6.71, 'pct': -0.15, 'as_of': TODAY},
 }}
+
+
+def _mock_checked_dataset(live_keys=('FUTU', 'XUEQIU', 'REDDIT'), now=NOW):
+    """构造一次真实的 49 源核验结果：指定源抓到真实片段，其余源为 HTTP 403 未获取。"""
+    live_set = set(live_keys)
+    snippets = {
+        'FUTU': '港股早盘走强，恒指放量突破，南向资金大幅净买入，科技股领涨回暖。',
+        'XUEQIU': '美联储降息节奏不明，港股短线下跌承压，部分获利盘净流出引发担忧。',
+        'REDDIT': 'Hang Seng Index valuation remains cheap with strong buyback inflows, though tariff pressure lingers.',
+    }
+
+    def transport(method, url, headers, timeout, proxy=None, body=None):
+        for comm in cd.COMMUNITIES:
+            if comm['url'] == url and comm['key'] in live_set:
+                text = snippets.get(comm['key'], f"{comm['name']} 恒指与港股流动性讨论")
+                html = f"<html><head><title>{comm['name']}</title></head><body><article><p>{text}</p></article></body></html>"
+                return 200, 'OK', {'Content-Type': 'text/html; charset=utf-8'}, html.encode('utf-8'), url
+        return 403, 'Forbidden', {'Content-Type': 'text/html'}, b'Access Denied', url
+
+    with tempfile.TemporaryDirectory() as tmp:
+        session = sc.FetcherSession(transport=transport, retries=0)
+        return cd.generate_all_communities(
+            market=MARKET, demo_mode=False, now=now, session=session,
+            storage_file=os.path.join(tmp, 'adapt.db'), verbose=False,
+            autothrottle=False, max_blocked_retries=0, download_delay=0.0)
 
 
 class TestCommunityCatalog(unittest.TestCase):
@@ -57,11 +88,10 @@ class TestCommunityCatalog(unittest.TestCase):
         keys = [c['key'] for c in comms]
         self.assertEqual(len(set(keys)), 49, '社区 key 不得重复')
         self.assertEqual(len({c['name'] for c in comms}), 49, '社区名不得重复')
-        original = keys[:14]
-        self.assertEqual(original[0], 'FUTU')
-        self.assertEqual(original[-1], 'FINTWIT')
+        self.assertEqual(keys[0], 'FUTU')
+        self.assertEqual(keys[13], 'FINTWIT')
 
-    def test_15_new_sources_cover_more_languages_and_types(self):
+    def test_15_new_sources_cover_more_languages_and_types_and_no_preset_bias(self):
         new = cd.COMMUNITIES[34:]
         self.assertEqual(len(new), 15, '本次扩容 15 个社区')
         self.assertEqual([c['key'] for c in new][0], 'JISILU')
@@ -76,34 +106,126 @@ class TestCommunityCatalog(unittest.TestCase):
         for c in cd.COMMUNITIES:
             self.assertTrue(c.get('ctype'), f"{c['key']} 缺 ctype（社区类型）")
             self.assertTrue(c['url'].startswith('http'), f"{c['key']} 缺可抓取 URL")
-            self.assertIn(c['verdict_class'], ('bull', 'bear', 'neutral', 'mixed'))
+            self.assertNotIn('verdict_class', c, f"{c['key']} 目录层不得预设写死多空立场")
+            self.assertNotIn('meta_tpl', c, f"{c['key']} 目录层不得写死「综合站内 10 条」虚报模板")
 
-    def test_every_source_renders_quote_verdict_and_quant_with_today(self):
-        hsi = cd.fmt_hsi(MARKET)
-        quotes = set()
-        for c in cd.COMMUNITIES:
-            q = cd.generate_dynamic_quote(c, hsi, '2026-10-03', '10 月 3 日', live_snippet='')
-            v = cd.generate_verdict(c, hsi, '10 月 3 日')
-            m = cd.generate_quant_metrics(c, hsi, '', 'fallback', '2026-10-03')
-            self.assertIn('10 月 3 日', q, f"{c['key']} 的正文必须带当次日期")
-            self.assertTrue(v.strip(), f"{c['key']} 缺战术研判")
-            self.assertTrue(m['event']['label'] and m['relevance']['score'], f"{c['key']} 缺量化指标")
-            quotes.add(q)
-        self.assertEqual(len(quotes), 49, '49 源正文不得互相复制粘贴')
+    def test_url_targets_match_declared_communities(self):
+        by_key = {c['key']: c['url'] for c in cd.COMMUNITIES}
+        self.assertNotIn('998407', by_key['YAHOOJP'], '日本 Yahoo 不得再指向日经 225 代码 998407.O')
+        self.assertNotIn('005930', by_key['NAVER'], 'NAVER 不得再指向三星电子 005930')
+        self.assertIn('HSI', by_key['NAVER'])
+        self.assertNotIn('#HSI', by_key['XUEQIU'], '雪球 URL 不应依赖服务端不可见的客户端 # 锚点')
+        self.assertNotIn('%23A%E8%82%A1%23', by_key['WEIBO'], '微博港股观察不应抓纯 #A股# 搜索')
 
-    def test_offline_dataset_matches_live_structure(self):
+    def test_offline_dataset_is_honestly_unavailable(self):
         d = cd.offline_dataset(MARKET, now=NOW)
-        self.assertEqual(d['mode'], 'fallback')
-        self.assertEqual(d['fetch_date'], '2026-10-03')
+        self.assertEqual(d['mode'], 'offline')
+        self.assertEqual(d['fetch_date'], TODAY)
         self.assertEqual(len(d['communities']), 49)
-        self.assertEqual(d['summary'], {'ok': 49, 'total': 49, 'failed': []})
+        self.assertEqual(d['summary']['ok'], 0)
+        self.assertEqual(d['summary']['unavailable'], 49)
+        self.assertEqual(len(d['summary']['failed']), 49)
         self.assertTrue(d['fetch_engine']['engine'].startswith('scrapling-core'))
         for c in d['communities']:
-            for field in ('id', 'key', 'name', 'icon', 'ctype', 'url', 'verdict_label',
-                          'verdict_class', 'quote', 'verdict', 'quant', 'meta', 'fetch_date'):
-                self.assertIn(field, c, f"{c['key']} 缺字段 {field}")
-            self.assertIn('最新读取 2026-10-03', c['meta'], '推送前频道核对依赖这条标记')
-            self.assertIn('10 月 3 日', c['quote'], '兜底正文也必须带当次日期')
+            self.assertFalse(c['available'])
+            self.assertEqual(c['verdict_class'], 'unavailable')
+            self.assertEqual(c['verdict_label'], '未获取')
+            self.assertIsNone(c['quant'])
+            self.assertEqual(c['verdict'], '')
+            self.assertIn('当次未获取', c['quote'])
+            self.assertNotIn('综合站内 10 条', c['meta'])
+            self.assertNotIn('最新读取', c['meta'])
+            self.assertNotIn('抓取核验', c['meta'], '未执行抓取的离线兜底不得伪造核验日期标记')
+
+
+class TestStrictZeroHallucination(unittest.TestCase):
+    """方案 A 反幻觉核心防线：零硬编码旧叙事、零 MD5 伪打分、真实 NLP 自洽、下游隔离、诚实日期门禁。"""
+
+    FORBIDDEN_HALLUCINATIONS = (
+        '628.69', '49:51', '4.67%', '中际旭创', '新易盛', '天孚通信',
+        '25,124', '26,299', '综合站内 10 条', '综合站内 10 篇', '综合站内 10 套',
+        '25440.17',
+    )
+
+    def test_codebase_and_template_have_zero_hardcoded_community_hallucinations(self):
+        for rel in ('community_data.py', 'build_site.py', 'tools/wechat_push.py', 'report.html'):
+            path = os.path.join(REPO_ROOT, rel)
+            with open(path, encoding='utf-8') as fh:
+                content = fh.read()
+            for bad in self.FORBIDDEN_HALLUCINATIONS:
+                if bad == '25440.17' and rel == 'build_site.py':
+                    # build_site.py 仅在 fmt_last docstring 举例数字格式，检查非注释代码行无写死回退
+                    code_lines = '\n'.join(
+                        ln for ln in content.splitlines()
+                        if not ln.strip().startswith(('#', '"""', "'''", '•')) and '"""' not in ln
+                    )
+                    self.assertNotIn(bad, code_lines, f'{rel} 代码逻辑不得回退历史点位 {bad}')
+                else:
+                    self.assertNotIn(bad, content, f'{rel} 仍残留旧幻觉内容: {bad}')
+
+    def test_fmt_hsi_never_falls_back_to_august_price(self):
+        empty_hsi = cd.fmt_hsi({})
+        self.assertFalse(empty_hsi['available'])
+        self.assertEqual(empty_hsi['last'], '—')
+        self.assertIsNone(empty_hsi['raw_last'])
+        self.assertIsNone(empty_hsi['raw_pct'])
+
+    def test_live_snippet_nlp_is_deterministic_and_self_consistent(self):
+        bull = cd.analyze_live_snippet('恒指放量大涨突破，南向资金持续净流入，科技股盈利超预期回暖。')
+        bear = cd.analyze_live_snippet('港股跳水大跌破位，外资大幅净流出，业绩暴雷引发恐慌抛售。')
+        mixed = cd.analyze_live_snippet('低估值回购利好托底反弹，但关税冲击与获利盘流出令短线承压下跌。')
+        neutral = cd.analyze_live_snippet('市场围绕港股通结算机制与指数成分股权重调整规则展开讨论。')
+
+        self.assertEqual(bull['verdict_class'], 'bull')
+        self.assertGreaterEqual(bull['quant']['sentiment']['score'], 0.15)
+        self.assertEqual(bear['verdict_class'], 'bear')
+        self.assertLessEqual(bear['quant']['sentiment']['score'], -0.15)
+        self.assertEqual(mixed['verdict_class'], 'mixed')
+        self.assertEqual(neutral['verdict_class'], 'neutral')
+
+        # 确定性验证：不依赖日期或 MD5，重复调用结果完全一致，且不再伪造「首发」
+        again = cd.analyze_live_snippet('恒指放量大涨突破，南向资金持续净流入，科技股盈利超预期回暖。')
+        self.assertEqual(bull, again)
+        self.assertNotIn('首发)', bull['quant']['novelty']['display'])
+
+    def test_spider_rejects_antibot_and_non_financial_http_200_pages(self):
+        pages = {
+            cd.COMMUNITIES[0]['url']: '<html><body><h1>Enable JavaScript and cookies to continue</h1></body></html>',
+            cd.COMMUNITIES[1]['url']: '<html><body><article><p>今天的天气真不错，周末大家准备去哪里旅游拍照？</p></article></body></html>',
+        }
+
+        def transport(method, url, headers, timeout, proxy=None, body=None):
+            body_html = pages.get(url, '<html><body>blocked</body></html>')
+            status = 200 if url in pages else 403
+            return status, 'OK', {'Content-Type': 'text/html; charset=utf-8'}, body_html.encode('utf-8'), url
+
+        with tempfile.TemporaryDirectory() as tmp:
+            session = sc.FetcherSession(transport=transport, retries=0)
+            out = cd.generate_all_communities(
+                market=MARKET, now=NOW, session=session,
+                storage_file=os.path.join(tmp, 'adapt.db'), limit=2, verbose=False,
+                autothrottle=False, max_blocked_retries=0, download_delay=0.0)
+        self.assertEqual(out['summary']['ok'], 0)
+        self.assertEqual(out['communities'][0]['verdict_class'], 'unavailable')
+        self.assertEqual(out['communities'][1]['verdict_class'], 'unavailable')
+
+    def test_unavailable_communities_do_not_pollute_panorama_or_forecast(self):
+        all_failed = _mock_checked_dataset(live_keys=(), now=NOW)
+        self.assertEqual(all_failed['summary']['ok'], 0)
+
+        scan_res = panorama.scan(market=MARKET, macro={}, sentiment={}, community=all_failed, now=NOW)
+        self.assertTrue(any('社区研判' in g for g in scan_res['data_gaps']),
+                        '49 源全未抓到时，01 全景扫描必须将社区计为数据缺口')
+        self.assertEqual(scan_res['coverage'], 0.25, '仅行情一路可用时覆盖度必须为 25%，不得因空壳社区虚增到 50%')
+
+        fc_res = fc.predict(market=MARKET, macro={}, sentiment={}, community=all_failed, now=NOW)
+        self.assertTrue(any('社区研判' in g for g in fc_res['data_gaps']),
+                        '49 源全未抓到时，04 AI 预测必须将社区计为数据缺口')
+        self.assertEqual(fc_res['coverage'], 0.25)
+        self.assertIsNone(fc_res['signals']['sentiment'].get('z'),
+                          '0 个实抓社区时不得向 AI 预测注入虚假负向或正向情绪偏置')
+        self.assertEqual(fc_res['signals']['sentiment']['counts'],
+                         {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0})
 
 
 class TestScraplingEngineWiring(unittest.TestCase):
@@ -118,14 +240,14 @@ class TestScraplingEngineWiring(unittest.TestCase):
         self.assertIn('.scrapling', cd.ADAPTIVE_DB_DEFAULT, '自适应指纹库要落在忽略目录里')
 
     def test_community_data_main_uses_the_spider(self):
-        """`community_data.py` 的 live 分支必须走 community_spider，而不是裸 urllib。"""
+        """`community_data.py` 的 live 分支必须走 community_spider，且真实片段原样保留。"""
         captured = {}
 
         def fake_fetch(communities, **kwargs):
             captured['sources'] = list(communities)
             captured['kwargs'] = kwargs
             results = {c['key']: {'key': c['key'], 'name': c['name'], 'status': 200, 'ok': True,
-                                  'snippet': f"现场片段 {c['name']} · 恒指 26,012 点",
+                                  'snippet': f"现场片段 {c['name']} · 恒指 26,012 点南向资金净流入",
                                   'selector': 'h3', 'adaptive': False, 'bytes': 1024}
                        for c in communities}
             stats = {'engine': sc.ENGINE_NAME, 'backend': 'injected', 'sources': len(communities),
@@ -153,27 +275,32 @@ class TestScraplingEngineWiring(unittest.TestCase):
         self.assertEqual(len(captured['sources']), 49, '抓取入口必须收到 49 个源')
         self.assertEqual(len(data['communities']), 49)
         self.assertEqual(data['summary']['ok'], 49)
-        self.assertTrue(all(c['source'] == 'live' for c in data['communities']))
-        self.assertIn('恒指 26,012', data['communities'][0]['quote'], '活数据要进正文佐证')
+        self.assertTrue(all(c['source'] == 'live' and c['available'] for c in data['communities']))
+        self.assertIn('恒指 26,012 点南向资金净流入', data['communities'][0]['quote'], '活数据完整保留进正文')
         self.assertEqual(data['fetch_engine']['backend'], 'injected')
 
 
 class TestCrossDomainPairs(unittest.TestCase):
     def test_pair_catalog_and_recommendations_are_always_cross_domain(self):
         self.assertEqual(quant_pair.cross_domain_catalog_errors(), [])
+        all_hints = {h for s in quant_pair.STRATEGIES for h in s['hints']}
+        missing_hints = [c['key'] for c in cd.COMMUNITIES if c['key'] not in all_hints]
+        self.assertEqual(missing_hints, [], f'49 个社区源都应显式映射跨域策略 hint，缺: {missing_hints}')
         quotes = {'quotes': {k: {'name': v['name'], 'pct': v['pct']} for k, v in MARKET['quotes'].items()}}
         for c in cd.COMMUNITIES:
-            rec = quant_pair.recommend(f"{c['name']} 讨论", quotes, hint=c['key'])
+            rec = quant_pair.recommend(f"{c['name']} {c['ctype']}", quotes, hint=c['key'])
             self.assertNotEqual(rec['domain_a'], rec['domain_b'],
                                 f"{c['key']} 给出的是同域组合：{rec['domain_pair']}")
             self.assertTrue(rec['cross_domain'])
             self.assertNotEqual(rec['leg_a']['key'], rec['leg_b']['key'])
 
     def test_every_community_card_in_the_web_page_has_a_cross_domain_pair(self):
-        d = cd.offline_dataset(MARKET, now=NOW)
+        d = _mock_checked_dataset()
         html = bs.build_community_html(d['communities'], market=MARKET)
         self.assertEqual(html.count('<article class="pub-card"'), 49)
         self.assertEqual(html.count('class="ai-quant"'), 49)
+        # 仅 3 个实抓源渲染 quant-metrics，46 个未获取源绝不伪造核心量化指标框
+        self.assertEqual(html.count('class="quant-metrics"'), 3)
         pairs = re.findall(r'data-domain-pair="([^"]+)"', html)
         self.assertEqual(len(pairs), 49)
         for p in pairs:
@@ -185,25 +312,29 @@ class TestCrossDomainPairs(unittest.TestCase):
     def test_report_template_labels_are_dynamic_not_hardcoded_14(self):
         with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as f:
             tpl = f.read()
-        for token in ('{{COMMUNITY_TOTAL}}', '{{COMMUNITY_TYPE_TOTAL}}',
-                      '{{CF_BULL}}', '{{CF_BEAR}}', '{{CF_NEUTRAL}}', '{{CF_MIXED}}'):
+        for token in ('{{COMMUNITY_TOTAL}}', '{{COMMUNITY_LIVE_OK}}', '{{COMMUNITY_TYPE_TOTAL}}',
+                      '{{CF_BULL}}', '{{CF_BEAR}}', '{{CF_NEUTRAL}}', '{{CF_MIXED}}', '{{CF_UNAVAILABLE}}'):
             self.assertIn(token, tpl, f'模板应使用动态口径 token: {token}')
-        self.assertNotIn('全部 14 平台', tpl, '扩展后不得再写死「全部 14 平台」')
+        self.assertNotIn('全部 14 平台', tpl)
         self.assertNotIn('14 SOURCE FEEDS', tpl)
-        self.assertNotIn('含核心量化指标 · AI 量化配对）', tpl)
 
-    def test_build_site_tokens_follow_the_dataset(self):
-        d = cd.offline_dataset(MARKET, now=NOW)
-        tokens = bs.build_tokens(MARKET, NOW, community_data=d)
+    def test_build_site_tokens_follow_the_dataset_honestly(self):
+        checked = _mock_checked_dataset(live_keys=('FUTU', 'XUEQIU', 'REDDIT'), now=NOW)
+        tokens = bs.build_tokens(MARKET, NOW, community_data=checked)
         self.assertEqual(tokens['{{COMMUNITY_TOTAL}}'], '49')
+        self.assertEqual(tokens['{{COMMUNITY_LIVE_OK}}'], '3')
+        self.assertEqual(tokens['{{CF_UNAVAILABLE}}'], '46')
         self.assertEqual(int(tokens['{{CF_BULL}}']) + int(tokens['{{CF_BEAR}}'])
-                         + int(tokens['{{CF_NEUTRAL}}']) + int(tokens['{{CF_MIXED}}']), 49)
-        # 49 个「最新读取」日期占位符逐个都要在（模板里静态卡片只用前 14 个，占位符必须齐）
+                         + int(tokens['{{CF_NEUTRAL}}']) + int(tokens['{{CF_MIXED}}']), 3)
         for index in range(1, 50):
-            self.assertEqual(tokens[f'{{{{CD_{index:02d}}}}}'], '2026-10-03')
-        # 无社区数据时退回模板静态卡片的 14 源口径，标题不会显示成 49
+            self.assertEqual(tokens[f'{{{{CD_{index:02d}}}}}'], TODAY)
+
+        # 无社区数据时返回 49 源「全部未获取（0 实抓）」，绝不再退回旧「14 平台 / 6 偏多」常数
         empty = bs.build_tokens(MARKET, NOW, community_data={})
-        self.assertEqual(empty['{{COMMUNITY_TOTAL}}'], '14')
+        self.assertEqual(empty['{{COMMUNITY_TOTAL}}'], '49')
+        self.assertEqual(empty['{{COMMUNITY_LIVE_OK}}'], '0')
+        self.assertEqual(empty['{{CF_UNAVAILABLE}}'], '49')
+        self.assertEqual(empty['{{CF_BULL}}'], '0')
 
 
 class TestWechat49Sources(unittest.TestCase):
@@ -217,7 +348,7 @@ class TestWechat49Sources(unittest.TestCase):
             json.dump(payload, f, ensure_ascii=False)
         return path
 
-    def _render(self, communities):
+    def _render(self, communities, now=NOW):
         env = {
             'MARKET_DATA': self._write('market_data.json', MARKET),
             'COMMUNITY_DATA': self._write('community_data.json', communities),
@@ -230,7 +361,7 @@ class TestWechat49Sources(unittest.TestCase):
         os.environ.update(env)
         try:
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                html, _ts, _tsf = wp.build_single_wechat_html(now=NOW)
+                html, _ts, _tsf = wp.build_single_wechat_html(now=now)
         finally:
             for k, v in saved.items():
                 if v is None:
@@ -239,48 +370,54 @@ class TestWechat49Sources(unittest.TestCase):
                     os.environ[k] = v
         return html
 
-    def test_all_49_sources_are_pushed_with_read_markers(self):
-        d = cd.offline_dataset(MARKET, now=NOW)
-        html = self._render(d)
-        markers = re.findall(r'综合站内[^<]*?最新读取\s+(20\d{2}-\d{2}-\d{2})', html)
-        self.assertEqual(len(markers), 49, '49 源都要有「最新读取」标记供推送前核对')
-        self.assertEqual(set(markers), {'2026-10-03'})
+    def test_all_49_checked_sources_carry_honest_verification_markers_and_block_stale_dates(self):
+        d = _mock_checked_dataset(now=NOW)
+        html = self._render(d, now=NOW)
+        markers = wp.CHANNEL_READ_RE.findall(html)
+        self.assertEqual(len(markers), 49, '当次执行过抓取核验的 49 源均应带核验日期标记')
+        self.assertEqual(set(markers), {TODAY})
         self.assertIn('49 大平台', html)
-        # 每一张社区卡都要挂跨域两标的（完整版是「◆ AI 量化」块，预算降级到名录版时
-        # 是「跨域配对：」一行 —— 两种形态都必须一源一份，一源不删）
+        self.assertIn('南向资金大幅净买入', html, '微信推送必须保留实盘抓到的真实片段')
         per_source_blocks = len(re.findall(r'◆ AI 量化|跨域配对：', html))
         self.assertGreaterEqual(per_source_blocks, 49)
-        self.assertIn('跨域', html)
         self.assertLess(len(html), wp.CONTENT_SAFE_LIMIT, '49 源仍须落在推送字符门禁之内')
         for key in ('ZHIHU', 'PTT', 'FTALPHA', 'JISILU', 'NAVER', 'AASTOCKS'):
             src = next(c for c in d['communities'] if c['key'] == key)
             self.assertIn(src['name'], html, f'{key} 必须出现在推送正文里')
 
+        # 关键反作弊断言：旧日期的 community_data.json 渲染到明天时，日期不得被正则洗白，--push 严格模式必须拦截！
+        tomorrow = NOW + timedelta(days=1)
+        stale_html = self._render(d, now=tomorrow)
+        self.assertEqual(set(wp.CHANNEL_READ_RE.findall(stale_html)), {TODAY},
+                         '严禁用正则把昨天的抓取日期改写成今天')
+        with self.assertRaises(SystemExit) as ctx:
+            with contextlib.redirect_stderr(io.StringIO()):
+                wp.assert_fetch_dates_are_today([('title', stale_html)], tomorrow, strict=True)
+        self.assertEqual(ctx.exception.code, 5)
+
     def test_budget_ladder_keeps_every_source_and_keeps_forecast(self):
-        """49 源把单页撑满时按预算降级渲染，但**一源不删**，且 04 栏仍有落点。"""
-        d = cd.offline_dataset(MARKET, now=NOW)
-        html = self._render(d)
-        self.assertNotIn('<!--COMMUNITY-SLOT-->', html, '占位槽必须被填充')
+        d = _mock_checked_dataset(now=NOW)
+        html = self._render(d, now=NOW)
+        self.assertNotIn('<!--COMMUNITY-SLOT-->', html)
         self.assertNotIn('<!--FORECAST-SLOT-->', html)
         for c in d['communities']:
             self.assertIn(c['name'], html, f"{c['key']} 在预算降级时被整条删掉了")
         self.assertIn('04 / AI 预测', html)
 
     def test_fewer_sources_still_render_and_use_the_same_structure(self):
-        d = cd.offline_dataset(MARKET, now=NOW)
-        small = dict(d, communities=d['communities'][:3], summary={'ok': 3, 'total': 3, 'failed': []})
-        html = self._render(small)
-        self.assertEqual(len(re.findall(r'最新读取\s+20\d{2}-\d{2}-\d{2}', html)), 3)
+        d = _mock_checked_dataset(now=NOW)
+        small = dict(d, communities=d['communities'][:3], summary={'ok': 2, 'total': 3, 'failed': ['老虎社区']})
+        html = self._render(small, now=NOW)
+        self.assertEqual(len(wp.CHANNEL_READ_RE.findall(html)), 3)
         self.assertIn('3 个境内外核心社区信号', html)
         self.assertNotIn('49 大平台', html, '源数文案必须跟着当次数据走')
 
     def test_expected_channel_count_matches_the_catalog(self):
         self.assertEqual(wp.EXPECTED_CHANNEL_COUNT, len(cd.COMMUNITIES))
         self.assertEqual(wp.EXPECTED_CHANNEL_COUNT, 49)
-        # 逐频道核对：49 条标记齐全时放行，缺项时严格模式退出
-        parts = [('t', '\n'.join(f'综合站内 10 条 · 最新读取 2026-10-03' for _ in range(49)))]
-        wp.assert_fetch_dates_are_today(parts, NOW, strict=False)
-        short = [('t', '综合站内 10 条 · 最新读取 2026-10-03')]
+        parts = [('t', '\n'.join(f'公开页实抓摘录 · 中文社区 · 抓取核验 {TODAY}' for _ in range(49)))]
+        wp.assert_fetch_dates_are_today(parts, NOW, strict=True)
+        short = [('t', f'公开页实抓摘录 · 中文社区 · 抓取核验 {TODAY}')]
         with self.assertRaises(SystemExit):
             with contextlib.redirect_stderr(io.StringIO()):
                 wp.assert_fetch_dates_are_today(short, NOW, strict=True)

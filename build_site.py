@@ -79,6 +79,7 @@ import sentiment_match as smatch                           # noqa: E402  采集�
 import vix_daily                                           # noqa: E402  00 节「每日 VIX 恐慌指数」统一口径
 import panorama                                            # noqa: E402  01 节「每日全球全景扫描」推理引擎
 import macro_data as macro_data_mod                        # noqa: E402  02 节快讯可用性判定（兜底口径单一事实源）
+import community_data as community_mod                     # noqa: E402  03 节 49 源严格真实口径与离线降级目录
 import quant_pair                                          # noqa: E402  每条内容后的 AI 量化配对
 import forecast as forecast_mod                            # noqa: E402  04 节「AI 预测 · 未来函数」推理引擎
 
@@ -120,6 +121,8 @@ FORECAST_MARK = '<!-- FORECAST -->'
 FORECAST_BEGIN = '<!-- FORECAST:BEGIN -->'
 FORECAST_END = '<!-- FORECAST:END -->'
 FORECAST_CLOSE = '<!-- /FORECAST -->'
+VERDICT_BEGIN = '<!-- VERDICT:BEGIN -->'
+VERDICT_END = '<!-- VERDICT:END -->'
 # 行情快照与 07 结论是模板静态块，构建时在标记处补上 AI 量化（重复构建只替换标记，不追加）；
 # 行情不足时这些标记一律替换为空串（整段隐藏），不留「数据不足」占位
 AI_QUANT_QUOTES = '<!-- AI_QUANT:QUOTES -->'
@@ -201,33 +204,35 @@ def build_tokens(data, now, community_data=None, sentiment_data=None):
     return tokens
 
 
-# 无社区数据时，模板里保留的是 14 张静态卡片 —— 计数口径必须与之一致
-FALLBACK_COMMUNITY_TOTAL = 14
-FALLBACK_COMMUNITY_COUNTS = {'bull': 6, 'bear': 3, 'neutral': 3, 'mixed': 2}
-
-
 def _community_tokens(community_data):
-    """03 节标题 / 筛选按钮的社区口径 token（源数、类型数、多空家数）。
+    """03 节标题 / 筛选按钮的社区口径 token（源数、类型数、实抓多空家数与未获取家数）。
 
-    写死「14 平台 / 偏多 6 家」在扩到 49 源后会当场过期，因此这里统一从
-    community_data.json 现算；缺数据时才退回模板静态卡片的 14 源口径。
+    严格真实口径：不再回退「14 平台 / 偏多 6 家」等历史静态常数；仅统计真实抓到片段且判定为
+    bull/bear/neutral/mixed 的源，未获取源单独计入 `CF_UNAVAILABLE`，绝不掺入多空分母。
     """
     comms = [c for c in ((community_data or {}).get('communities') or []) if isinstance(c, dict)]
-    counts = dict(FALLBACK_COMMUNITY_COUNTS)
+    catalog = comms if comms else list(community_mod.COMMUNITIES)
+    counts = {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0, 'unavailable': 0}
     if comms:
-        counts = {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0}
         for c in comms:
-            k = c.get('verdict_class')
-            if k in counts:
+            k = c.get('verdict_class') or 'unavailable'
+            if k in ('bull', 'bear', 'neutral', 'mixed'):
                 counts[k] += 1
-    types = {c.get('ctype') for c in comms if c.get('ctype')}
+            else:
+                counts['unavailable'] += 1
+    else:
+        counts['unavailable'] = len(catalog)
+    types = {c.get('ctype') for c in catalog if c.get('ctype')}
+    live_ok = counts['bull'] + counts['bear'] + counts['neutral'] + counts['mixed']
     return {
-        '{{COMMUNITY_TOTAL}}': str(len(comms) if comms else FALLBACK_COMMUNITY_TOTAL),
+        '{{COMMUNITY_TOTAL}}': str(len(catalog)),
+        '{{COMMUNITY_LIVE_OK}}': str(live_ok),
         '{{COMMUNITY_TYPE_TOTAL}}': str(len(types)) if types else '—',
         '{{CF_BULL}}': str(counts['bull']),
         '{{CF_BEAR}}': str(counts['bear']),
         '{{CF_NEUTRAL}}': str(counts['neutral']),
         '{{CF_MIXED}}': str(counts['mixed']),
+        '{{CF_UNAVAILABLE}}': str(counts['unavailable']),
     }
 
 
@@ -310,17 +315,24 @@ def _fetch_status(data):
 
 def _community_fetch_status(cdata):
     if not cdata:
-        return '未找到 community_data.json，请先运行 python3 community_data.py（社区数据将基于模板回退）'
+        return '未找到 community_data.json，03 节 49 源标注「未获取」（请先运行 python3 community_data.py）'
     summary = cdata.get('summary') or {}
-    ok, total, failed = summary.get('ok'), summary.get('total'), summary.get('failed') or []
+    ok = summary.get('ok')
+    total = summary.get('total') or len(cdata.get('communities') or []) or len(community_mod.COMMUNITIES)
     gen = cdata.get('generated_at') or ''
     fetch_date = cdata.get('fetch_date') or ''
+    mode = cdata.get('mode') or ''
+    if mode == 'demo':
+        return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen} · 核验日期 {fetch_date}'
     if ok is None:
-        return f'社区数据已生成 · 抓取于 {gen} · 抓取日期 {fetch_date}'
-    if total == ok:
-        return f'{ok}/{total} 个社区源全部同步成功 · 抓取于 {gen} · 抓取日期 {fetch_date}'
-    names = '、'.join(failed)
-    return f'{ok}/{total} 个社区同步成功，{names} 降级为动态模板 · 抓取于 {gen} · 抓取日期 {fetch_date}'
+        return f'社区数据已加载 · 生成于 {gen} · 核验日期 {fetch_date}'
+    if total == ok and total > 0:
+        return f'{ok}/{total} 个社区源实抓成功 · 抓取于 {gen} · 核验日期 {fetch_date}'
+    if ok == 0:
+        return (f'0/{total} 个社区实抓成功（受站点风控或未检出财经讨论正文，已全部如实标注「未获取」，'
+                f'不编造热评）· 抓取于 {gen} · 核验日期 {fetch_date}')
+    return (f'{ok}/{total} 个社区实抓成功，其余 {total - ok} 个如实标注「未获取」（不回填模板）'
+            f' · 抓取于 {gen} · 核验日期 {fetch_date}')
 
 
 def _macro_status(mdata):
@@ -390,32 +402,58 @@ def build_ai_quant_html(text, market=None, hint=None, compact=False, note=''):
 
 
 def build_community_html(communities, market=None):
-    """根据 community_data.json 生成 49 个社区的 HTML 列表，包含核心量化指标与跨域 AI 量化配对"""
+    """根据 community_data.json 生成 49 个社区的 HTML 列表（实抓源展示摘录与词库指标，未获取源诚实标注且不编造指标）。"""
     html_parts = []
     for c in communities:
         icon = c.get('icon', '📌')
         cid = c.get('id', '01')
-        name = c.get('name', '未知社区')
-        label = c.get('verdict_label', '中性')
-        vclass = c.get('verdict_class', 'neutral')
-        quote = c.get('quote', '')
-        verdict = c.get('verdict', '')
-        quant = c.get('quant', {})
-        meta = c.get('meta', f"综合站内 10 条讨论 · 最新读取 {c.get('fetch_date','')}")
-        quant_html = build_quant_html(quant)
-        event = ((quant or {}).get('event') or {}).get('label') or ''
-        ai_html = build_ai_quant_html(
-            f'{name} {quote} {verdict} {event}', market, hint=c.get('key'))
-        article = (
-            f'<article class="pub-card" data-verdict="{vclass}">\n'
-            f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
-            f'  <p class="pub-quote"><strong>平台深度热评：</strong>{quote}</p>\n'
-            f'  <div class="pub-verdict"><strong style="color:#000;">▶ AI 深度战术研判：</strong>{verdict}</div>\n'
-            f'{quant_html}\n'
-            f'{ai_html}\n'
-            f'  <div class="pub-meta">{meta}</div>\n'
-            f'</article>'
-        )
+        name = _esc(c.get('name', '未知社区'))
+        vclass = c.get('verdict_class') or 'unavailable'
+        label = _esc(c.get('verdict_label') or ('未获取' if vclass == 'unavailable' else '中性'))
+        is_avail = bool(c.get('available', vclass != 'unavailable')) and vclass != 'unavailable'
+        quote = _esc(c.get('quote', ''))
+        verdict = _esc(c.get('verdict', ''))
+        ctype = c.get('ctype', '')
+        quant = c.get('quant') if is_avail else None
+        default_meta = (f"公开页实抓摘录 · {ctype} · 抓取核验 {c.get('fetch_date', '')}"
+                        if is_avail else f"当次未获取 · {ctype}")
+        meta = _esc(c.get('meta') or default_meta)
+
+        if is_avail:
+            quant_html = build_quant_html(quant)
+            event = ((quant or {}).get('event') or {}).get('label') or ''
+            ai_html = build_ai_quant_html(
+                f"{c.get('name', '')} {ctype} {c.get('quote', '')} {event}",
+                market, hint=c.get('key'))
+            verdict_block = (
+                f'  <div class="pub-verdict"><strong>▶ 词库极性与摘录说明：</strong>{verdict}</div>\n'
+                if verdict else ''
+            )
+            quant_line = f'{quant_html}\n' if quant_html else ''
+            ai_line = f'{ai_html}\n' if ai_html else ''
+            article = (
+                f'<article class="pub-card" data-verdict="{_esc(vclass)}">\n'
+                f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
+                f'  <p class="pub-quote"><strong>公开页实抓摘录：</strong>{quote}</p>\n'
+                f'{verdict_block}'
+                f'{quant_line}'
+                f'{ai_line}'
+                f'  <div class="pub-meta">{meta}</div>\n'
+                f'</article>'
+            )
+        else:
+            ai_html = build_ai_quant_html(
+                f"{c.get('name', '')} {ctype}", market, hint=c.get('key'),
+                note='社区热评未获取，配对仅依当次实时行情计算；行情不全时整段隐藏。')
+            ai_line = f'{ai_html}\n' if ai_html else ''
+            article = (
+                f'<article class="pub-card" data-verdict="unavailable">\n'
+                f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
+                f'  <p class="pub-quote"><strong>抓取状态：</strong>{quote}</p>\n'
+                f'{ai_line}'
+                f'  <div class="pub-meta">{meta}</div>\n'
+                f'</article>'
+            )
         html_parts.append(article)
     return "\n".join(html_parts)
 
@@ -962,6 +1000,68 @@ def fill_ai_quant_markers(html, market=None):
     return html
 
 
+def build_verdict_html(data, macro_data, community_data):
+    """07 节核心结论（网页版）：逐条挂当次实时行情、当次快讯与实抓社区计数，杜绝写死历史点位或箱体。"""
+    quotes = (data or {}).get('quotes') or {}
+    hsi = quotes.get('HSI') or {}
+    hstech = quotes.get('HSTECH') or {}
+    gold = quotes.get('GOLD') or {}
+
+    if hsi.get('last') is not None:
+        hk_tape = (f"{quote_date_cn(hsi)}恒指 {fmt_last(hsi)}（{fmt_pct(hsi)}），"
+                   f"恒科 {fmt_last(hstech)}（{fmt_pct(hstech)}）")
+    else:
+        hk_tape = "当次恒指与恒科实时行情暂缺（未回填历史点位）"
+
+    def top_macro(cat):
+        items = (((macro_data or {}).get('categories') or {}).get(cat) or {}).get('items') or []
+        if not items:
+            return '当次快讯窗口内没有覆盖该主题的报道（按时效留空，不回填旧闻）'
+        it = items[0]
+        d = _md_cn(it.get('published_date') or '')
+        return f"[{_esc(d)}] {_esc(it.get('title') or '')}"
+
+    comms = (community_data or {}).get('communities') or []
+    counts = {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0, 'unavailable': 0}
+    if comms:
+        for c in comms:
+            vc = (c or {}).get('verdict_class') or 'unavailable'
+            if vc in ('bull', 'bear', 'neutral', 'mixed'):
+                counts[vc] += 1
+            else:
+                counts['unavailable'] += 1
+    else:
+        counts['unavailable'] = len(community_mod.COMMUNITIES)
+    live_n = counts['bull'] + counts['bear'] + counts['neutral'] + counts['mixed']
+    total_n = len(comms) if comms else len(community_mod.COMMUNITIES)
+    if live_n > 0:
+        comm_line = (f"当次实抓 {live_n}/{total_n} 个社区源：偏多 {counts['bull']} 家 · "
+                     f"偏空 {counts['bear']} 家 · 中性 {counts['neutral']} 家 · "
+                     f"多空分歧 {counts['mixed']} 家（其余 {counts['unavailable']} 家未获取，不计入分母）")
+    else:
+        comm_line = f"当次 0/{total_n} 个社区源抓到可核验热评（全部标注「未获取」，不编造多空家数）"
+
+    gold_str = f"现货黄金 {fmt_last(gold)}（{fmt_pct(gold)}）" if gold.get('last') is not None else "现货黄金暂缺"
+    return (
+        '      <ul class="pixel-list">\n'
+        f'        <li><strong>港股盘面</strong>：{_esc(hk_tape)}；{top_macro("hk")}；</li>\n'
+        f'        <li><strong>宏观与离岸流动性</strong>：{top_macro("macro")}；美联储与汇率面：{top_macro("fed")}；</li>\n'
+        f'        <li><strong>大宗与机构跟踪</strong>：{_esc(gold_str)}；商品面：{top_macro("commodities")}；机构观点：{top_macro("bank_views")}；</li>\n'
+        f'        <li><strong>社区实抓情绪面</strong>：{_esc(comm_line)}。</li>\n'
+        '      </ul>\n'
+        '      <div class="pub-meta" style="margin-top:6px;">注：本节结论逐条对应当次实时行情、时效窗口内快讯与实抓社区片段，不预设技术箱体或历史均线点位。</div>'
+    )
+
+
+def inject_verdict(template, verdict_html):
+    if VERDICT_BEGIN in template and VERDICT_END in template:
+        pattern = re.compile(re.escape(VERDICT_BEGIN) + r'.*?' + re.escape(VERDICT_END), re.S)
+        new_html, count = pattern.subn(f"{VERDICT_BEGIN}\n{verdict_html}\n{VERDICT_END}", template)
+        if count:
+            return new_html
+    return template
+
+
 def inject_sentiment(template, block_html):
     """把舆情节点注入模板 SENTIMENT_LIST 标记之间（无标记则跳过，保证向后兼容）。"""
     if SENTIMENT_LIST_BEGIN in template and SENTIMENT_LIST_END in template:
@@ -1101,7 +1201,9 @@ def main():
         community_html = build_community_html(community_data['communities'], market=data)
         template = inject_community_list(template, community_html)
     else:
-        print('  ℹ️ 社区数据为空，跳过动态注入，保留模板原有社区内容')
+        print('  ℹ️ 未读到有效 community_data.json，03 节按严格真实口径注入 49 源「未获取」状态（不保留旧静态卡片）')
+        offline_comms = community_mod.offline_dataset(market=data, now=now)['communities']
+        template = inject_community_list(template, build_community_html(offline_comms, market=data))
     template = ensure_community_ai_quant(template, market=data)
 
     template = inject_vix(template, build_vix_html(data))
@@ -1113,6 +1215,7 @@ def main():
         data, macro_data, sentiment_data, community_data, now=now,
         history=not (args.check or args.forecast_no_history),
         history_path=args.forecast_history))
+    template = inject_verdict(template, build_verdict_html(data, macro_data, community_data))
     template = fill_ai_quant_markers(template, market=data)
 
     missing = sorted(set(find_leftovers(template)) - set(tokens))
