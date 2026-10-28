@@ -435,7 +435,9 @@ def predict(market=None, macro=None, sentiment=None, community=None, now=None, r
         gaps.append('宏观快讯（macro_data.json）窗口内无条目 —— 宏观项按 0 处理')
     if not ((sentiment or {}).get('market') or {}).get('news_count'):
         gaps.append('舆情因子（sentiment_data.json）未获取 —— 情绪项只用社区多空家数')
-    if not ((community or {}).get('communities')):
+    valid_comm_n = sum(1 for c in ((community or {}).get('communities') or [])
+                       if (c or {}).get('verdict_class') in ('bull', 'bear', 'neutral', 'mixed'))
+    if not valid_comm_n:
         gaps.append('社区研判（community_data.json）未获取 —— 多空家数无法统计')
     coverage = round((4 - len(gaps)) / 4.0, 2)
 
