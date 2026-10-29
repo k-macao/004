@@ -667,13 +667,15 @@ def render_web_list(recs, note=''):
 #   ② 规则说明不再逐块重复 —— 由 rule_note_wechat() 在推送里整篇只印一次
 #      （show_rule=True 可让单独出现的块自带规则）。
 # 网页版同样只在页脚印一次（rule_note_web()），口径与免责说明不再逐卡重复。
-_WX_BOX = ('background:#11182b;color:#dce5fb;border:1px solid #6f55b8;border-left:3px solid #ff4d9a;'
-           'border-radius:4px;padding:9px 11px;margin-top:9px;font-size:11px;line-height:1.7')
-_WX_COMPACT = ('background:#11182b;color:#dce5fb;border:1px solid #2b3855;border-radius:3px;'
-               'padding:6px 8px;margin-top:6px;font-size:11px;line-height:1.65')
-_WX_TITLE = 'color:#4fe5ff;font-weight:700;font-size:12px'
-_WX_CHIP = 'background:#b6ff4a;color:#07101b;font-size:10px;font-weight:700;padding:1px 6px;margin-left:4px'
-_WX_META = 'color:#9aa6c3;font-size:10px;margin-top:6px'
+# AI 量化及栏目内容：统一采用中性灰度字体与弱对比边框/底色，减弱视觉权重，避免喧宾夺主。
+_WX_BOX = ('background:#0d111c;color:#808080;border:1px solid #232730;border-left:2px solid #4d4d4d;'
+           'border-radius:4px;padding:8px 10px;margin-top:8px;font-size:10.5px;line-height:1.66')
+_WX_COMPACT = ('background:#0d111c;color:#808080;border:1px solid #22262f;border-radius:3px;'
+               'padding:5px 8px;margin-top:6px;font-size:10.5px;line-height:1.62')
+_WX_TITLE = 'color:#8e8e8e;font-weight:600;font-size:11px'
+_WX_CHIP = ('background:#181b22;color:#858585;border:1px solid #2e323b;'
+            'font-size:9.5px;font-weight:500;padding:1px 5px;margin-left:4px')
+_WX_META = 'color:#6e6e6e;font-size:10px;margin-top:5px'
 
 
 def rule_note_wechat(label='AI 量化 · 配对交易'):
@@ -693,7 +695,7 @@ def render_wechat(rec, compact=False, note='', show_rule=False, brief=False):
     """
     if _gate(rec):
         return ''
-    note_html = (f'<div style="color:#9aa6c3;font-size:10px;margin-top:4px;">{_esc(note)}</div>'
+    note_html = (f'<div style="color:#6e6e6e;font-size:10px;margin-top:4px;">{_esc(note)}</div>'
                  if note else '')
     if compact:
         tail = ('' if brief else
@@ -702,7 +704,7 @@ def render_wechat(rec, compact=False, note='', show_rule=False, brief=False):
                 + ' · 未来展望：' + _esc(rec['outlook']['long']))
         return (
             f'<div style="{_WX_COMPACT}">'
-            '<strong style="color:#4fe5ff;">◆ AI 量化</strong> · 策略：' + _esc(rec['strategy_name'])
+            '<strong style="color:#8e8e8e;">◆ AI 量化</strong> · 策略：' + _esc(rec['strategy_name'])
             + ' · 跨域组合：' + _esc(rec.get('domain_pair', '')) + ' · ' + _esc(rec['pair_label'])
             + ' · 推荐：' + _esc(rec['stance']) + '。' + _esc(rec['recommendation'])
             + tail
@@ -730,8 +732,8 @@ def render_wechat(rec, compact=False, note='', show_rule=False, brief=False):
     )
 
 
-_WX_MINI = ('background:#11182b;color:#dce5fb;border:1px solid #2b3855;'
-            'border-radius:3px;padding:4px 7px;margin-top:5px;font-size:10.5px;line-height:1.6')
+_WX_MINI = ('background:#0d111c;color:#7d7d7d;border:1px solid #22262f;'
+            'border-radius:3px;padding:4px 7px;margin-top:5px;font-size:10px;line-height:1.58')
 
 
 def render_wechat_mini(rec):
@@ -769,7 +771,7 @@ def render_wechat_list(recs, note=''):
         + '<br/>未来预测·48小时之后：' + _esc(r['outlook']['long'])
         for r in recs
     )
-    note_html = (f'<div style="color:#9aa6c3;font-size:10px;margin-top:4px;">{_esc(note)}</div>'
+    note_html = (f'<div style="color:#6e6e6e;font-size:10px;margin-top:4px;">{_esc(note)}</div>'
                  if note else '')
     return (
         f'<div style="{_WX_BOX}">'
@@ -844,6 +846,12 @@ def _self_test():
     web, wx = render_web(oil), render_wechat(oil)
     for blob in (web, wx, render_web(oil, compact=True), render_wechat(oil, compact=True)):
         check('AI 量化' in blob and '跨域组合' in blob and '推荐' in blob, '渲染包含跨域组合要素')
+    wx_all = (wx + render_wechat(oil, compact=True, note='附注')
+              + render_wechat_mini(oil) + render_wechat_list([oil], note='附注')
+              + rule_note_wechat())
+    check(all(loud not in wx_all for loud in ('#4fe5ff', '#ff4d9a', '#b6ff4a', '#dce5fb', '#6f55b8')),
+          'AI 量化及栏目内容采用中性灰度字体，不再使用高亮霓虹色')
+    check('color:#808080' in wx and 'color:#8e8e8e' in wx, 'AI 量化微信块标题与正文均为灰度减弱显示')
     check('data-ai-quant="1"' in web and 'data-domain-pair=' in web, '网页块可被计数与核对域对')
     check(not cross_domain_catalog_errors(),
           '策略目录自检：每条策略都跨域、组合不重复'

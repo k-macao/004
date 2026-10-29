@@ -275,5 +275,57 @@ class TestAnnotationTextIsNotRepeated(unittest.TestCase):
         self.assertNotIn('风险因子', quant_pair.render_wechat(rec, compact=True, brief=True))
 
 
+class TestGrayscaleMutedDisplay(unittest.TestCase):
+    """AI 量化标题与栏目内容统一采用中性灰度字体、减弱显示，不使用霓虹高亮抢夺主文视线。"""
+
+    LOUD_TOKENS = (
+        'var(--cyan)', 'var(--pink)', 'var(--neon)', 'var(--violet)', 'var(--danger)',
+        '#4fe5ff', '#ff4d9a', '#b6ff4a', '#9673ff', '#cbd6ee', '#dce5fb', '#6f55b8',
+    )
+
+    def test_web_ai_quant_css_uses_grayscale_and_muted_weight(self):
+        import re
+        with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as fh:
+            html = fh.read()
+        m = re.search(r'\.ai-quant\s*\{.*?(?=\.pixel-list\s*\{)', html, re.S)
+        self.assertIsNotNone(m, 'report.html 应包含 .ai-quant 样式段')
+        css_block = m.group(0)
+        for loud in self.LOUD_TOKENS:
+            self.assertNotIn(loud, css_block, f'.ai-quant 样式不得再使用高亮色 {loud}')
+        for hex_color in re.findall(r'#([0-9a-fA-F]{6})\b', css_block):
+            r, g, b = hex_color[0:2].lower(), hex_color[2:4].lower(), hex_color[4:6].lower()
+            self.assertTrue(r == g == b, f'.ai-quant 色值 #{hex_color} 应为纯中性灰度 (R=G=B)')
+        self.assertIn('.ai-quant strong', css_block, '栏目内加粗标签也应纳入灰度减弱控制')
+        self.assertIn('.ai-quant .ai-quant-list li', css_block, '列表项权重高于 .pixel-list li，避免回退高亮')
+        self.assertIn('class="ai-quant-rule"', html)
+
+    def test_wechat_ai_quant_renders_use_grayscale_and_no_neon_accents(self):
+        rec = quant_pair.recommend('美联储利率与黄金', _quotes(GOLD=1.2, USDCNH=-0.3), hint='fed')
+        variants = [
+            quant_pair.render_wechat(rec, note='附注说明', show_rule=True),
+            quant_pair.render_wechat(rec, compact=True, note='附注说明'),
+            quant_pair.render_wechat_mini(rec),
+            quant_pair.render_wechat_list([rec], note='附注说明'),
+            quant_pair.rule_note_wechat(),
+        ]
+        for blob in variants:
+            self.assertTrue(blob)
+            for loud in self.LOUD_TOKENS:
+                self.assertNotIn(loud, blob, f'微信端 AI 量化不得包含高亮色 {loud}')
+        self.assertIn('color:#808080', variants[0])
+        self.assertIn('color:#8e8e8e', variants[0])
+        self.assertIn('color:#808080', variants[1])
+        self.assertIn('color:#7d7d7d', variants[2])
+
+        roster_card = wp.community_card(
+            {'id': '01', 'key': 'FUTU', 'icon': '🐮', 'name': '富途牛牛社区',
+             'label': '偏多', 'vclass': 'bull', 'available': True,
+             'quote': '讨论原油与炼厂价差', 'meta': '抓取核验 2026-10-29'},
+            level='roster',
+            quotes=_quotes(WTI=1.5, HSCE=0.2),
+        )
+        self.assertIn('color:#7d7d7d">跨域配对：', roster_card)
+
+
 if __name__ == '__main__':
     unittest.main()

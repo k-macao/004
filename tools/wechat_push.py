@@ -272,7 +272,8 @@ def community_card(c, level='full', quotes=None):
 
     if level == 'roster':
         pair = (f'{rec.get("domain_pair", "")}｜{rec.get("pair_label", "")}｜{rec.get("stance", "")}')
-        pair_html = '' if quant_pair.is_hidden(rec) else f' · 跨域配对：{pair}'
+        pair_html = ('' if quant_pair.is_hidden(rec)
+                     else f' · <span style="color:#7d7d7d">跨域配对：{pair}</span>')
         clip_limit = 140 if is_avail else 36
         prefix = '实抓摘录：' if is_avail else ''
         return (
