@@ -119,7 +119,8 @@ class TestMacroSection(unittest.TestCase):
         }
         html = _render(env, now=now)
         for token in ('background:#060811', 'OCTO // COMMAND CENTER', '逐标的预测',
-                      'background:#0d1426', 'background:#11182b', 'background:#0e1528',
+                      'background:#0d1426', 'background:#0d111c', 'color:#808080',
+                      'background:#0e1528',
                       '市场舆情因子读数', '宏观快讯', 'color:#4fe5ff', 'color:#b6ff4a'):
             self.assertIn(token, html)
         for legacy in ('background:#eef0f2', 'background:#f8f9fa', 'background:#f4f7f4',
