@@ -424,7 +424,8 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                         obey_robots: bool = False, crawldir: str = None, session=None,
                         verbose: bool = True, backend: str = 'auto',
                         autothrottle: bool = True, max_blocked_retries: int = 2,
-                        download_delay: float = 0.15, now=None, comment_strategies: bool = True):
+                        download_delay: float = 0.15, now=None, comment_strategies: bool = True,
+                        post_limiter=None):
     """跑一轮社区抓取：返回 (结果字典, 统计字典)。
 
     结果字典形如 {key: {'snippet': ..., 'status': ..., 'adaptive': ..., 'selector': ...}}；
@@ -472,7 +473,8 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
             outcomes, comment_stats = comment_mod.collect_comments(
                 communities, session=session, timeout=timeout, retries=retries,
                 concurrency=concurrency, obey_robots=obey_robots, autothrottle=autothrottle,
-                max_blocked_retries=max_blocked_retries, download_delay=download_delay, now=now)
+                max_blocked_retries=max_blocked_retries, download_delay=download_delay, now=now,
+                post_limiter=post_limiter)
             for key, outcome in outcomes.items():
                 item = spider.results.get(key)
                 if item is None:

@@ -180,6 +180,77 @@ class TestPRAWStrategy(unittest.TestCase):
         self.assertEqual(cc.fetch_reddit_comments([wrong], client=FakeReddit([]), now=NOW), {})
 
 
+class TestPostInterval(unittest.TestCase):
+    def test_cooldown_is_after_completion_or_failure_not_just_after_start(self):
+        class Clock:
+            now = 0.0
+            def monotonic(self):
+                return self.now
+            def sleep(self, seconds):
+                self.now += seconds
+        clock = Clock()
+        limiter = cc.PostInterval(clock=clock.monotonic, sleep=clock.sleep)
+        def slow():
+            clock.now += 20
+        def failed():
+            clock.now += 2
+            raise OSError('offline')
+        limiter.call(slow)
+        self.assertEqual(clock.now, 20)
+        with self.assertRaises(OSError):
+            limiter.call(failed)
+        self.assertEqual(clock.now, 32)
+        self.assertEqual(limiter.call(lambda: clock.now), 42)
+        self.assertEqual(limiter.started, 3)
+
+    def test_post_requests_are_globally_spaced_across_sources_and_retries(self):
+        class Clock:
+            now = 100.0
+            def monotonic(self):
+                return self.now
+            def sleep(self, seconds):
+                self.now += seconds
+
+        clock = Clock()
+        limiter = cc.PostInterval(clock=clock.monotonic, sleep=clock.sleep)
+        starts = []
+        pages = {PTT['url']: PTT_INDEX, PTT_THREAD: PTT_DETAIL, PTT_OTHER: PTT_DETAIL,
+                 cc.LIHKG_LIST_URL: LIHKG_INDEX, LIHKG_THREAD: LIHKG_DETAIL}
+        base_transport = transport_for(pages)
+        attempts = {'ptt': 0}
+
+        def transport(method, url, headers, timeout, proxy=None, body=None):
+            if url in (PTT_THREAD, PTT_OTHER, LIHKG_THREAD):
+                starts.append((url, clock.now))
+                if url == PTT_THREAD and attempts['ptt'] == 0:
+                    attempts['ptt'] += 1
+                    raise OSError('temporary offline test failure')
+            return base_transport(method, url, headers, timeout, proxy, body)
+
+        class TimedSubmission(FakeSubmission):
+            def __init__(self):
+                self.title = 'Stock market discussion'
+                self.comment_sort = ''
+                self.comment_limit = 0
+            @property
+            def comments(self):
+                starts.append(('reddit', clock.now))
+                return [reddit_comment('Market earnings remain stronger than expected.', 8)]
+
+        client = FakeReddit([TimedSubmission()])
+        session = sc.FetcherSession(transport=transport, retries=2, retry_delay=0)
+        with mock.patch.object(cc, 'reddit_client', return_value=(client, 'ready')):
+            outcomes, stats = cc.collect_comments(
+                [PTT, LIHKG, REDDIT], session=session, now=NOW, post_limiter=limiter,
+                retries=2, autothrottle=False, max_blocked_retries=0, download_delay=0)
+        self.assertEqual({s for s, _ in starts}, {PTT_THREAD, PTT_OTHER, LIHKG_THREAD, 'reddit'})
+        self.assertEqual(len(starts), 5)  # three HTML/API posts, one retry, one Reddit post
+        self.assertTrue(all(b[1] - a[1] >= 10 for a, b in zip(starts, starts[1:])), starts)
+        self.assertEqual(stats['post_interval_seconds'], 10)
+        self.assertEqual(stats['post_fetch_attempts'], len(starts))
+        self.assertEqual(outcomes['RINVESTING']['attempt']['status'], 'ok')
+
+
 class TestPipeline(unittest.TestCase):
     def test_two_strategies_flow_into_data_web_and_wechat(self):
         pages = {
@@ -192,7 +263,8 @@ class TestPipeline(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(cd, 'COMMUNITIES', [PTT, LIHKG]):
             data = cd.generate_all_communities(
                 market={}, now=NOW, session=session, storage_file=os.path.join(tmp, 'a.db'),
-                verbose=False, autothrottle=False, max_blocked_retries=0, download_delay=0)
+                verbose=False, autothrottle=False, max_blocked_retries=0, download_delay=0,
+                post_limiter=cc.PostInterval(interval=0))
         ptt, lihkg = data['communities']
         self.assertEqual(data['summary']['ok'], 2)
         self.assertEqual(ptt['content_kind'], 'thread_reply')

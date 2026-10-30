@@ -2,16 +2,16 @@
 
 自动生成的分析报告站点: <https://k-macao.github.io/03/>
 
-## 🔄 动态抓取真正上线 — 行情+社区双动态 (每次构建/推送自动更新)
+## 🔄 动态报告 — 行情更新与四小时社区快照
 
-每次 push、手动触发或定时任务都会尝试抓取行情与 49 个社区源，再构建报告。抓取日期是执行核验的日期，
-**不等于内容发布时间，更不保证所有站点可访问或一定是全站最新/最热**；失败源标记「未获取」，不回填虚构内容。
+报告任务按需更新行情；49 个社区源每四小时采集一次，网页和推送读取同一快照并重新分析。
+抓取日期为 UTC 采集批次的启动日期，**不等于内容发布时间，也不保证所有站点可访问或一定是全站最新/最热**；
+失败源标记「未获取」，不回填虚构内容。
 
 ```bash
 python3 market_data.py               # ① 动态抓取行情 → market_data.json (Yahoo→Stooq回退)
 python3 verify_quotes.py --json verify_report.json --text   # ①′ 全来源交叉校验 (FAIL=2 阻断推送；网页阶段仅公开报告不阻断)
-python3 community_data.py            # ② 动态抓取49社区 → community_data.json (14 原有 + 20 前次新增 + 15 本次扩容；
-                                     #    多方案评论采样 + Scrapling 公开页回退；失败标记未获取，不编造内容)
+python3 community_snapshot.py        # ② 到期采集49社区 → community_data.json；四小时内复用，多方案采样、失败标记未获取
 python3 macro_data.py                # ②′ 动态抓取宏观/财经快讯 → macro_data.json (网页 02 节 + 微信 02 栏正文；只保留 7 天内、发布日期可解析的条目)
 python3 build_site.py                # ③ 动态建站 → report.html (注入行情+社区+宏观快讯+日期/时间戳，49源动态注入；
                                      #    同时现算 04 栏 AI 预测(下一交易日) 并把预测写进 forecast_history.json —— 先存档后结算)
@@ -21,8 +21,9 @@ python3 tools/wechat_push.py --push --scheduled   # ⑤ 推送完整报告到微
 
 - **行情源**：Yahoo Finance chart API → Stooq CSV 多源自动回退（纯标准库，CI 无需安装依赖）；行情清单新增 **Cboe VIX（`^VIX`）**，与其它标的一起每日现抓、失败单独降级。
 - **社区源**：目录保留 49 源；PTT、LIHKG 与配置了官方 API 权限的 Reddit 有专用评论采样，
-  其他源以 Scrapling 公开页摘录回退（**未核验为评论**）。网络/站点限制会导致部分源不可用；
-  详见 [多方案社区评论抓取](docs/community-comment-strategies.md)。
+  其他源以 Scrapling 公开页摘录回退（**未核验为评论**）。帖详情在同一次采集中共享限速：
+  上一帖读取完成后至少等待 10 秒再读下一帖。网络/站点限制会导致部分源不可用；GitHub 定时与
+  缓存不保证精确触发，详见 [多方案社区评论抓取](docs/community-comment-strategies.md)。
 - **覆盖标的**：VIX 恐慌指数 / 恒指 / 恒生科技 / 恒生国企 / 标普 500 / 纳斯达克 / 道琼斯 / 现货黄金 / WTI / 布伦特 / 美元离岸与在岸人民币（共 12 项实时行情；04 栏仍只预测原有 11 个可配置资产，不把 VIX 点位当作股票方向）。
 - **失败降级**：行情缺失显示「—」，社区源抓不到则标记「未获取」；单源失败不阻断构建，
   但严格推送仍受日期与行情校验门禁约束，不能保证定时任务一定成功。
@@ -33,9 +34,12 @@ python3 tools/wechat_push.py --push --scheduled   # ⑤ 推送完整报告到微
 
      ⚠️ **补抓只能在 CLI 入口，不能放进渲染函数**（2026-09-17 二次事故）：第一版把 `ensure()` 放在 `tools/wechat_push.py` 的 `load_macro_data()` 里，而它是 `build_single_wechat_html()` 调用的**库函数**、单测会直接调。CI 里 `GITHUB_ACTIONS=true` 默认开补抓 → 单测真的联网抓到了快讯 → `tests/test_panorama.py::test_wechat_section_degrades_when_all_sources_missing` 这类「四路数据全缺必须降级」的断言当场挂掉，合并后 deploy job 的「🧪 舆情层自检」步骤直接红（本地无外网，所以提交前复现不出来）。现在 `load_macro_data()` 是**纯读取**，补抓只在 `bootstrap_macro_data()` 里、由 `main()` 调用；回归防线为 `test_render_path_never_fetches_even_in_ci`（把 `md.build` 换成「一被调用就 AssertionError」的桩件，断言渲染路径永不触发抓取）。
   2. **workflow 里显式的抓取步骤**（待人工应用一次）：三个 job 各加一步 `macro_data.py --json macro_data.json --days 7 --text`（失败不阻断，逐源摘要写入 Step Summary），作为「补抓通路」之外的一手数据源与可观测入口。Agent 的 GitHub App 缺 `workflows` 权限已**实测确认**（`git push` 直接被远端 reject：`refusing to allow a GitHub App to create or update workflow ... without workflows permission`），因此以 `docs/macro-ci-step-only.patch` 交付，在有权限的账号执行 `git apply docs/macro-ci-step-only.patch` 即可（该补丁**只含快讯步骤**，不含 `verify_quotes.py` 门禁）。
-- **`verify_quotes.py` 的推送门禁仍待人工应用**：`#43` 声称但从未生效的部分（Pages 阶段 `|| true` 不阻断 + `verify_report.json` 随站点公开，推送阶段 FAIL 直接阻断）仍以 `docs/macro-ci-workflow.patch` 交付；这次**没有**把它一起接进 workflow —— 当前校验对恒指口径判 FAIL（`python3 verify_quotes.py` 实测 `pass 0 / warn 10 / fail 1`），若直接启用「推送阶段 FAIL 阻断」会把每日 09:00 推送整条掐断，需要先修校验口径再开门禁。
-- **日期核验**：抓取过的源保留「抓取核验」日期；该日期不代表评论的发布时间。
-  `--limit` 未请求的源不会伪造核验标记；手动推送遇到缺失或过期标记会拒绝，定时推送仅警告。
+- **推送前行情校验**：`tools/wechat_push.py --push` 默认调用 `verify_quotes.py`；行情校验为 FAIL 时阻断推送，
+  WARN 默认仅警告（`--verify-strict` 可收紧）。Yahoo 常规时段价格与同口径涨跌幅配对，窗口前收不能冒充昨收；
+  缺少可信前收或同日涨跌幅对照时如实警告，不关闭校验。校验器自身异常沿用既有 fail-open 处理并记录堆栈。
+- **日期核验**：抓取过的源保留批次「抓取核验」日期；该日期不代表评论的发布时间。
+  `--limit` 未请求的源不会伪造核验标记；手动推送检查 49 条标记及快照时效，允许仍在四小时内的跨午夜快照，
+  定时推送对社区核验问题仅警告。
 - 本地联调可用 `python3 market_data.py --demo && python3 community_data.py --demo` 生成模拟行情+社区。
 
 ## 🌡️ 00 栏：每日 VIX 恐慌指数 (Daily VIX Fear Gauge)
@@ -322,13 +326,14 @@ python3 -m unittest tests.test_quant_pair
 [docs/community-comment-strategies.md](docs/community-comment-strategies.md)。
 
 ```bash
-python3 community_data.py --robots                 # 采样评论 + 公开页摘录（网络需可达）
-python3 community_data.py --no-comments            # 仅旧版公开页摘录
-python3 -m unittest tests.test_community_comments  # 离线适配器与端到端测试
+python3 community_snapshot.py                      # 到期采样评论 + 公开页摘录（网络需可达）
+python3 community_snapshot.py --plan               # 只检查快照是否到期
+python3 community_data.py --no-comments            # 调试入口：直接采集，仅公开页摘录
+python3 -m unittest tests.test_community_comments tests.test_community_snapshot
 ```
 
 Reddit 可选：安装 `praw==8.0.3` 并在环境中提供 `REDDIT_CLIENT_ID`、`REDDIT_CLIENT_SECRET`、
-`REDDIT_USER_AGENT`。GitHub Actions 的三个抓取任务仅在配置了这三项 Secrets 时安装 PRAW；
+`REDDIT_USER_AGENT`。GitHub Actions 的社区采集任务仅在需要采集且三项 Secrets 齐全时安装 PRAW；
 缺少权限/依赖不会阻断其他源。不要把凭据提交到仓库。读取频率应符合各平台的政策与配额。
 
 ## 🗣️ 49 大社区（14 原有 + 20 前次新增 + 15 本次扩容 · 中英文/日韩德 · 45 类社区）
@@ -419,15 +424,12 @@ python3 community_data.py --backend scrapling --robots --crawl-dir .crawl
 
 ### 口径：源数不写死，兜底也不缩水
 
-- **网页 03 节**：标题与筛选按钮改用 build 期现算的 token —— `{{COMMUNITY_TOTAL}}`（源数）、
-  `{{COMMUNITY_TYPE_TOTAL}}`（类型数）、`{{CF_BULL/BEAR/NEUTRAL/MIXED}}`（多空家数），
-  由 `build_site._community_tokens()` 从当次 `community_data.json` 统计；**只有读不到社区数据时**
-  才退回模板静态卡片的 14 源口径（标题会如实显示 14，不会假称 49）。
-- **微信推送**：`tools/wechat_push.py` 缺 `community_data.json` 时不再另写一份 14 条兜底文案，
-  改为调用 `community_data.offline_dataset()` —— 用**同一个模板引擎**现算 49 条（结构与 live 完全一致，
-  只把 `source` 标成 `fallback`），日期也是当天，杜绝「兜底 14 源 / 动态 49 源」两套口径打架。
-- **推送前核对**：`EXPECTED_CHANNEL_COUNT = len(community_data.COMMUNITIES)`（= 49），正文里的
-  「最新读取 YYYY-MM-DD」标记必须**恰好 49 条**且全部为当天，否则手动推送拒绝发送（定时推送只告警）。
+- **网页 03 节**：标题与筛选按钮按读取的 `community_data.json` 重算；缺数据时仍保留完整 49 源目录，
+  每源标为「未获取」，不回填静态社区结论。
+- **微信推送**：`tools/wechat_push.py` 缺快照时使用 `community_data.offline_dataset()` 生成同构的
+  49 条未获取记录，不伪造核验日期或评论。
+- **推送前核对**：`EXPECTED_CHANNEL_COUNT = len(community_data.COMMUNITIES)`（= 49）；手动推送检查
+  49 条真实核验标记以及四小时快照，允许有效快照跨 UTC 午夜；定时推送对社区问题只告警。
 
 ### 微信单页字符预算：49 源怎么塞进 95,000 字符
 
@@ -567,7 +569,8 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `macro_data.availability()` | **02 栏兜底口径的单一事实源**：判定本次到底有没有可用快讯，返回 `reason` ∈ `no_file`（文件读不到）/ `bad_type`（产物写坏被截断）/ `no_items`（窗口内 0 条，公开源全挂或全部超窗）/ `stale_snapshot`（读到前几天构建的旧快照，超过 `SNAPSHOT_MAX_AGE_DAYS=1`）。网页与微信两端共用，避免两套渲染各写一套口径而漂移 |
 | `tests/test_macro_data.py` | 快讯层测试（16 项，零联网）：RSS/JSONP 解析、跨源去重、分类路由（IMF+关税 必须落宏观而非大宗）、超窗与无日期拦截、`--mock` 输出契约 |
 | `tests/test_wechat_push_macro.py` | 宏观快讯渲染回归（推送 02 栏 + 网页 02 节，9 项）：必须渲染当次快讯且每条带日期；**四种不可用形态都要落到同一段「今日未获取」兜底文案**；过期快照不得从 01 / 07 栏漏出；网页 `MACROLIST` 注入幂等；正文/注入区禁止再出现 628.69 亿、8 月 12 日、25,440.17 等写死历史内容 |
-| `community_data.py` | **动态社区抓取**：**49 大社区**（14 原有 + 20 前次新增 + 15 本次扩容，中英文/日韩德 / 45 类社区）经 `community_spider` 的多方案评论采样 + Scrapling 公开页回退，生成 `community_data.json`（构建产物，不入库）；失败标为未获取；带 `ctype` 类型字段、`fetch_engine` 抓取口径（引擎/传输层/自适应回捞/封锁次数）与 **`offline_dataset()`**（下游缺产物时给出同构的 49 条兜底，只降级 `source`，不降级源数量） |
+| `community_data.py` | **社区数据层**：49 源经多方案评论采样与 Scrapling 公开页回退生成记录；失败标为未获取；`reanalyze_snapshot()` 根据已存文本重算，`offline_dataset()` 提供 49 源未获取兜底。 |
+| `community_snapshot.py` | **四小时采集快照**：到期采集、原子落盘，失败也限频；页面和推送共用快照，运行期文件不入库。 |
 | `sentiment_sources.py` | **接口注册表**：11 个量化平台/公开源舆情·新闻因子的能力口径（端点、字段、时效、历史、额度、成本、局限）+ 因子定义 + 9 个评测阶段与 6 维评分权重；`python3 sentiment_sources.py` 打印清单与凭据/依赖状态 |
 | `sentiment_adapters.py` | **接入适配器**：每源一个 `call_*`（live 取数）+ `parse_*`（报文 → 统一结构 `{news, series, meta}`），全部纯标准库；`--mode mock` 用 `tests/fixtures` 录制报文离线校验解析链路 |
 | `sentiment_nlp.py` | **自建情感层**：中文金融词库 + 否定/程度修饰 + 时间衰减 → `score_text()`，`aggregate()` 合成 `NET_SENTI / NEG_SHARE / SENT_TEMP / EVENT_RISK`；`--self-test` 自检 |
@@ -683,11 +686,12 @@ Secrets（仓库 Settings → Secrets and variables → Actions）：
 
 详见 `docs/eink-sync.md`。
 
-## ⏰ 每天北京时间早上九点自动推送
+## ⏰ 自动采集与推送
 
-`.github/workflows/m.yml` 内置 `schedule` 定时任务（UTC `0 1 * * *`，即**北京时间每天 09:00**），自动执行「动态抓取行情+社区 → 动态建站 → `python3 tools/wechat_push.py --push --scheduled` + `python3 tools/eink_push.py --mode report`」，无需手动操作即可把最新全景报告推送到微信并同步到极趣墨水屏，同时重新部署 Pages 站点。
+`.github/workflows/m.yml` 保留北京时间每天 09:00 与每五分钟的报告/微信触发，并有独立的每四小时社区采集触发。
+同一时刻的四小时触发只检查/更新社区快照，不额外推送；报告任务读取该快照后重新分析并部署或推送。
 
-> 提示：GitHub Actions 定时任务存在少量延迟属正常现象；若需精确到秒的定时，可结合仓库 Secrets (PUSHPLUS_TOKEN / ZECTRIX_API_KEY) 与外部 Cron 服务。
+> GitHub Actions 的定时任务可能延迟或漏跑，并发排队和缓存失效也会影响实际时间，不保证精确到秒。
 
 ## 🐛 历史修复记录：红圈旧数据问题（当时为 14 源）
 

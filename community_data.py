@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -503,6 +504,9 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
         "meta": meta,
         "selector": selector,
         "content_kind": kind,
+        # Retain the actual scoring inputs so later renders can re-analyse the
+        # saved snapshot without recrawling or accidentally scoring a headline.
+        "analysis_input": {"snippet": clean_snip, "title": analysis_title},
         "strategy": evidence.get('strategy') or ('demo' if source == 'demo' else 'scrapling_page'),
         "source_url": safe_source_url(evidence.get('url')) if source == 'live' else '',
         "comments": comments,
@@ -511,6 +515,48 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
         "fetch_date": fetch_date,
         "source": source,
     }
+
+
+def reanalyze_snapshot(data, now=None):
+    """Re-score saved inputs for this render; never rewrite the capture time.
+
+    Old snapshots without analysis_input remain readable and retain their
+    original analysis rather than fabricating text or fetching the network.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get('communities'), list):
+        return data
+    result = copy.deepcopy(data)
+    records = result['communities']
+    peers = [c['analysis_input']['snippet'] for c in records
+             if isinstance(c, dict) and c.get('available') and isinstance(c.get('analysis_input'), dict)
+             and isinstance(c['analysis_input'].get('snippet'), str) and c['analysis_input']['snippet'].strip()]
+    reanalyzed = legacy = 0
+    for record in records:
+        if not isinstance(record, dict) or not record.get('available'):
+            continue
+        inputs = record.get('analysis_input')
+        if not isinstance(inputs, dict) or not isinstance(inputs.get('snippet'), str) or not inputs['snippet'].strip():
+            legacy += 1
+            continue
+        kind = record.get('content_kind') or 'page_excerpt'
+        # Headline text must not vote on behalf of a sampled comment author.
+        title = inputs.get('title') if isinstance(inputs.get('title'), str) else ''
+        if kind in ('comment', 'thread_reply'):
+            title = ''
+        analysis = analyze_live_snippet(inputs['snippet'], title=title, ctype=record.get('ctype', ''),
+                                        peer_snippets=peers, content_kind=kind)
+        record.update(analysis)
+        reanalyzed += 1
+    result['counts'] = count_verdicts([r for r in records if isinstance(r, dict)])
+    result['analysis_stats'] = {'reanalyzed': reanalyzed, 'legacy_retained': legacy}
+    if reanalyzed:
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        result['analysis_at'] = now.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    else:
+        result.pop('analysis_at', None)
+    return result
 
 
 def _demo_snippet(comm: dict, hsi: dict, idx: int) -> str:
@@ -532,7 +578,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
                              backend: str = 'auto', limit: int = 0, session=None,
                              verbose: bool = True, autothrottle: bool = True,
                              max_blocked_retries: int = 2, download_delay: float = 0.15,
-                             comment_strategies: bool = True) -> dict:
+                             comment_strategies: bool = True, post_limiter=None) -> dict:
     """运行 49 源抓取并构建完整 community_data 数据集（实抓入库，失败诚实降级为 unavailable）。"""
     now = now or datetime.now(timezone.utc)
     if market is None:
@@ -582,7 +628,8 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         adaptive=adaptive, storage_file=storage_file, obey_robots=obey_robots,
         crawldir=crawldir, session=session, verbose=verbose, backend=backend,
         autothrottle=autothrottle, max_blocked_retries=max_blocked_retries,
-        download_delay=download_delay, now=now, comment_strategies=comment_strategies)
+        download_delay=download_delay, now=now, comment_strategies=comment_strategies,
+        post_limiter=post_limiter)
 
     live_snippets = [
         spider_mod.strip_noise((results.get(c["key"]) or {}).get("snippet") or "")[:300]
