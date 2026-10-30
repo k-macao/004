@@ -771,7 +771,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
       </div>
     </div>
 
-    <h2 class="pub-heading" id="intel">03 / 社区论坛热评 ({{COMMUNITY_TOTAL}} 大平台 · 实抓 {{COMMUNITY_LIVE_OK}} 源 · {{COMMUNITY_TYPE_TOTAL}} 类社区 · 严格真实口径)</h2>
+    <h2 class="pub-heading" id="intel">03 / 社区论坛热评与公开摘录 ({{COMMUNITY_TOTAL}} 大平台 · 实抓 {{COMMUNITY_LIVE_OK}} 源 · {{COMMUNITY_TYPE_TOTAL}} 类社区 · 严格真实口径)</h2>
     <div class="filter-row" role="group" aria-label="社区研判筛选">
       <button class="filter-tab active" onclick="filterCards('all', this)">全部 {{COMMUNITY_TOTAL}} 平台</button>
       <button class="filter-tab" onclick="filterCards('bull', this)">偏多 ({{CF_BULL}})</button>
@@ -781,7 +781,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
       <button class="filter-tab" onclick="filterCards('unavailable', this)">未获取 ({{CF_UNAVAILABLE}})</button>
       <span class="filter-result" id="filterResult"><i></i>{{COMMUNITY_TOTAL}} SOURCE FEEDS</span>
     </div>
-    <div class="pub-meta" style="margin:0 0 8px;">指标口径：情感 = 实抓片段金融词库净值（零哈希伪随机）· 事件 = 片段关键词实配 · 相关性 = 核心词与财经主题词命中密度 · 新颖度 = 批内去重独立度（无首发时间链时不伪造首发/转载）；未获取源不生成指标。</div>
+    <div class="pub-meta" style="margin:0 0 8px;">评论仅为有限样本，按各站实际指标排序，不代表全站排行；普通页面摘录不是热评。评论发布时间与抓取核验时间分别标注。指标口径：情感 = 样本文本金融词库净值（零哈希伪随机）· 事件 = 片段关键词实配 · 相关性 = 核心词与财经主题词命中密度 · 新颖度 = 批内去重独立度；未获取源不生成指标。</div>
     <div id="communityList">
 <!-- COMMUNITY_LIST:BEGIN -->
 <div class="pub-box">
@@ -838,7 +838,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 
   <footer class="footer">
     <div class="author">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</div>
-    <p id="pageGenTime">生成时间：{{TS_FULL}} · 24h 内最新可读取内容 · 100K 完整单页直推版 · 含核心量化指标 · AI 量化配对</p>
+    <p id="pageGenTime">生成时间：{{TS_FULL}} · 内容发布时间见各条目 · 100K 完整单页直推版 · 含核心量化指标 · AI 量化配对</p>
     <p class="ai-quant-rule">{{QUANT_RULE}}</p>
   </footer>
 

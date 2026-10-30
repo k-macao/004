@@ -2412,6 +2412,10 @@ class CrawlerEngine:
                     with self._lock:
                         self.stats.robots_disallowed_count += 1
                     self.spider.log(f'robots.txt 拒绝抓取，跳过: {request.url}', level='WARNING')
+                    try:
+                        self.spider.on_error(request, FetchError('robots_disallowed', url=request.url))
+                    except Exception:  # pragma: no cover - a hook must not interrupt the crawl
+                        pass
                     return
             floor = float(self.spider.download_delay or 0.0)
             if self.autothrottle is not None:

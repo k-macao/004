@@ -92,7 +92,7 @@ MINUS = '\u2212'  # U+2212 真正的减号，与全文风格一致
 
 # 49 大社区逐频道「抓取核验 YYYY-MM-DD」标记（用于推送前逐条核对是否确系当天执行过抓取检查，绝不篡改旧日期）
 CHANNEL_READ_RE = re.compile(
-    r'(?:公开页实抓摘录|当次未获取|演示样本|综合站内)[^<]*?(?:抓取核验|最新读取)\s+(20\d{2}-\d{2}-\d{2})'
+    r'(?:实抓采样评论|实抓热帖回复|公开页实抓摘录|当次未获取|综合站内)[^<]*?(?:抓取核验|最新读取)\s+(20\d{2}-\d{2}-\d{2})'
 )
 
 
@@ -239,6 +239,37 @@ def _clip_text(text, limit):
     return text[:limit].rstrip(' ·、/，,') + '…'
 
 
+def community_evidence_wechat(c, level='full'):
+    """Compact, escaped provenance; longer tiers also retain additional sample replies."""
+    comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
+    url = community_mod.safe_source_url(c.get('source_url'))
+    link = (f'<a href="{html_mod.escape(url, quote=True)}" style="color:{WECHAT_CYAN};">原帖/原页</a>'
+            if url else '')
+    if not comments:
+        return f'<div style="font-size:10px">{link}</div>' if link else ''
+    first = comments[0]
+    details = [first.get('published_label') or '发布时间未知', first.get('scope') or '有限样本']
+    if c.get('matched_comments') is not None:
+        visible = len(comments) if level in ('full', 'standard') else 1
+        details.append(f"匹配 {c.get('matched_comments')} 条，展示 {visible} 条")
+    line = _esc_w(' · '.join(str(x) for x in details if x))
+    result = f'<div style="color:{WECHAT_MUTED};font-size:10px;">{line}{" · " + link if link else ""}</div>'
+    if level in ('full', 'standard'):
+        for item in comments[1:]:
+            metric = (item.get('metric') or {}).get('label') or '热度未知'
+            text = _clip_text(item.get('text') or '', 160)
+            if item.get('text_truncated') and not text.endswith('…'):
+                text += '…'
+            title = _clip_text(item.get('post_title') or '', 60)
+            published = item.get('published_label') or '发布时间未知'
+            item_url = community_mod.safe_source_url(item.get('url'))
+            item_link = (f' · <a href="{html_mod.escape(item_url, quote=True)}" '
+                         f'style="color:{WECHAT_CYAN};">原帖</a>') if item_url else ''
+            result += (f'<div style="font-size:10.5px;line-height:1.7">· 【{_esc_w(title)}】{_esc_w(text)} '
+                       f'<span style="color:{WECHAT_MUTED};">{_esc_w(metric)} · {_esc_w(published)}{item_link}</span></div>')
+    return result
+
+
 def community_card(c, level='full', quotes=None):
     """一张社区卡片（严格真实口径：实抓源展示真实摘录与词库指标，未获取源如实标注且绝不编造研判或指标）。"""
     icon = c.get('icon', '📌')
@@ -269,21 +300,24 @@ def community_card(c, level='full', quotes=None):
     head = (f'<div style="color:{WECHAT_TEXT};font-weight:700;font-size:13px">{icon} {no}. {name} '
             f'{chip}</div>')
     meta_html = f'<div style="color:{WECHAT_MUTED};font-size:10px;margin-top:6px;">{meta}</div>'
+    evidence_html = community_evidence_wechat(c, level) if is_avail else ''
+    quote_label = {'comment': '采样评论', 'thread_reply': '热帖回复',
+                   'demo': '演示样本'}.get(c.get('content_kind'), '公开页摘录（未核验为评论）')
 
     if level == 'roster':
         pair = (f'{rec.get("domain_pair", "")}｜{rec.get("pair_label", "")}｜{rec.get("stance", "")}')
         pair_html = ('' if quant_pair.is_hidden(rec)
                      else f' · <span style="color:#7d7d7d">跨域配对：{pair}</span>')
         clip_limit = 140 if is_avail else 36
-        prefix = '实抓摘录：' if is_avail else ''
+        prefix = quote_label + '：' if is_avail else ''
         return (
             f'<div style="border-bottom:1px solid #1b2540;padding:5px 0;font-size:11px;color:{WECHAT_TEXT_SOFT};">'
             f'{icon} <strong style="color:{WECHAT_TEXT};">{no}. {name}</strong>【{label}】'
             f'{pair_html} · {prefix}{_esc_w(_clip_text(raw_quote, clip_limit))}'
-            f'<div style="color:{WECHAT_MUTED};font-size:9.5px;">{meta}</div></div>'
+            f'{evidence_html}<div style="color:{WECHAT_MUTED};font-size:9.5px;">{meta}</div></div>'
         )
 
-    q_label = '公开页实抓摘录：' if is_avail else '抓取状态：'
+    q_label = quote_label + '：' if is_avail else '抓取状态：'
     if level == 'compact':
         body = (f'<div style="margin-top:6px;line-height:1.8">'
                 f'<strong style="color:{WECHAT_CYAN};">{q_label}</strong>{_esc_w(_clip_text(raw_quote, 160))}</div>')
@@ -317,7 +351,7 @@ def community_card(c, level='full', quotes=None):
     return (
         f'<div style="background:{WECHAT_PANEL};color:{WECHAT_TEXT_SOFT};border:1px solid {WECHAT_BORDER};'
         f'border-left:3px solid {signal};border-radius:4px;padding:12px 14px;margin:10px 0;font-size:12px">'
-        f'{head}{body}{quant_html}{ai_html}{meta_html}</div>'
+        f'{head}{body}{evidence_html}{quant_html}{ai_html}{meta_html}</div>'
     )
 
 
@@ -557,6 +591,9 @@ def build_single_wechat_html(now=None):
         ok, total = s.get('ok'), s.get('total') or len(_communities_raw)
         gen = _cd.get('generated_at') or ''
         mode = _cd.get('mode') or ''
+        coverage = (f' · 采样评论/热帖回复 {s.get("comment_sources", 0)} 源'
+                    f'，普通页摘录 {s.get("page_excerpt_sources", 0)} 源（非热评）'
+                    if 'comment_sources' in s else '')
         if mode == 'demo':
             return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen}'
         if ok is None:
@@ -564,8 +601,8 @@ def build_single_wechat_html(now=None):
         if ok == 0:
             return f'0/{total} 个社区实抓成功（未获取源均已标注，绝不回填模板）· 核验于 {gen}'
         if ok == total:
-            return f'{ok}/{total} 个社区源实抓成功 · 抓取于 {gen}'
-        return f'{ok}/{total} 个社区实抓成功，{total - ok} 个标注「未获取」 · 抓取于 {gen}'
+            return f'{ok}/{total} 个社区源实抓成功{coverage} · 抓取于 {gen}'
+        return f'{ok}/{total} 个社区实抓成功，{total - ok} 个标注「未获取」{coverage} · 抓取于 {gen}'
 
     def key(t):
         return (f'<strong style="background:#101b2c;color:{NEON};font-weight:700;'
@@ -618,6 +655,10 @@ def build_single_wechat_html(now=None):
             'quant': c.get('quant') if is_avail else None,
             'meta': meta,
             'ctype': ctype,
+            'content_kind': c.get('content_kind'),
+            'source_url': c.get('source_url', ''),
+            'comments': c.get('comments') or [],
+            'matched_comments': c.get('matched_comments'),
         }
 
     communities = []
@@ -852,7 +893,7 @@ def build_single_wechat_html(now=None):
                        f' · 中性 {community_counts["neutral"]} 家 · 分歧 {community_counts["mixed"]} 家'
                        f'（另有 {unavail_n} 家未获取，不计入分母）')
         else:
-            vc_note = f'当次 0/{len(communities)} 源抓到实盘热评（全部如实标注「未获取」，不编造多空家数）'
+            vc_note = f'当次 0/{len(communities)} 源抓到公开摘录（全部如实标注「未获取」，不编造多空家数）'
         rows = [
             '• <strong>全球宏观面</strong>：' + macro_top('macro') + '；<br/>',
             '• <strong>美联储与离岸流动性</strong>：' + macro_top('fed') + '；<br/>',
@@ -964,7 +1005,7 @@ def build_single_wechat_html(now=None):
   {h('02 / 全球经济与财经动态 (Global Macro & HK Battlefield · 快讯每次构建现抓)')}
   {box(macro_block())}
 
-  {h(f'03 / 社区论坛热评 ({len(communities)} 大平台实盘公开摘录 · 严格真实口径 · 含跨域配对)')}
+  {h(f'03 / 社区论坛热评与公开摘录 ({len(communities)} 大平台 · 严格真实口径 · 含跨域配对)')}
   {box(
     '<strong style="color:#edf2ff;">盘面与抓取口径</strong>：' + community_thread_line + '<br/>' +
     f'<span style="color:#9aa6c3;font-size:10px;">社区抓取日期 {_community_fetch_date} · {community_fetch_status()} · {len(communities)} 源动态抓取已上线（仅展示真实公开摘录，失败源诚实标注未获取）</span><br/>'

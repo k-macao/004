@@ -1,5 +1,9 @@
 # Scrapling 框架模型分析 + 本项目接入说明
 
+> **当前口径更新**：下文主要记录早期框架分析。评论采样现已组合 PTT、LIHKG 和可选 PRAW；
+> 普通 Scrapling 页面摘录不能证明是评论或热评，失败时标「未获取」，不再使用动态模板兜底。
+> 以 [多方案社区评论抓取](community-comment-strategies.md) 为准。
+
 > 上游项目：[D4Vinci/Scrapling](https://github.com/D4Vinci/Scrapling)（BSD-3-Clause，本文分析基于 **v0.4.15**，
 > 即 PyPI `scrapling==0.4.15` / `scrapling[fetchers]`）。
 > 本文只做两件事：**① 拆解它的抓取框架模型；② 说明本项目怎么把它接进来，以及为什么这么接。**
@@ -11,8 +15,8 @@
 | Scrapling 是什么 | 一个「反检测 + 高并发 + 自适应解析」的 Python 抓取框架：静态引擎（curl_cffi 浏览器 TLS 指纹）、浏览器引擎（Playwright/Patchright）、解析层（lxml + 自适应元素指纹）、Spider 框架（调度 / 限速 / robots / 断点 / 开发缓存）|
 | 本项目为什么要它 | 社区模块从 34 源扩到 49 源后，原来的「urllib 逐个 GET + 正则去标签」在**并发、限速、封禁识别、站点改版**四件事上都不够用 |
 | 怎么接的 | 把它的**框架模型**移植成零依赖实现 `scrapling_core.py`（类名/方法名与上游一一对应），由 `community_spider.py` 落到 49 个社区源；**装了真 `scrapling` 包时自动把它接成传输层**（curl_cffi TLS 指纹） |
-| 为什么不全量依赖上游 | CI 里 `python3 -m unittest discover -s tests` 与构建要求「零 pip 安装」；上游依赖 curl_cffi / lxml / browserforge / protego / anyio，装不上就整条管线挂掉 |
-| 效果 | 49 源一次跑完（并发 6、每域不并发）、被封锁源自动退避重试、站点改版后靠元素指纹回捞同一块热评、单源失败只降级该源（模板兜底），网页/微信两侧源数、日期、口径完全一致 |
+| 为什么不全量依赖上游 | 默认构建走标准库，不要求安装 Scrapling；仅配置 Reddit API 凭据时 CI 可选安装 PRAW |
+| 效果 | 原有公开页抓取并发、限速与指纹回捞；不能保证回捞的是评论。失败时标记「未获取」，不编造模板 |
 
 ## 1. 上游代码地图（框架层）
 
@@ -157,8 +161,8 @@ if request._retry_count < self.spider.max_blocked_retries:
 ### 3.1 三层结构
 
 ```
-community_data.py        49 源目录 + 研判模板 + offline_dataset()（数据层，口径不变）
-        └── community_spider.py   CommunitySpider(Spider)：49 源抽取规则 + 打分器 + 自适应回捞（业务层）
+community_data.py        49 源目录 + 真实摘录分析 + offline_dataset()（数据层）
+        └── community_spider.py   公开页抽取 + 调用 community_comments.py 评论适配器
                 └── scrapling_core.py   Fetcher/Selector/Scheduler/AutoThrottle/Engine…（框架层，纯标准库）
                         └── （可选）真实 scrapling 包：resolve_backend() 命中时只替换传输层
 ```
@@ -183,7 +187,7 @@ community_data.py        49 源目录 + 研判模板 + offline_dataset()（数�
 3. **每域串行**：`concurrent_requests_per_domain = 1`，同一站点不会并发打；
 4. **限速**：`AutoThrottle(start=0.5s, max=8s)`，被 429/403 时按 `Retry-After` 退避；
 5. **不静默丢源**：跑完后逐条补全缺失源（robots 跳过 / 封锁耗尽）为失败记录，`summary` 只统计
-   「拿到活数据」的源，失败源在 `community_data.py` 里降级为当次模板，**49 源数量永不缩水**；
+   「拿到活数据」的源，失败源在 `community_data.py` 中标注「未获取」，保留目录数量；
 6. **可观测**：`community_data.json.fetch_engine` 记录引擎名、传输层（port/scrapling）、自适应回捞次数、
    封禁拦截次数、耗时；CI 与微信推送状态行都读它。
 
@@ -216,7 +220,7 @@ def real_scrapling_transport():
 | browserforge 生成头 | 内置 Chrome/Firefox/Edge 三族头模板 | 免依赖；`Sec-Fetch-*`、`sec-ch-ua*` 等关键字段保持一致 |
 | protego 解析 robots | 内置极简解析（`*` 段 / Allow 最长匹配 / crawl-delay / request-rate） | 免依赖；口径与 protego 的核心判定一致（更长路径优先） |
 | pickle 断点 | JSON 断点（原子替换） | 可审阅、跨版本安全 |
-| 浏览器引擎（StealthyFetcher/DynamicFetcher） | 未移植 | 社区源是静态 HTML 页面；需要 JS 渲染时应直接 `--backend scrapling` 走真包 |
+| 浏览器引擎（StealthyFetcher/DynamicFetcher） | 未移植 | `--backend scrapling` 仅替换静态传输层，不会启动浏览器或解决需要 JS / 登录的站点 |
 
 ## 5. 回归防线
 

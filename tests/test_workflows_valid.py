@@ -161,11 +161,17 @@ class TestEveryStepHasRunOrUses(unittest.TestCase):
 
     def test_checker_actually_catches_the_incident_file(self):
         """自检：把截断后的那 230 行喂给校验器，必须报出问题，否则防线是假的。"""
-        lines = read_lines(CANONICAL)[:229]           # 完整副本的前 229 行
+        full = read_lines(CANONICAL)
+        # Locate daily dynamically so legitimate additions to earlier jobs do
+        # not invalidate the truncated-workflow regression test.
+        daily = next(i for i, line in enumerate(full) if line.strip() == 'daily:')
+        community = next(i for i in range(daily, len(full))
+                         if full[i].lstrip().startswith('- name: 🗣️ 动态抓取社区'))
+        lines = full[:community]
         lines.append('      - name: 🗣️ 动态抓取社区 (community_data.py · 49 \n')
         problems = step_problems(lines)
         self.assertTrue(problems, '校验器没能识别事故文件（截断的 daily job 步骤）')
-        self.assertEqual(230, problems[0][1])
+        self.assertEqual(community + 1, problems[0][1])
         self.assertEqual('daily', problems[0][0])
 
     def test_checker_finds_every_step_of_every_job(self):
@@ -201,6 +207,15 @@ class TestWorkflowStillDoesItsJob(unittest.TestCase):
             re.split(r'\n  (?:deploy|wechat|daily):', text)[1:],
         ):
             self.assertIn('runs-on:', chunk, '%s 缺 runs-on' % step_owner)
+
+    def test_optional_reddit_configuration_reaches_all_three_jobs(self):
+        text = ''.join(read_lines(WORKFLOW))
+        for chunk in re.split(r'\n  (?:deploy|wechat|daily):', text)[1:]:
+            for key in ('REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT'):
+                self.assertIn('secrets.' + key, chunk)
+            self.assertIn("praw==8.0.3", chunk)
+            self.assertIn('python3 community_data.py', chunk)
+            self.assertIn('|| echo', chunk, 'optional installation failure must not block other sources')
 
     def test_source_count_labels_are_49(self):
         """#66 的口径改动（34 → 49）必须落在步骤名上，且不能只改一半。"""

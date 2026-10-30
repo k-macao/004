@@ -9,7 +9,7 @@
 #
 # 动态抓取管线 (每次运行均执行, 真正上线 — 行情+社区双动态):
 #   market_data.py      → market_data.json      (Yahoo Finance / Stooq 多源回退抓取最新行情)
-#   community_data.py   → community_data.json   (49 大社区 HTTP GET + 动态模板回退，每次刷新当天日期)
+#   community_data.py   → community_data.json   (多方案评论采样 + 公开页摘录；失败标注未获取)
 #   tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md (量化平台舆情接口实测评分)
 #   sentiment_factors.py → sentiment_data.json (聚宽/米筐/掘金/优矿 + 免费兜底源舆情·新闻因子；境内取不到则 --mock 降级)
 #   build_site.py       → report.html           (把行情+社区+抓取日期注入页面与推送内容)
@@ -73,7 +73,16 @@ jobs:
         run: python3 market_data.py
 
       - name: 🗣️ 动态抓取社区 (community_data.py → community_data.json · 49 源)
-        run: python3 community_data.py
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+        run: |
+          # Optional: without all three secrets no third-party package is installed.
+          if [ -n "$REDDIT_CLIENT_ID" ] && [ -n "$REDDIT_CLIENT_SECRET" ] && [ -n "$REDDIT_USER_AGENT" ]; then
+            python3 -m pip install 'praw==8.0.3' || echo "⚠️ PRAW 安装失败，保留公开页摘录"
+          fi
+          python3 community_data.py
 
       - name: 🔬 舆情接口实测 (tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md)
         run: python3 tools/probe_sentiment_apis.py --mock
@@ -164,7 +173,16 @@ jobs:
         run: python3 market_data.py
 
       - name: 🗣️ 动态抓取社区 (community_data.py · 49 源)
-        run: python3 community_data.py
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+        run: |
+          # Optional: without all three secrets no third-party package is installed.
+          if [ -n "$REDDIT_CLIENT_ID" ] && [ -n "$REDDIT_CLIENT_SECRET" ] && [ -n "$REDDIT_USER_AGENT" ]; then
+            python3 -m pip install 'praw==8.0.3' || echo "⚠️ PRAW 安装失败，保留公开页摘录"
+          fi
+          python3 community_data.py
 
       - name: 🔬 舆情接口实测 (tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md)
         run: python3 tools/probe_sentiment_apis.py --mock
@@ -235,7 +253,16 @@ jobs:
         run: python3 market_data.py
 
       - name: 🗣️ 动态抓取社区 (community_data.py · 49 源)
-        run: python3 community_data.py
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: ${{ secrets.REDDIT_USER_AGENT }}
+        run: |
+          # Optional: without all three secrets no third-party package is installed.
+          if [ -n "$REDDIT_CLIENT_ID" ] && [ -n "$REDDIT_CLIENT_SECRET" ] && [ -n "$REDDIT_USER_AGENT" ]; then
+            python3 -m pip install 'praw==8.0.3' || echo "⚠️ PRAW 安装失败，保留公开页摘录"
+          fi
+          python3 community_data.py
 
       - name: 🔬 舆情接口实测 (tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md)
         run: python3 tools/probe_sentiment_apis.py --mock
