@@ -786,7 +786,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 <!-- COMMUNITY_LIST:BEGIN -->
 <div class="pub-box">
   <div class="pub-sub">◆ 社区论坛热评 — 待构建注入（严格真实口径）</div>
-  <p style="margin:0;">运行 <code>python3 community_data.py</code> 并执行 <code>python3 build_site.py</code> 后，此处将按当次抓取结果渲染 49 个社区源：实盘抓到公开讨论正文则展示真实摘录与词库指标；风控拦截或未命中财经主题词的源一律如实标注「未获取」，绝不回填历史剧本或伪造多空计数。</p>
+  <p style="margin:0;">运行 <code>python3 community_snapshot.py</code> 并执行 <code>python3 build_site.py</code> 后，此处将读取四小时采集快照并重新分析 49 个社区源：抓到公开讨论正文则展示真实摘录与词库指标；风控拦截或未命中财经主题词的源一律如实标注「未获取」，绝不回填历史剧本或伪造多空计数。</p>
 </div>
 <!-- COMMUNITY_LIST:END -->
     </div>

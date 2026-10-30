@@ -9,7 +9,7 @@
 核心特点:
   • 一对一专属推送: 默认 PUSHPLUS_TOPIC=''，仅 Token 对应的微信本人接收。
   • 单页完整推送: 每次只推一条完整微信卡片 (单页全文)，解除 19,000 限制 (上限 100,000 字符)，无需分条分发与等待。
-  • 每次推送均重新抓取: 不复用上一轮抓取结果；推送前逐条核对 49 个频道的「最新读取」标记，抓取失败/缺项时不得推送。
+  • 社区每四小时采集一次；推送前读取快照并重新分析，保留真实采集时间，严格模式检查 49 源与时效。
   • 00 栏每日 VIX 恐慌指数: 当次抓取 Cboe VIX 点位与日变动，按期权市场未来 30 天隐含波动率
     的正确口径解释；明确区分风险中性 Q 测度与现实 P 测度，缺行情时不回填历史读数。
   • 01 栏每日全球全景扫描: 由 panorama.py 在推送前现算 —— 推动股价的 5 大力量（重点/次要/噪音 ·
@@ -24,8 +24,8 @@
     多空卡片按信号着色，所有样式均内联以适配 PushPlus / 微信阅读。
 
 动态抓取管线 (行情 + 社区 + 舆情因子 + 宏观快讯 四路动态):
-  python3 market_data.py && python3 community_data.py && python3 macro_data.py && python3 build_site.py
-      # ① 抓行情+社区+宏观快讯 → ② 建站 (report.html)
+  python3 market_data.py && python3 community_snapshot.py && python3 macro_data.py && python3 build_site.py
+      # ① 抓行情、按四小时更新社区快照、抓宏观快讯 → ② 读取快照分析并建站 (report.html)
       # macro_data.py 是微信 02 栏「全球经济与财经动态」的唯一文案来源：
       # 只渲染 7 天窗口内、发布日期可解析的快讯；抓不到就显示「今日未获取」，不回填历史叙事
       # 兜底口径由 macro_data.availability() 统一判定，覆盖四种形态：文件缺失 / 产物写坏 /
@@ -64,6 +64,7 @@ import vix_daily                                          # noqa: E402  00 栏�
 import panorama                                           # noqa: E402  01 栏「每日全球全景扫描」推理引擎
 import macro_data as macro_data_mod                       # noqa: E402  02 栏快讯可用性判定（兜底口径单一事实源）
 import community_data as community_mod                    # noqa: E402  49 大社区兜底数据集（缺 community_data.json 时同构生成）
+import community_snapshot as community_snapshot_mod        # noqa: E402  四小时快照时效
 import quant_pair                                         # noqa: E402  每条内容后的 AI 量化配对
 import char_charts                                        # noqa: E402  推送字符配图（matplotlib 图种的字符版）
 import forecast as forecast_mod                           # noqa: E402  04 栏「AI 预测 · 未来函数」推理引擎
@@ -491,8 +492,8 @@ def build_single_wechat_html(now=None):
 
     动态数据:
       - market_data.json: 行情数字、行情快照
-      - community_data.json: 49 大社区最新研判（每次构建自动抓取，杜绝旧数据）
-      若文件缺失时回退到内置兜底数据，但日期统一刷新为当天，保证离线可推送。
+      - community_data.json: 四小时采集快照，读取后基于原文重新分析。
+      文件缺失时标为未获取，不伪造核验日期或论坛评论。
     """
     now = now or datetime.now(timezone.utc)
     ts = now.strftime('%Y-%m-%d %H:%M UTC')
@@ -509,7 +510,7 @@ def build_single_wechat_html(now=None):
     _fetch_date = _md.get('fetch_date') or now.strftime('%Y-%m-%d')
 
     # ---------- 动态社区注入 (community_data.json) ----------
-    _cd = load_community_data()
+    _cd = community_mod.reanalyze_snapshot(load_community_data(), now=now)
     # ---------- 动态舆情因子注入 (sentiment_data.json) ----------
     _sd = load_sentiment_data()
     # ---------- 动态宏观/财经快讯注入 (macro_data.json) — 02 栏唯一文案来源 ----------
@@ -594,8 +595,17 @@ def build_single_wechat_html(now=None):
         coverage = (f' · 采样评论/热帖回复 {s.get("comment_sources", 0)} 源'
                     f'，普通页摘录 {s.get("page_excerpt_sources", 0)} 源（非热评）'
                     if 'comment_sources' in s else '')
+        stats = _cd.get('analysis_stats') or {}
+        if _cd.get('analysis_at'):
+            coverage += f' · 本次读取分析 {_cd["analysis_at"]}（重算 {stats.get("reanalyzed", 0)} 源）'
+        if stats.get('legacy_retained'):
+            coverage += f' · {stats["legacy_retained"]} 源旧格式保留原分析'
         if mode == 'demo':
             return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen}'
+        if mode == 'offline':
+            reason = ('采集任务异常，结果不可用' if (_cd.get('snapshot') or {}).get('status') == 'collector_error'
+                      else '离线兜底，未读取到社区数据')
+            return f'{reason} · {total} 源均未获取，不伪造单源核验 · 记录于 {gen}'
         if ok is None:
             return f'社区 {len(_communities_raw)} 源已加载 · 生成于 {gen}'
         if ok == 0:
@@ -888,12 +898,12 @@ def build_single_wechat_html(now=None):
         live_comm_n = sum(community_counts.values())
         unavail_n = max(0, len(communities) - live_comm_n)
         if live_comm_n > 0:
-            vc_note = (f'当次实抓 {live_comm_n}/{len(communities)} 源：'
+            vc_note = (f'社区快照实抓 {live_comm_n}/{len(communities)} 源：'
                        f'偏多 {community_counts["bull"]} 家 · 偏空 {community_counts["bear"]} 家'
                        f' · 中性 {community_counts["neutral"]} 家 · 分歧 {community_counts["mixed"]} 家'
                        f'（另有 {unavail_n} 家未获取，不计入分母）')
         else:
-            vc_note = f'当次 0/{len(communities)} 源抓到公开摘录（全部如实标注「未获取」，不编造多空家数）'
+            vc_note = f'社区快照中 0/{len(communities)} 源有可用片段（全部如实标注「未获取」，不编造多空家数）'
         rows = [
             '• <strong>全球宏观面</strong>：' + macro_top('macro') + '；<br/>',
             '• <strong>美联储与离岸流动性</strong>：' + macro_top('fed') + '；<br/>',
@@ -973,8 +983,8 @@ def build_single_wechat_html(now=None):
     community_thread_line = (
         hsi_brief() + ' '
         + macro_top('hk', '宏观快讯窗口内无港股条目')
-        + f'；当次公开页实抓可用社区 {community_live_n}/{len(communities)} 源'
-          '（仅实抓片段参与词库极性与相关性计算，未获取源一律标注「未获取」，绝不编造热评）。')
+        + f'；社区快照中可用实抓样本 {community_live_n}/{len(communities)} 源'
+          '（仅读取的实抓片段参与词库极性与相关性重算，未获取源一律标注「未获取」，绝不编造热评）。')
 
     community_overview_html = (
         f'<div style="background:#0d1426;border:1px solid #2b3855;border-left:3px solid {WECHAT_CYAN};'
@@ -1030,7 +1040,7 @@ def build_single_wechat_html(now=None):
   <div style="background:#07101b;border-top:4px solid {NEON};padding:16px 12px 10px;margin:20px -12px 0;font-size:12px;color:#b7c2dd;line-height:1.9;">
     <strong style="color:{NEON};font-size:13px;">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</strong><br/>
     全网境内外为你寻找蛛丝马迹 — 提供全景视野分析，由多模型协同推理决策。<br/>
-    <span style="color:#9aa6c3;font-size:10px;">生成时间：{ts_full} · 行情/社区/舆情/宏观快讯均为本次构建现抓 · 宏观快讯时效：{macro_freshness_note} · 字符配图与正文同一份当次数据 · 100K 完整单页版</span><br/>
+    <span style="color:#9aa6c3;font-size:10px;">生成时间：{ts_full} · 社区读取四小时采集快照并重新分析（采集时间见 03 栏）· 宏观快讯时效：{macro_freshness_note} · 字符配图与正文使用同一份读取数据 · 100K 完整单页版</span><br/>
     {quant_pair.rule_note_wechat()}
   </div>
 
@@ -1053,8 +1063,8 @@ def extract_fetch_dates(text):
     return sorted(set(re.findall(r'(?:抓取核验|最新读取)\s+(20\d{2}-\d{2}-\d{2})', text)))
 
 
-def assert_fetch_dates_are_today(parts, now, strict=True):
-    """推送前逐条核对 49 个频道「抓取核验」标记：未执行抓取或日期非当天时拒绝手动推送。"""
+def assert_fetch_dates_are_today(parts, now, strict=True, snapshot=None):
+    """Verify 49 capture markers; a valid four-hour snapshot may cross UTC midnight."""
     today = now.strftime('%Y-%m-%d')
     reads = []
     for title, content in parts:
@@ -1063,13 +1073,34 @@ def assert_fetch_dates_are_today(parts, now, strict=True):
     if len(reads) != EXPECTED_CHANNEL_COUNT:
         failed = True
         msg = (f'仅找到 {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条频道「抓取核验」标记，'
-               '必须先运行 python3 community_data.py 完成当次核验后才能推送')
+               '请先运行 python3 community_snapshot.py 完成采集后再推送')
         if strict:
             print(f'错误: {msg}。', file=sys.stderr)
             sys.exit(5)
         print(f'⚠️ 警告: {msg}，定时自动推送继续执行(如需严格校验请改用 --push)。')
+    has_snapshot = isinstance(snapshot, dict) and isinstance(snapshot.get('snapshot'), dict)
+    fresh_snapshot = has_snapshot and community_snapshot_mod.snapshot_is_fresh(snapshot, now=now)
+    if has_snapshot and not fresh_snapshot:
+        failed = True
+        msg = '社区采集快照已超过四小时、时间无效或结构不完整'
+        if strict:
+            print(f'错误: {msg}，请先重新采集。', file=sys.stderr)
+            sys.exit(5)
+        print(f'⚠️ 警告: {msg}，定时推送继续执行并保留原采集时间。')
+    snapshot_dates_match = (fresh_snapshot and snapshot.get('mode') == 'live'
+                            and set(reads) == {snapshot.get('fetch_date')})
+    if fresh_snapshot and snapshot.get('mode') == 'live' and not snapshot_dates_match:
+        failed = True
+        msg = '频道核验日期与社区快照采集日期不一致'
+        if strict:
+            print(f'错误: {msg}，请重新生成推送内容。', file=sys.stderr)
+            sys.exit(5)
+        print(f'⚠️ 警告: {msg}，定时推送继续执行。')
     stale = sorted({d for d in reads if d != today})
-    if stale:
+    # A snapshot taken shortly before UTC midnight is still fresh; never
+    # rewrite its capture date, and require all 49 markers to match it.
+    cross_midnight_fresh = snapshot_dates_match
+    if stale and not cross_midnight_fresh:
         failed = True
         stale_str = ", ".join(stale)
         msg = f'频道抓取核验日期 {stale_str} 不是当天 {today}'
@@ -1079,6 +1110,8 @@ def assert_fetch_dates_are_today(parts, now, strict=True):
         print(f'⚠️ 警告: {msg}，定时自动推送继续执行(如需严格校验请改用 --push)。')
     if failed:
         print(f'📅 频道核验检查: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条标记，未全部确认为当天 {today}')
+    elif stale and cross_midnight_fresh:
+        print(f'📅 频道核验检查: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条来自四小时内快照（采集日期 {snapshot.get("fetch_date")}），允许推送')
     else:
         print(f'📅 频道核验检查: {len(reads)}/{EXPECTED_CHANNEL_COUNT} 条均已于 {today} 完成抓取核验，允许推送')
 
@@ -1227,8 +1260,9 @@ def main():
     fetch_dates_str = ", ".join(fetch_dates) if fetch_dates else "(未标注)"
     print(f'📅 抓取日期: {fetch_dates_str}')
     if args.push:
-        # 手动推送为严格日期校验 (非当天拒绝); 定时自动推送为宽松校验 (仅警告, 保证 09:00 可运行)
-        assert_fetch_dates_are_today(parts, datetime.now(timezone.utc), strict=not args.scheduled)
+        # 严格模式接受跨午夜但未过期的四小时快照；定时模式对社区日期/时效仅警告。
+        assert_fetch_dates_are_today(parts, datetime.now(timezone.utc), strict=not args.scheduled,
+                                     snapshot=load_community_data())
 
     if args.push and not args.skip_verify:
         # 🧪 推送前全来源数据准确性校验: Yahoo×Stooq×ECB 多源交叉验证行情数字,

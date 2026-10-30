@@ -29,13 +29,15 @@
 """
 import argparse
 import json
+import math
 import os
 import re
 import sys
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 # ---------------------------------------------------------------------------
 # 行情清单: (key, 中文名, 单位, Yahoo 代码, Stooq 代码, 展示小数位)
@@ -87,19 +89,78 @@ def http_get(url, timeout=10):
         return resp.read().decode('utf-8', errors='replace')
 
 
+def _finite_number(value):
+    """Reject malformed, non-finite and boolean numbers from market feeds."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def yahoo_regular_pct(meta, last):
+    """Percentage paired with regularMarketPrice; full-day may be after-hours."""
+    pct = _finite_number(meta.get('regularMarketChangePercent'))
+    if pct is not None and pct > -100:
+        return pct
+    full_price = _finite_number(meta.get('fulldayPrice'))
+    full_pct = _finite_number(meta.get('fulldayChangePercent'))
+    if (full_price is not None and last is not None and
+            math.isclose(full_price, last, rel_tol=1e-6, abs_tol=1e-8) and
+            full_pct is not None and full_pct > -100):
+        return full_pct
+    return None
+
+
+def _market_timezone(meta):
+    name = meta.get('exchangeTimezoneName')
+    if name:
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            pass
+    offset = _finite_number(meta.get('gmtoffset'))
+    if offset is not None and abs(offset) < 86400:
+        return timezone(timedelta(seconds=offset))
+    return timezone.utc
+
+
+def _daily_previous_close(result, meta):
+    """Find the most recent daily close before the quote's exchange-local day."""
+    stamps = result.get('timestamp') or []
+    closes = (((result.get('indicators') or {}).get('quote') or [{}])[0].get('close')) or []
+    market_ts = _finite_number(meta.get('regularMarketTime'))
+    if not stamps or len(stamps) != len(closes) or market_ts is None:
+        return None
+    tz = _market_timezone(meta)
+    try:
+        day = datetime.fromtimestamp(market_ts, tz).date()
+    except (ValueError, OverflowError, OSError):
+        return None
+    candidates = []
+    for stamp, close in zip(stamps, closes):
+        stamp, close = _finite_number(stamp), _finite_number(close)
+        if stamp is None or close is None or close <= 0:
+            continue
+        try:
+            bar_day = datetime.fromtimestamp(stamp, tz).date()
+        except (ValueError, OverflowError, OSError):
+            continue
+        if bar_day < day and (day - bar_day).days <= 10:
+            candidates.append((stamp, close))
+    return max(candidates, default=(None, None))[1]
+
+
 def parse_yahoo_chart(payload):
-    """解析 Yahoo chart API JSON → (last, prev_close, as_of) 或 None。
+    """Parse regular-market price and a defensible previous-session close.
 
-    ⚠️ 前收盘语义（2026-09-16 修复）:
-      range=5d 时 meta.chartPreviousClose 是「5 日窗口首根 K 线之前」的收盘价
-      （≈ 5 个交易日前），用它算涨跌会得到 5 日累计涨跌而非当日涨跌。
-      例: 2026-09-16 恒指收 24,713.78, chartPreviousClose=25,274.96(9/9 收盘),
-      误算成 −561.18/−2.22%, 实际当日 +46.54/+0.19%(前收 24,667.24)。
-
-      prev 解析优先级:
-        1. meta.fulldayChange            → prev = last − fulldayChange（Yahoo 官方当日涨跌额）
-        2. 日线 closes 倒数第二根         → 前一交易日收盘价
-        3. meta.previousClose / meta.chartPreviousClose（兜底, 语义可能为 N 日前）
+    A full-day change may refer to a different price than regularMarketPrice.
+    Check candidates against the paired regular-market percentage when present;
+    otherwise use a dated daily candle. Never treat a 5-day window's
+    chartPreviousClose as yesterday's close. If the reference is ambiguous,
+    keep the price but return prev_close=None rather than inventing a change.
     """
     try:
         result = ((payload or {}).get('chart') or {}).get('result')
@@ -107,33 +168,43 @@ def parse_yahoo_chart(payload):
         return None
     if not result:
         return None
-    meta = result[0].get('meta') or {}
-    last = meta.get('regularMarketPrice')
+    row = result[0]
+    meta = row.get('meta') or {}
+    last = _finite_number(meta.get('regularMarketPrice'))
     if last is None:
         return None
-    last = float(last)
 
-    ts = meta.get('regularMarketTime')
+    ts = _finite_number(meta.get('regularMarketTime'))
     if ts is None:
-        stamps = result[0].get('timestamp') or []
-        ts = stamps[-1] if stamps else None
-    as_of = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d') if ts else None
+        stamps = row.get('timestamp') or []
+        ts = _finite_number(stamps[-1]) if stamps else None
+    try:
+        as_of = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d') if ts else None
+    except (ValueError, OverflowError, OSError):
+        as_of = None
 
+    pct = yahoo_regular_pct(meta, last)
+    regular_change = _finite_number(meta.get('regularMarketChange'))
+    full_change = _finite_number(meta.get('fulldayChange'))
+    full_price = _finite_number(meta.get('fulldayPrice'))
+    regular_prev = last - regular_change if regular_change is not None else None
+    full_prev = (last - full_change if full_change is not None and
+                 (full_price is None or math.isclose(full_price, last, rel_tol=1e-6, abs_tol=1e-8))
+                 else None)
+    candle_prev = _daily_previous_close(row, meta)
+    candidates = [v for v in (regular_prev, full_prev, candle_prev) if v is not None and v > 0]
     prev = None
-    fullday = meta.get('fulldayChange')
-    if fullday is not None:
-        try:
-            prev = last - float(fullday)
-        except (TypeError, ValueError):
-            prev = None
-    if prev is None:
-        closes = (((result[0].get('indicators') or {}).get('quote') or [{}])[0].get('close')) or []
-        valid = [float(c) for c in closes if c is not None]
-        if len(valid) >= 2:
-            prev = valid[-2]
-    if prev is None:
-        p = meta.get('previousClose') or meta.get('chartPreviousClose')
-        prev = float(p) if p is not None else None
+    if last > 0 and pct is not None:
+        # Preserve precise price changes/candles only when they agree with the
+        # regular-market percentage, which is rounded to several decimals.
+        prev = next((v for v in candidates if abs((last - v) / v * 100 - pct) <= 0.02), None)
+        if prev is None:
+            prev = last / (1 + pct / 100)
+    elif last > 0:
+        # A same-price fullday change is usable without a percentage; without
+        # fulldayPrice it must be corroborated instead of assumed to match.
+        usable = [regular_prev, full_prev if full_price is not None else None, candle_prev]
+        prev = next((v for v in usable if v is not None and v > 0), None)
     return (last, prev, as_of)
 
 
@@ -326,8 +397,8 @@ def main():
         },
         'notes': [
             '由 market_data.py 构建时自动抓取 (Yahoo Finance 主源 → Stooq 回退 + 交叉校正)',
-            '涨跌额/涨跌幅基于「前一交易日收盘」计算 (fulldayChange/日线倒数第二根, '
-            '而非 range=5d 的 chartPreviousClose——那是约 5 个交易日前的收盘, 语义为窗口前收)',
+            '涨跌基于与常规时段价格匹配的变动数据或前一交易日日线；前收不可靠时不显示涨跌，'
+            '不使用 range=5d 的窗口前收 chartPreviousClose',
             '多源校正: Yahoo 成功项用 Stooq 收盘价水平比对, 偏差 > '
             f'{CROSS_CHECK_TOL_PCT}% 记入 cross_check.disagree 并告警',
             '单品抓取失败降级显示 "—"，不阻断构建与推送',

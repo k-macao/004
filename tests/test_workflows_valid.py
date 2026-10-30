@@ -166,9 +166,9 @@ class TestEveryStepHasRunOrUses(unittest.TestCase):
         # not invalidate the truncated-workflow regression test.
         daily = next(i for i, line in enumerate(full) if line.strip() == 'daily:')
         community = next(i for i in range(daily, len(full))
-                         if full[i].lstrip().startswith('- name: 🗣️ 动态抓取社区'))
+                         if full[i].lstrip().startswith('- name: 📥 读取社区快照'))
         lines = full[:community]
-        lines.append('      - name: 🗣️ 动态抓取社区 (community_data.py · 49 \n')
+        lines.append('      - name: 📥 读取社区快照 (49 \n')
         problems = step_problems(lines)
         self.assertTrue(problems, '校验器没能识别事故文件（截断的 daily job 步骤）')
         self.assertEqual(community + 1, problems[0][1])
@@ -179,9 +179,10 @@ class TestEveryStepHasRunOrUses(unittest.TestCase):
         found = {}
         for step in iter_steps(read_lines(WORKFLOW)):
             found[step['job']] = found.get(step['job'], 0) + 1
-        self.assertEqual({'deploy', 'wechat', 'daily'}, set(found))
+        self.assertEqual({'community_snapshot', 'deploy', 'wechat', 'daily'}, set(found))
         for job, count in found.items():
-            self.assertGreaterEqual(count, 8, '%s 的 step 数异常少: %s' % (job, count))
+            self.assertGreaterEqual(count, 6 if job == 'community_snapshot' else 8,
+                                    '%s 的 step 数异常少: %s' % (job, count))
 
 
 class TestWorkflowStillDoesItsJob(unittest.TestCase):
@@ -192,35 +193,49 @@ class TestWorkflowStillDoesItsJob(unittest.TestCase):
         daily = text.split('\n  daily:')[1]
         self.assertIn('wechat_push.py --push --scheduled', daily)
         self.assertIn('build_site.py', daily)
-        self.assertIn('community_data.py', daily)
+        self.assertIn('actions/download-artifact@v4', daily)
+        self.assertIn('name: community-snapshot', daily)
+        self.assertIn('needs: community_snapshot', daily)
+        self.assertIn("github.event.schedule != '0 */4 * * *'", daily)
 
     def test_triggers_and_jobs_intact(self):
         lines = read_lines(WORKFLOW)
         text = ''.join(lines)
         for token in ('on:', 'push:', 'schedule:', 'workflow_dispatch:', 'permissions:'):
             self.assertIn(token, text)
-        for job in ('\n  deploy:', '\n  wechat:', '\n  daily:'):
-            self.assertIn(job, text)
-        # 三个 job 各自都要有 runs-on
-        for step_owner, chunk in zip(
-            ('deploy', 'wechat', 'daily'),
-            re.split(r'\n  (?:deploy|wechat|daily):', text)[1:],
-        ):
+        jobs = ('community_snapshot', 'deploy', 'wechat', 'daily')
+        for job in jobs:
+            self.assertIn('\n  ' + job + ':', text)
+        for step_owner, chunk in zip(jobs, re.split(r'\n  (?:community_snapshot|deploy|wechat|daily):', text)[1:]):
             self.assertIn('runs-on:', chunk, '%s 缺 runs-on' % step_owner)
+        self.assertIn("cron: '0 */4 * * *'", text)
 
-    def test_optional_reddit_configuration_reaches_all_three_jobs(self):
+    def test_single_collector_and_shared_snapshot(self):
         text = ''.join(read_lines(WORKFLOW))
-        for chunk in re.split(r'\n  (?:deploy|wechat|daily):', text)[1:]:
-            for key in ('REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT'):
-                self.assertIn('secrets.' + key, chunk)
-            self.assertIn("praw==8.0.3", chunk)
-            self.assertIn('python3 community_data.py', chunk)
-            self.assertIn('|| echo', chunk, 'optional installation failure must not block other sources')
+        chunks = re.split(r'\n  (?:community_snapshot|deploy|wechat|daily):', text)[1:]
+        self.assertEqual(len(chunks), 4)
+        collector, deploy, wechat, daily = chunks
+        for key in ('REDDIT_CLIENT_ID', 'REDDIT_CLIENT_SECRET', 'REDDIT_USER_AGENT'):
+            self.assertIn('secrets.' + key, collector)
+        self.assertIn('community_snapshot.py --install-praw-if-configured', collector)
+        self.assertIn('community_snapshot.py --plan', collector)
+        self.assertIn('group: community-snapshot-four-hours', collector)
+        self.assertIn('actions/cache/restore@v4', collector)
+        self.assertIn('actions/cache/save@v4', collector)
+        self.assertIn('actions/upload-artifact@v4', collector)
+        self.assertIn('needs: community_snapshot', deploy)
+        self.assertIn("github.event.schedule != '0 */4 * * *'", deploy)
+        self.assertIn("github.event.schedule == '0 */4 * * *' && 'community-four-hour-trigger'", text)
+        self.assertIn("cron: '*/5 * * * *'", text)
+        for chunk in (deploy, wechat, daily):
+            self.assertIn('actions/download-artifact@v4', chunk)
+            self.assertIn('name: community-snapshot', chunk)
+            self.assertNotIn('python3 community_data.py', chunk)
 
     def test_source_count_labels_are_49(self):
         """#66 的口径改动（34 → 49）必须落在步骤名上，且不能只改一半。"""
         text = ''.join(read_lines(WORKFLOW))
-        self.assertEqual(3, text.count('· 49 源'), '三个 job 的社区步骤名都应写 49 源')
+        self.assertEqual(3, text.count('读取社区快照（49 源）'), '三个构建/推送 job 均读取 49 源快照')
         self.assertNotIn('34 源', text)
         self.assertNotIn('34 大社区', text)
 

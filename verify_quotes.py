@@ -47,7 +47,7 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
-from market_data import YAHOO_BASE, http_get, SYMBOLS   # noqa: E402  复用 UA/超时/标的清单
+from market_data import YAHOO_BASE, http_get, SYMBOLS, yahoo_regular_pct   # noqa: E402
 
 STOOQ_L_BASE = 'https://stooq.com/q/l/?s={sym}&f=sdc&h&e=csv'
 STOOQ_HIST_BASE = 'https://stooq.com/q/d/l/?s={sym}&d1={d1}&d2={d2}&i=d'
@@ -85,7 +85,7 @@ def _sym_of(key):
 # ---------------------------------------------------------------------------
 
 def probe_yahoo(yahoo_sym, timeout=8):
-    """主源官方口径复验: regularMarketPrice + fulldayChangePercent(官方当日涨跌)。"""
+    """复验 regularMarketPrice 与同一市场时段的官方涨跌幅。"""
     if not yahoo_sym:
         return None
     url = YAHOO_BASE.format(sym=urllib.parse.quote(yahoo_sym, safe=''))
@@ -96,11 +96,10 @@ def probe_yahoo(yahoo_sym, timeout=8):
         return None
     ts = meta.get('regularMarketTime')
     as_of = datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%d') if ts else None
-    pct = meta.get('fulldayChangePercent')
-    if pct is None:
-        pct = meta.get('regularMarketChangePercent')
-    return {'source': 'yahoo', 'family': 'yahoo', 'last': float(last),
-            'pct': float(pct) if pct is not None else None, 'as_of': as_of}
+    last = float(last)
+    pct = yahoo_regular_pct(meta, last)
+    return {'source': 'yahoo', 'family': 'yahoo', 'last': last,
+            'pct': pct, 'as_of': as_of}
 
 
 def probe_stooq_current(stooq_sym, timeout=8):
@@ -219,8 +218,10 @@ def verify_item(key, quote, probe_fns, fetch_date, level_tol=None, pct_tol=None)
                                   f'涨跌幅不自洽: 应为 {exp_pct}%, 记录为 {pct}%'))
         if not checks or checks[-1]['name'] != 'internal_math':
             checks.append(_ck('internal_math', 'pass', '涨跌额/涨跌幅与 last/prev_close 自洽'))
+    elif chg is not None or pct is not None:
+        checks.append(_ck('internal_math', 'fail', '无可信前收却提供了涨跌额或涨跌幅，不能确认计算口径'))
     else:
-        checks.append(_ck('internal_math', 'info', '无 prev_close 字段, 跳过内部自洽校验 (建议重新生成 market_data.json)'))
+        checks.append(_ck('internal_math', 'warn', '无可信前收，涨跌额及涨跌幅未核验，仅可比对点位'))
 
     # ② 行情日期健全性: 不超前、不陈旧
     aq = _iso(as_of)
@@ -301,6 +302,9 @@ def verify_item(key, quote, probe_fns, fetch_date, level_tol=None, pct_tol=None)
                 checks.append(_ck('sources', 'info',
                                   f'来源 {r["source"]} 已更新至 {r["as_of"]} (流水线 {as_of}, 新交易日滚动属正常)'))
 
+    if pct is not None and not any(r.get('same_date') and 'agree_pct' in r for r in sources):
+        checks.append(_ck('percentage_sources', 'warn', '无同日期可比涨跌幅来源，不能仅凭点位一致认定涨跌幅已核验'))
+
     verdict = 'pass'
     for c in checks:
         v = c['severity']
@@ -364,7 +368,13 @@ def report_text(report):
         seg += f" — {it['verdict'].upper()}"
         if ok_src:
             agree = len([s for s in ok_src if s.get('agree_level')])
-            seg += f" · 来源 {agree}/{len(ok_src)} 一致"
+            seg += f" · 点位 {agree}/{len(ok_src)} 一致"
+            pct_sources = [s for s in ok_src if s.get('same_date') and 'agree_pct' in s]
+            if pct_sources:
+                agree_pct = sum(bool(s['agree_pct']) for s in pct_sources)
+                seg += f" · 涨跌幅 {agree_pct}/{len(pct_sources)} 一致"
+            else:
+                seg += ' · 涨跌幅无可比来源'
         elif it.get('sources'):
             seg += " · 来源不可达"
         bad = [c for c in it['checks'] if c['severity'] in ('fail', 'warn')]

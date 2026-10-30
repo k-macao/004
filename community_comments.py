@@ -13,6 +13,8 @@ import itertools
 import json
 import os
 import re
+import threading
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 
@@ -23,12 +25,43 @@ MAX_THREADS = 3
 MAX_COMMENTS_PER_THREAD = 20
 MAX_DISPLAY_COMMENTS = 3
 COMMENT_MAX_AGE_DAYS = 7
+POST_INTERVAL_SECONDS = 10.0
 LIHKG_LIST_URL = 'https://lihkg.com/api_v2/thread/category?cat_id=15&page=1&count=20&type=now'
 LIHKG_HEADERS = {'Accept': 'application/json', 'X-LI-DEVICE-TYPE': 'browser'}
 REDDIT_SUBREDDITS = {
     'REDDIT': 'ChinaStocks', 'RINVESTING': 'investing',
     'ROPTIONS': 'options', 'RCRYPTO': 'CryptoCurrency',
 }
+
+
+class PostInterval:
+    """Serialize post-detail fetches with a cooldown after each attempt.
+
+    The same instance is shared by PTT, LIHKG and PRAW during a collection.
+    Holding the lock prevents overlapping post fetches; each new attempt waits
+    at least the configured interval after the previous one finished, including
+    on exceptions and transport-level retries.
+    """
+
+    def __init__(self, interval=POST_INTERVAL_SECONDS, clock=None, sleep=None):
+        self.interval = max(0.0, float(interval))
+        self._clock = clock or time.monotonic
+        self._sleep = sleep or time.sleep
+        self._lock = threading.Lock()
+        self._last_finished = None
+        self.started = 0
+
+    def call(self, func, *args, **kwargs):
+        with self._lock:
+            if self._last_finished is not None:
+                remaining = self.interval - (self._clock() - self._last_finished)
+                if remaining > 0:
+                    self._sleep(remaining)
+            self.started += 1
+            try:
+                return func(*args, **kwargs)
+            finally:
+                self._last_finished = self._clock()
 
 
 def _host(url):
@@ -268,13 +301,20 @@ class CommentSpider(sc.Spider):
     autothrottle_max_delay = 8.0
     robots_txt_obey = False
 
-    def __init__(self, communities, session=None, now=None, max_age_days=COMMENT_MAX_AGE_DAYS):
+    def __init__(self, communities, session=None, now=None, max_age_days=COMMENT_MAX_AGE_DAYS,
+                 post_limiter=None):
         self.communities = list(communities)
         self.now = _now_utc(now)
         self.max_age_days = max_age_days
         self.candidates = {}
         self.attempts = {}
+        self.post_limiter = post_limiter or PostInterval()
+        session = session or sc.FetcherSession(timeout=self.request_timeout, retries=self.request_retries)
+        self._detail_base_transport = session.config.get('transport') or sc._default_transport
         super().__init__(session=session)
+
+    def _detail_transport(self, *args, **kwargs):
+        return self.post_limiter.call(self._detail_base_transport, *args, **kwargs)
 
     def start_requests(self):
         for comm in self.communities:
@@ -299,7 +339,7 @@ class CommentSpider(sc.Spider):
         for thread in ptt_thread_choices(response):
             yield sc.Request(thread['url'], callback=self.parse_ptt_thread,
                              meta={'key': 'PTT', 'stage': 'thread', 'thread': thread},
-                             follow_redirects=False)
+                             transport=self._detail_transport, follow_redirects=False)
 
     def parse_ptt_thread(self, response):
         if response.ok and _host(response.url) in ('www.ptt.cc', 'ptt.cc'):
@@ -321,7 +361,7 @@ class CommentSpider(sc.Spider):
             url = f"https://lihkg.com/api_v2/thread/{thread['id']}/page/1"
             yield sc.Request(url, callback=self.parse_lihkg_thread,
                              meta={'key': 'LIHKG', 'stage': 'thread', 'thread': thread},
-                             headers=LIHKG_HEADERS, follow_redirects=False)
+                             headers=LIHKG_HEADERS, transport=self._detail_transport, follow_redirects=False)
 
     def parse_lihkg_thread(self, response):
         if not response.ok or _host(response.url) != 'lihkg.com':
@@ -385,7 +425,8 @@ def reddit_client(timeout):
 
 
 def fetch_reddit_comments(communities, timeout=10, now=None, max_age_days=COMMENT_MAX_AGE_DAYS,
-                          client=None):
+                          client=None, post_limiter=None):
+    post_limiter = post_limiter or PostInterval()
     targets = [c for c in communities if _is_reddit(c)]
     if not targets:
         return {}
@@ -409,8 +450,11 @@ def fetch_reddit_comments(communities, timeout=10, now=None, max_age_days=COMMEN
                         title = common.strip_noise(getattr(submission, 'title', ''))[:120]
                         submission.comment_sort = 'top'
                         submission.comment_limit = MAX_COMMENTS_PER_THREAD
-                        # No replace_more: do not issue unbounded extra requests.
-                        for index, comment in enumerate(itertools.islice(submission.comments, MAX_COMMENTS_PER_THREAD)):
+                        # Accessing .comments is lazy in PRAW. Fetch each post
+                        # inside the shared limiter; never call replace_more.
+                        comments_for_post = post_limiter.call(
+                            lambda: list(itertools.islice(submission.comments, MAX_COMMENTS_PER_THREAD)))
+                        for index, comment in enumerate(comments_for_post):
                             text = _clean_message(getattr(comment, 'body', ''))
                             score = _number(getattr(comment, 'score', None))
                             published = _recent_timestamp(getattr(comment, 'created_utc', None), now, max_age_days)
@@ -444,12 +488,13 @@ def fetch_reddit_comments(communities, timeout=10, now=None, max_age_days=COMMEN
 
 def collect_comments(communities, session=None, timeout=10, retries=2, concurrency=6,
                      obey_robots=False, autothrottle=True, max_blocked_retries=2,
-                     download_delay=0.15, now=None):
+                     download_delay=0.15, now=None, post_limiter=None):
     """Collect bounded comments. Returns (per-source outcomes, crawler stats)."""
+    post_limiter = post_limiter or PostInterval()
     sources = [c for c in communities if _is_ptt(c) or _is_lihkg(c)]
     outcomes, stats = {}, {'requests_count': 0, 'robots_disallowed_count': 0, 'blocked_requests_count': 0}
     if sources:
-        spider = CommentSpider(sources, session=session, now=now)
+        spider = CommentSpider(sources, session=session, now=now, post_limiter=post_limiter)
         spider.concurrent_requests = min(max(1, concurrency), len(sources))
         spider.request_timeout = timeout
         spider.request_retries = retries
@@ -470,7 +515,8 @@ def collect_comments(communities, session=None, timeout=10, retries=2, concurren
                 outcome['attempt']['status'] = 'partial' if outcome['comments'] else 'engine_error'
             stats['error'] = type(exc).__name__
     try:
-        outcomes.update(fetch_reddit_comments(communities, timeout=timeout, now=now))
+        outcomes.update(fetch_reddit_comments(communities, timeout=timeout, now=now,
+                                               post_limiter=post_limiter))
     except Exception as exc:  # do not discard already-collected PTT/LIHKG results
         stats['praw_error'] = type(exc).__name__
         for comm in communities:
@@ -483,4 +529,6 @@ def collect_comments(communities, session=None, timeout=10, retries=2, concurren
     stats['attempts'] = {key: item['attempt'] for key, item in outcomes.items()}
     # PRAW manages its own transport; its internal HTTP calls are not in requests_count.
     stats['requests_count_excludes_praw'] = True
+    stats['post_interval_seconds'] = post_limiter.interval
+    stats['post_fetch_attempts'] = post_limiter.started
     return outcomes, stats

@@ -43,26 +43,57 @@ Scrapling 公开页抓取组合：优先使用可核验的评论或热帖回复�
 PRAW 使用其自身 API 限速。主题可以在回复或所属帖子标题中，但词库情感只对回复文本打分。
 列表页、帖页和评论采样都有上限，可能遗漏更热或更相关的内容。
 
-## 3. 使用与诊断
+## 3. 四小时快照、帖子间隔与重新分析
+
+- `community_snapshot.py` 是常规入口：首次采集后，将 49 源结果写入 `community_data.json`；
+  距上次采集尝试**未满四小时**时复用，满四小时后下一次运行才重新采集。时间由快照中的 UTC
+  `snapshot.attempted_at` 判断，不靠文件修改时间；写入采用同目录临时文件和原子替换。
+  采集器整体异常时写入 49 源「未获取」而不是把旧数据冒充新数据；失败尝试同样等待四小时，
+  避免五分钟报告循环持续请求目标网站。单个站点失败时其它成功结果仍保留。
+- GitHub Actions 使用跨运行的社区任务互斥锁，恢复/保存 Actions cache，并通过本次运行的
+  artifact 分发给部署和微信任务。`0 */4 * * *` 是独立的仅采集触发，不在同一时刻额外推送；
+  原有的每五分钟和每日报告触发仍检查快照时效并负责发布。GitHub 定时任务可能延迟或漏跑、
+  并发队列最多保留一个待运行任务，cache 也可能失效或被逐出，因此不是精确到秒的调度保证；
+  快照丢失后下一次运行会重新采集。Actions cache 还受分支访问范围限制，不同分支的手动运行
+  不一定共享最新快照；独立本地进程之间也没有跨进程锁。
+- 同一采集进程内，PTT/LIHKG 的帖子详情请求和 PRAW 的逐帖评论读取共享串行限速器，
+  **上一次帖子读取结束后至少等待 10 秒才开始下一次**，即使来自不同站点或上次出错。
+  PTT/LIHKG 底层传输重试也会限速；
+  PRAW 内部 HTTP 重试由 SDK 自己控制，不能承诺每个内部请求都间隔 10 秒。来源列表页、robots
+  请求及 49 源公开首页回退不是帖子详情，不受这一帖子间隔约束，仍使用各自原有的限速和退避。
+  开启 PRAW 时这些等待会增加采集耗时。
+- `build_site.py` 和 `tools/wechat_push.py` 在各自读取快照后对保存的文本重新计算情感和量化，
+  不重新联网抓社区；帖子标题不会代替回复作者投票。页面显示原始采集时间及本次分析时间，
+  `fetch_date` 不因重算而改变。跨 UTC 午夜但仍在四小时有效期内的快照，严格推送检查可以使用
+  原采集日期；过期、格式错误或正文日期与快照不一致时严格模式拒绝推送，定时模式沿用警告。
+  旧格式若没有 `analysis_input`，则保留
+  原分析、无法重新计算。评论的 7 天窗口按采集时刻检查，快照有效期间不会重新采样。
+
+## 4. 使用与诊断
 
 ```bash
-# 常规采集。使用 --robots 启用项目内的 robots.txt 检查（见下方限制）。
-python3 community_data.py --robots
+# 常规入口：到期才采集，并默认检查 robots；随后分别读取快照进行分析。
+python3 community_snapshot.py
 python3 build_site.py
 python3 tools/wechat_push.py --dry-run
 
-# 只检查前 N 个目录源，未请求的其他源不伪造「抓取核验」日期。
+# 仅检查是否到期；排查时才手动绕过四小时缓存。
+python3 community_snapshot.py --plan
+python3 community_snapshot.py --force
+# 底层调试命令会直接联网采集，不受四小时缓存限制。
 python3 community_data.py --limit 24 --timeout 8 --robots
-# 排查时可禁用专用评论策略，只保留公开页回退。
 python3 community_data.py --no-comments
 
 # 离线测试，不访问平台
-python3 -m unittest tests.test_community_comments
+python3 -m unittest tests.test_community_comments tests.test_community_snapshot
 python3 -m unittest discover -s tests
 ```
 
 `community_data.json` 中：
 
+- `snapshot.attempted_at`、`interval_seconds`、`post_interval_seconds` 与 `status` 记录本轮采集尝试和策略；
+  各源 `analysis_input` 保存重算所需的实际文本；`analysis_at` 与 `analysis_stats` 反映
+  页面/推送读取时的实际重算情况（没有可重算文本时不显示分析时间）。
 - `summary.comment_sources` / `summary.page_excerpt_sources` 分别计数评论/热帖回复源、普通页摘录源；
   `summary.ok` 仍是两者之和，**不是热评源数量**。
 - 每条源的 `content_kind` 为 `comment`、`thread_reply`、`page_excerpt` 或演示模式的 `demo`；
@@ -75,23 +106,24 @@ python3 -m unittest discover -s tests
   `http_403` / `http_429` 等状态及样本数。HTTP/解析/权限失败不会覆盖成功的页面摘录。
   `requests_count_excludes_praw=true` 表示 SDK 内部请求不计入爬虫请求数。
 
-`fetch_date` /「抓取核验」是**采集执行日期**，不是帖子发布时间；仅 LIHKG / Reddit 的
+`fetch_date` /「抓取核验」是 **UTC 采集批次启动日期**，不是帖子发布时间；批次跨午夜时后续请求
+可能在次日完成。仅 LIHKG / Reddit 的
 `published_at` 是平台提供的实际时间。`--robots` 适用于本项目的 HTTP 爬虫（含 PTT/LIHKG
 子请求），不会控制 PRAW 的官方 API；现有 robots 解析器是简化实现，robots 文件取不到时
 保持项目原有的放行行为，**不能代替对目标网站条款和授权的审查**。不自动登录、解决验证码、
 绕过付费墙或在访问被拒后切换代理。评论链接在输出前经过 HTTP(S) 校验并转义。
 
-## 4. 可选 Reddit 配置
+## 5. 可选 Reddit 配置
 
 本地安装 `python3 -m pip install 'praw==8.0.3'`，用符合 Reddit 政策、已获准的 API 应用设置
 环境变量 `REDDIT_CLIENT_ID`、`REDDIT_CLIENT_SECRET` 和 `REDDIT_USER_AGENT`（应是可识别的
 应用 UA）。无需在此项目存储 Reddit 用户名或密码。不要把密钥写进文件、日志、仓库或聊天。
 缺少任一变量时显示 `not_configured`，没安装包显示 `praw_not_installed`；仍可使用其他方案。
 
-`.github/workflows/m.yml` 的 deploy、wechat、daily 三个社区抓取步骤从同名 GitHub Actions
-Secrets 读取配置；**只有三项都存在才安装 PRAW**。安装失败仍运行其余抓取。没有配置 Secrets
-时保持纯标准库。现有工作流包含每 5 分钟定时任务，且不同 job 会各自抓取；启用前应核对
-Reddit 与其他平台的访问政策、配额和实际运行次数，必要时调整运行频率。
+`.github/workflows/m.yml` 的独立 `community_snapshot` job 从同名 GitHub Actions Secrets 读取配置；
+**需要采集且三项都存在才安装 PRAW**。安装失败仍运行其余抓取，没有配置 Secrets 时保持纯标准库。
+部署和微信任务只读取同一快照，不再各自抓取。启用前应核对 Reddit 与其他平台的访问政策、配额
+和实际运行次数。
 
 输出会进入 `community_data.json`、网页和微信，可能被公开发布；只抓取有权使用的公开内容。
 适配器不导出作者名或 PTT IP，但评论文本本身可能包含个人信息，不能把这一点视作完整匿名化。

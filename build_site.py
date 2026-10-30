@@ -316,7 +316,7 @@ def _fetch_status(data):
 
 def _community_fetch_status(cdata):
     if not cdata:
-        return '未找到 community_data.json，03 节 49 源标注「未获取」（请先运行 python3 community_data.py）'
+        return '未找到 community_data.json，03 节 49 源标注「未获取」（请先运行 python3 community_snapshot.py）'
     summary = cdata.get('summary') or {}
     ok = summary.get('ok')
     total = summary.get('total') or len(cdata.get('communities') or []) or len(community_mod.COMMUNITIES)
@@ -326,8 +326,17 @@ def _community_fetch_status(cdata):
     coverage = (f' · 采样评论/热帖回复 {summary.get("comment_sources", 0)} 源'
                 f'，普通页摘录 {summary.get("page_excerpt_sources", 0)} 源（非热评）'
                 if 'comment_sources' in summary else '')
+    stats = cdata.get('analysis_stats') or {}
+    if cdata.get('analysis_at'):
+        coverage += f' · 本次读取分析 {cdata["analysis_at"]}（重算 {stats.get("reanalyzed", 0)} 源）'
+    if stats.get('legacy_retained'):
+        coverage += f' · {stats["legacy_retained"]} 源旧格式保留原分析'
     if mode == 'demo':
         return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen} · 样本日期 {fetch_date}'
+    if mode == 'offline':
+        reason = ('采集任务异常，结果不可用' if (cdata.get('snapshot') or {}).get('status') == 'collector_error'
+                  else '离线兜底，未读取到社区数据')
+        return f'{reason} · {total} 源均未获取，不伪造单源核验 · 记录于 {gen}'
     if ok is None:
         return f'社区数据已加载 · 生成于 {gen} · 核验日期 {fetch_date}'
     if total == ok and total > 0:
@@ -1073,11 +1082,11 @@ def build_verdict_html(data, macro_data, community_data):
     live_n = counts['bull'] + counts['bear'] + counts['neutral'] + counts['mixed']
     total_n = len(comms) if comms else len(community_mod.COMMUNITIES)
     if live_n > 0:
-        comm_line = (f"当次实抓 {live_n}/{total_n} 个社区源：偏多 {counts['bull']} 家 · "
+        comm_line = (f"社区快照实抓 {live_n}/{total_n} 个社区源：偏多 {counts['bull']} 家 · "
                      f"偏空 {counts['bear']} 家 · 中性 {counts['neutral']} 家 · "
                      f"多空分歧 {counts['mixed']} 家（其余 {counts['unavailable']} 家未获取，不计入分母）")
     else:
-        comm_line = f"当次 0/{total_n} 个社区源抓到可核验热评（全部标注「未获取」，不编造多空家数）"
+        comm_line = f"社区快照中 0/{total_n} 个源有可用片段（全部标注「未获取」，不编造多空家数）"
 
     gold_str = f"现货黄金 {fmt_last(gold)}（{fmt_pct(gold)}）" if gold.get('last') is not None else "现货黄金暂缺"
     return (
@@ -1177,7 +1186,7 @@ def main():
         except ValueError as e:
             print(f'警告: {args.community} 解析失败({e})，社区将标记为未获取', file=sys.stderr)
     else:
-        print(f'警告: 未找到 {args.community}，社区将标记为未获取；请先运行 python3 community_data.py',
+        print(f'警告: 未找到 {args.community}，社区将标记为未获取；请先运行 python3 community_snapshot.py',
               file=sys.stderr)
 
     sentiment_data = {}
@@ -1192,6 +1201,7 @@ def main():
               '可先运行 python3 sentiment_factors.py --mock 生成', file=sys.stderr)
 
     now = datetime.now(timezone.utc)
+    community_data = community_mod.reanalyze_snapshot(community_data, now=now)
     quant_pair.reset_hidden_render_count()      # 行情不足的隐藏处数：本次构建单独计数
 
     # 02 节快讯产物：缺失 / 写坏 / 旧快照时**就地补抓一次**（构建期兜底）。

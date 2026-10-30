@@ -10,8 +10,10 @@ market_data.parse_yahoo_chart 单元测试（离线 · 使用真实 API 抓取�
   误算 −561.18/−2.22%；真实当日 +46.54/+0.19%（前收 24,667.24，etnet/富途多源印证）。
 """
 import unittest
+from datetime import datetime, timezone
 
 from market_data import parse_yahoo_chart, make_quote
+from verify_quotes import verify_item
 
 # ---- 真实报文（2026-09-16 11:10 UTC 抓自 query1.finance.yahoo.com, 仅保留解析所需字段）----
 
@@ -53,7 +55,8 @@ def _legacy(meta_overrides, closes):
     result = {
         'meta': dict({'regularMarketPrice': closes[-1],
                       'regularMarketTime': 1789522200}, **meta_overrides),
-        'timestamp': list(range(len(closes))),
+        # 每条日线都带与 regularMarketTime 对齐的时间戳；不能用 1970 年的假时间戳推断前收。
+        'timestamp': [1789522200 - 86400 * (len(closes) - i - 1) for i in range(len(closes))],
         'indicators': {'quote': [{'close': list(closes)}]},
     }
     return {'chart': {'result': [result], 'error': None}}
@@ -92,11 +95,63 @@ class TestParseYahooChart(unittest.TestCase):
         self.assertAlmostEqual(last, 24713.78, places=2)
         self.assertAlmostEqual(prev, 24667.24, places=2)   # 用 closes[-2], 非 9999
 
-    def test_fallback_meta_prev_last_resort(self):
-        """单根 K 线且无 fulldayChange → 兜底 meta.previousClose/chartPreviousClose。"""
-        payload = _legacy({'chartPreviousClose': 25274.96}, [24713.78])
+    def test_window_previous_close_is_never_assumed_to_be_previous_session(self):
+        """单根 K 线缺少可信前收：窗口前收不等于昨收，宁可不显示涨跌。"""
+        payload = _legacy({'chartPreviousClose': 25274.96, 'previousClose': 25274.96}, [24713.78])
         _last, prev, _ = parse_yahoo_chart(payload)
-        self.assertAlmostEqual(prev, 25274.96, places=2)
+        self.assertIsNone(prev)
+
+    def test_vix_inconsistent_full_day_change_uses_regular_market_percentage(self):
+        """复现用户日志中的差值；这是合成报文，不声称是当时的 Yahoo 原始响应。"""
+        payload = _legacy({
+            'regularMarketPrice': 17.20, 'regularMarketChangePercent': 1.715,
+            'fulldayPrice': 17.20, 'fulldayChange': -16.906,
+            'fulldayChangePercent': 1.715, 'chartPreviousClose': 34.106,
+        }, [17.30, 16.91, 17.20])
+        last, prev, as_of = parse_yahoo_chart(payload)
+        quote = make_quote('VIX', 'VIX 恐慌指数', '点', 2, last, prev, as_of, 'yahoo')
+        self.assertAlmostEqual(prev, 16.91, places=2)
+        self.assertAlmostEqual(quote['pct'], 1.715, delta=0.01)
+        self.assertGreater(quote['chg'], 0)
+        probe = {'source': 'yahoo', 'family': 'yahoo', 'last': 17.20, 'pct': 1.715, 'as_of': as_of}
+        item = verify_item('VIX', quote, [lambda: probe], as_of)
+        self.assertEqual(item['verdict'], 'pass')
+
+    def test_extended_full_day_price_is_not_mixed_with_regular_price(self):
+        """全日价格不同时，full-day 涨跌额不能从 regularMarketPrice 减去。"""
+        payload = _legacy({
+            'regularMarketPrice': 333.02, 'regularMarketChangePercent': 1.099,
+            'fulldayPrice': 334.32, 'fulldayChange': 4.89,
+            'fulldayChangePercent': 1.485,
+        }, [330.0, 329.40, 333.02])
+        last, prev, _ = parse_yahoo_chart(payload)
+        quote = make_quote('SPX', '标普', '点', 2, last, prev, '2026-09-16', 'yahoo')
+        self.assertAlmostEqual(prev, 329.40, places=2)
+        self.assertAlmostEqual(quote['pct'], 1.10, places=2)
+
+    def test_last_historical_bar_is_previous_close_if_today_bar_missing(self):
+        payload = _legacy({}, [17.00, 16.91])
+        result = payload['chart']['result'][0]
+        result['meta']['regularMarketPrice'] = 17.20
+        result['timestamp'] = [1789349400, 1789435800]  # 9/14, 9/15；行情日期为 9/16
+        _last, prev, _ = parse_yahoo_chart(payload)
+        self.assertAlmostEqual(prev, 16.91, places=2)
+
+    def test_ambiguous_or_bad_reference_is_not_published(self):
+        payload = _legacy({
+            'regularMarketPrice': 17.2, 'fulldayPrice': 18.0,
+            'fulldayChangePercent': 1.715, 'chartPreviousClose': 34.106,
+        }, [17.2])
+        result = payload['chart']['result'][0]
+        result.pop('timestamp')
+        _last, prev, _ = parse_yahoo_chart(payload)
+        self.assertIsNone(prev)
+
+    def test_invalid_percent_does_not_raise_or_create_infinite_previous_close(self):
+        for value in (-100, float('nan'), float('inf'), 'not a number'):
+            with self.subTest(value=value):
+                payload = _legacy({'regularMarketChangePercent': value}, [17.2])
+                self.assertIsNone(parse_yahoo_chart(payload)[1])
 
     def test_none_inputs(self):
         self.assertIsNone(parse_yahoo_chart(None))

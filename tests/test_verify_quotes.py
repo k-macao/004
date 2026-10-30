@@ -12,6 +12,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -94,6 +95,50 @@ class TestIncidentRegression(unittest.TestCase):
             self.assertFalse(ok, '推送预检必须阻断错误数据')
         finally:
             os.unlink(path)
+
+
+class TestVIXIncident(unittest.TestCase):
+    def test_wrong_vix_change_still_fails_against_yahoo(self):
+        # The reported percentage was -49.57%; 34.106 is a synthetic
+        # previous close inferred from that number, not the original payload.
+        quote = q(17.20, 34.106)
+        yahoo = lambda: probe(17.20, pct=1.715, source='yahoo', family='yahoo')
+        item = verify_item('VIX', quote, [yahoo], FD)
+        self.assertEqual(item['verdict'], 'fail')
+        self.assertTrue(any(c['name'] == 'sources' and c['severity'] == 'fail' for c in item['checks']))
+
+    def test_yahoo_probe_pairs_regular_price_with_regular_percent(self):
+        import verify_quotes as vq
+        meta = {'regularMarketPrice': 333.02, 'regularMarketChangePercent': 1.099,
+                'fulldayPrice': 334.32, 'fulldayChangePercent': 1.485,
+                'regularMarketTime': 1789522200}
+        payload = {'chart': {'result': [{'meta': meta}]}}
+        with mock.patch.object(vq, 'http_get', return_value=json.dumps(payload)):
+            result = vq.probe_yahoo('TEST')
+        self.assertEqual(result['last'], 333.02)
+        self.assertEqual(result['pct'], 1.099)
+        # If the regular percentage is absent, a different full-day price
+        # cannot supply a comparable percentage.
+        meta.pop('regularMarketChangePercent')
+        with mock.patch.object(vq, 'http_get', return_value=json.dumps(payload)):
+            result = vq.probe_yahoo('TEST')
+        self.assertIsNone(result['pct'])
+
+    def test_price_only_source_does_not_claim_percentage_is_verified(self):
+        quote = q(17.20, 16.91)
+        item = verify_item('VIX', quote, [lambda: probe(17.20, source='yahoo', family='yahoo')], FD)
+        self.assertEqual(item['verdict'], 'warn')
+        self.assertTrue(any(c['name'] == 'percentage_sources' and c['severity'] == 'warn' for c in item['checks']))
+
+    def test_missing_previous_close_is_warn_not_an_invented_change(self):
+        quote = {'last': 17.2, 'prev_close': None, 'chg': None, 'pct': None, 'as_of': FD}
+        item = verify_item('VIX', quote, [lambda: probe(17.2, pct=1.715, source='yahoo', family='yahoo')], FD)
+        self.assertEqual(item['verdict'], 'warn')
+        self.assertTrue(any(c['name'] == 'internal_math' and c['severity'] == 'warn' for c in item['checks']))
+        quote['pct'] = -49.57
+        bad = verify_item('VIX', quote, [], FD)
+        self.assertEqual(bad['verdict'], 'fail')
+        self.assertTrue(any(c['name'] == 'internal_math' and c['severity'] == 'fail' for c in bad['checks']))
 
 
 class TestHappyPath(unittest.TestCase):
