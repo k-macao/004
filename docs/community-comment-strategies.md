@@ -14,6 +14,10 @@ Scrapling 公开页抓取组合：优先使用可核验的评论或热帖回复�
 | [kavv-hub/lihkg-crawler](https://github.com/kavv-hub/lihkg-crawler/tree/3f00f01c1c677597748de156d7e88dcad1923b9d) + [kitce/lihkg-api-core](https://github.com/kitce/lihkg-api-core/tree/ec64fe081332d22511376731d4b72343c6a9e708) | MIT / MIT | 参考公开列表、帖子与回复字段，独立实现只读 JSON 采样；财经台分类为 **15** | 非官方、可能变更或拒绝访问；没有认证、签名逆向或验证码处理 |
 | [praw-dev/praw](https://github.com/praw-dev/praw/tree/v8.0.3) | BSD-2-Clause | 可选安装真正的 PRAW 8.0.3，用用户获准的只读 OAuth 查询 4 个 Reddit 社区 | Reddit API 可能需要申请与平台批准；SDK、凭据、权限或网络缺失时不伪造结果 |
 | [NanmiCoder/MediaCrawler](https://github.com/NanmiCoder/MediaCrawler) | 上游当前为 **Non-Commercial Learning License 1.1**，仅非商业学习/研究 | 仅调研其多平台评论能力，**未安装、复制或调用** | 支持的平台往往需要登录状态，且非商业限制不适合默认纳入。若另行使用，须自行审查上游许可证及平台授权 |
+| [mikwielgus/forum-dl](https://github.com/mikwielgus/forum-dl/tree/f2168a89fc2a8b713626700d1e638016ff67623d) | MIT | 参考 phpBB 列表页 `.topictitle` 与帖子 `.post` / `.content` 的选择器，独立实现 Bogleheads 论坛的 html 采样；未复制上游代码 | 仅访问老旧 phpBB 暴露的公开页面；未登录、不绕过验证码或付费墙 |
+| [isdrchan/discuz-crawler](https://github.com/isdrchan/discuz-crawler) | 仓库未声明许可证 | 参考 Discuz 帖子回复 `postmessage_` / `pid` 的抓取结构，独立实现 Discuss.com.hk 财经板 html 采样；未安装上游包 | 非官方、可能变更或拒绝访问；Discuss.com.hk 对自动抓取的限制未知，仅读取首页列表 |
+| [TUVIMEN/forumscraper](https://github.com/TUVIMEN/forumscraper) | GNU GPL-3.0 | 仅调研其通用论坛抓取能力，**未安装、复制或调用** | 强 copyleft 不适合默认纳入；未在本项目使用 |
+| [zaxtyson/discuz](https://github.com/zaxtyson/discuz) | 仓库未声明许可证 | 仅调研其 Discuz 帖子/评论字段，**未安装、复制或调用** | 旧临时项目，未在本项目使用 |
 
 适配器没有把这些项目的代码复制进来；PRAW 是可选的外部 SDK。项目许可证与被采集平台的
 服务条款、数据使用权限是两回事；使用者须分别确认。上述接口在本执行环境不能直接访问，
@@ -34,28 +38,38 @@ Scrapling 公开页抓取组合：优先使用可核验的评论或热帖回复�
   `hot(limit=3)`；每帖设置 `comment_sort='top'` 和 `comment_limit=20`，只读取顶层评论，
   不调用 `replace_more`。仅接受有真实时间与未隐藏得分的 7 天内评论；按单个 subreddit 的实际 score
   排序，不跨站比较，也不声称是全站 Top。未来超过 5 分钟的时间戳会被丢弃。
+- **Bogleheads 论坛 (phpBB)**：访问 `viewforum.php?f=10`「投资 - 理论、新闻与一般」板块，取
+  可见回复数最多的前 3 帖；再进入帖可见页取首页前 20 条回复。用 `Replies` 计数作为热度
+  参考，不是单条回复的点赞；不抓取作者名，不跨站比较。列表页若给出分页链接，优先进入可见
+  末页，避免只读早年长话题的首页。回复本身嵌入引用、脚本、样式与隐藏块时只保留作者直文。
+- **Discuss.com.hk 财经板 (Discuz)**：访问 `forumdisplay.php?fid=115`，取可见回复数最多的前 3
+  帖；进入帖子取首页前 20 条回复。同样按所属帖回复数排序，不代表站内评论点赞或社区共识。
 - **公开页回退**：49 源仍走原有 CSS / 通用片段 / 自适应规则；普通页面命中财经主题只算
   `page_excerpt`，即便出现在“热评与公开摘录”栏目也不称为评论。
 
 每个源输出最多 3 条去重后的符合条件样本。`matched_comments` 是**本轮已读取样本里**符合条件
 的去重数量，不是站内总评论数；每条含帖子标题、文本、原帖/评论链接、发布时间或未知标记、
-指标名称/数值及采样范围。仅 PTT 和 LIHKG 的采样请求经过项目爬虫的每域并发上限和退避；
-PRAW 使用其自身 API 限速。主题可以在回复或所属帖子标题中，但词库情感只对回复文本打分。
-列表页、帖页和评论采样都有上限，可能遗漏更热或更相关的内容。
+指标名称/数值及采样范围。仅 PTT、LIHKG、Bogleheads 和 Discuss.com.hk 的采样请求经过
+项目爬虫的每域并发上限和退避；PRAW 使用其自身 API 限速。主题可以在回复或所属帖子标题中，
+但词库情感只对回复文本打分。列表页、帖页和评论采样都有上限，可能遗漏更热或更相关的内容。
 
 ## 3. 四小时快照、帖子间隔与重新分析
 
-- `community_snapshot.py` 是常规入口：首次采集后，将 49 源结果写入 `community_data.json`；
-  距上次采集尝试**未满四小时**时复用，满四小时后下一次运行才重新采集。时间由快照中的 UTC
-  `snapshot.attempted_at` 判断，不靠文件修改时间；写入采用同目录临时文件和原子替换。
-  采集器整体异常时写入 49 源「未获取」而不是把旧数据冒充新数据；失败尝试同样等待四小时，
-  避免五分钟报告循环持续请求目标网站。单个站点失败时其它成功结果仍保留。
-- GitHub Actions 使用跨运行的社区任务互斥锁，恢复/保存 Actions cache，并通过本次运行的
-  artifact 分发给部署和微信任务。`0 */4 * * *` 是独立的仅采集触发，不在同一时刻额外推送；
+- `community_snapshot.py` 是常规入口：首次采集后，把 49 源结果分别写入各自的 SQLite 数据库
+ （`community_store/01-futu.sqlite3` … `49-aastocks.sqlite3`，`id-key` 命名），再从 49 个库导出
+  静态 JSON 视图 `community_data.json`。距上次采集尝试**未满四小时**时复用，满四小时后下一次
+  运行才重新采集。时间由快照中的 UTC `snapshot.attempted_at` 判断，不靠文件修改时间；写入
+  采用每库独立事务 + 批次清单 `manifest.json` 的原子替换，只有全部 49 个库写入成功后新批次
+  才可见。采集器整体异常时写入 49 源「未获取」而不是把旧数据冒充新数据；失败尝试同样等待
+  四小时，避免五分钟报告循环持续请求目标网站。单个站点失败时其它成功结果仍保留。
+- GitHub Actions 使用跨运行的社区任务互斥锁，恢复/保存 `community_store/` 到 Actions cache，
+  并通过 artifact 分发给部署和微信任务；渲染/推送时用 `community_store.py --export` 从库重新
+  生成静态 JSON，不联网再抓取。`0 */4 * * *` 是独立的仅采集触发，不在同一时刻额外推送；
   原有的每五分钟和每日报告触发仍检查快照时效并负责发布。GitHub 定时任务可能延迟或漏跑、
   并发队列最多保留一个待运行任务，cache 也可能失效或被逐出，因此不是精确到秒的调度保证；
   快照丢失后下一次运行会重新采集。Actions cache 还受分支访问范围限制，不同分支的手动运行
-  不一定共享最新快照；独立本地进程之间也没有跨进程锁。
+  不一定共享最新快照；独立本地进程之间也没有跨进程锁。Actions cache 不是永久数据库，仅用于
+  运行间传递本次批次；`community_store/` 不提交到仓库。
 - 同一采集进程内，PTT/LIHKG 的帖子详情请求和 PRAW 的逐帖评论读取共享串行限速器，
   **上一次帖子读取结束后至少等待 10 秒才开始下一次**，即使来自不同站点或上次出错。
   PTT/LIHKG 底层传输重试也会限速；
@@ -72,10 +86,14 @@ PRAW 使用其自身 API 限速。主题可以在回复或所属帖子标题中�
 ## 4. 使用与诊断
 
 ```bash
-# 常规入口：到期才采集，并默认检查 robots；随后分别读取快照进行分析。
+# 常规入口：到期才采集，并默认检查 robots；再从 49 个社区库导出静态 JSON；随后分析。
 python3 community_snapshot.py
-python3 build_site.py
+python3 community_store.py --export --dir community_store --json community_data.json
+python3 build_site.py --community community_data.json
 python3 tools/wechat_push.py --dry-run
+
+# 从已有库导出静态 JSON，不联网再抓取（页面/推送前重新分析用）。
+python3 community_store.py --export --dir community_store --json community_data.json
 
 # 仅检查是否到期；排查时才手动绕过四小时缓存。
 python3 community_snapshot.py --plan
@@ -105,6 +123,11 @@ python3 -m unittest discover -s tests
   `not_configured`、`praw_not_installed`、`invalid_response`、`robots_disallowed`、
   `http_403` / `http_429` 等状态及样本数。HTTP/解析/权限失败不会覆盖成功的页面摘录。
   `requests_count_excludes_praw=true` 表示 SDK 内部请求不计入爬虫请求数。
+
+`community_store/` 中每个社区一个 SQLite 库（`01-futu.sqlite3` … `49-aastocks.sqlite3`），
+  每库只包含当前已提交批次的那条记录；`manifest.json` 记录批次 id、49 个库文件名与摘要。
+  导出静态 JSON 时，任何缺失、损坏或不属于当前批次的库只让对应源标记「未获取」，不回退
+  旧数据；所有 49 个库写入成功后批次才对外可见。
 
 `fetch_date` /「抓取核验」是 **UTC 采集批次启动日期**，不是帖子发布时间；批次跨午夜时后续请求
 可能在次日完成。仅 LIHKG / Reddit 的

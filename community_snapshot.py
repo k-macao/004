@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Four-hour community snapshot cache shared by page and push jobs.
+"""Four-hour community collector shared by page and push jobs.
 
-This module does not rely on file mtime: the actual attempt time is stored in
-JSON and remains unchanged on reuse. GitHub Actions serializes collectors and
-caches this file between workflow runs; each run distributes it as an artifact.
+The CLI stores each community in its own SQLite database and exports a static
+JSON view. Capture timestamps, not file mtimes, determine reuse. GitHub Actions
+serializes collection and distributes the databases to render/push jobs.
 """
 from __future__ import annotations
 
@@ -114,16 +114,39 @@ def _write_atomic(path, data):
             os.unlink(temp_path)
 
 
-def ensure_snapshot(path, now=None, fetcher=None, force=False):
+def _stored_or_legacy(path, store_dir):
+    """Prefer committed databases; only migrate JSON when no manifest exists."""
+    if store_dir is not None:
+        import community_store as store
+        existing = store.load_snapshot(store_dir)
+        if existing is not None:
+            return existing, 'store'
+        # A damaged manifest is not a license to resurrect an older JSON file.
+        if os.path.exists(os.path.join(store_dir, store.MANIFEST_NAME)):
+            return None, 'invalid_store'
+    return read_snapshot(path), 'legacy'
+
+
+def ensure_snapshot(path, now=None, fetcher=None, force=False, store_dir=None):
     """Reuse a fresh snapshot or perform one bounded collection.
 
-    On collector failure, write an explicit offline dataset rather than serving
-    old data as current. The failed attempt is cached for the same interval so
-    an outage does not cause every five-minute report job to hammer the sites.
+    If store_dir is supplied, databases are authoritative and JSON is an
+    atomic static export. Fresh legacy JSON is migrated without recrawling.
+    On collection failure, write an explicit offline batch for four hours.
     """
     now = _utc(now)
-    existing = read_snapshot(path)
+    existing, origin = _stored_or_legacy(path, store_dir)
     if not force and snapshot_is_fresh(existing, now=now):
+        if store_dir is not None:
+            if origin == 'legacy':
+                import community_store as store
+                store.save_snapshot(store_dir, existing)
+                existing = store.load_snapshot(store_dir)
+                _write_atomic(path, existing)
+                return {'action': 'migrated', 'written': True, 'data': existing}
+            # Recreate the disposable JSON export even if it is missing or
+            # older than the database batch. Never recrawl while fresh.
+            _write_atomic(path, existing)
         return {'action': 'reused', 'written': False, 'data': existing}
     attempted_at = now.isoformat(timespec='seconds').replace('+00:00', 'Z')
     try:
@@ -155,6 +178,12 @@ def ensure_snapshot(path, now=None, fetcher=None, force=False):
     }
     if error:
         data['snapshot']['error_type'] = error
+    if store_dir is not None:
+        import community_store as store
+        store.save_snapshot(store_dir, data)
+        data = store.load_snapshot(store_dir)
+        if not snapshot_is_fresh(data, now=now):
+            raise store.StoreError('committed community batch cannot be read')
     _write_atomic(path, data)
     return {'action': 'refreshed' if status == 'ok' else 'collector_error',
             'written': True, 'data': data}
@@ -181,14 +210,18 @@ def _install_optional_praw():
 
 def main():
     parser = argparse.ArgumentParser(description='49 源社区采集快照：每四小时最多更新一次')
-    parser.add_argument('--json', default='community_data.json', help='快照文件路径')
+    parser.add_argument('--json', default='community_data.json', help='静态 JSON 导出路径')
+    parser.add_argument('--store-dir', default=None,
+                        help='社区数据库目录（默认与 JSON 同目录下的 community_store）')
     parser.add_argument('--plan', action='store_true', help='仅检查缓存是否需要更新，不抓取')
     parser.add_argument('--force', action='store_true', help='手动强制采集，绕过四小时缓存')
     parser.add_argument('--install-praw-if-configured', action='store_true',
                         help='需要采集且凭据齐全时安装可选 PRAW（CI 使用）')
     args = parser.parse_args()
+    store_dir = args.store_dir or os.path.join(os.path.dirname(os.path.abspath(args.json)), 'community_store')
     if args.plan:
-        refresh = args.force or not snapshot_is_fresh(read_snapshot(args.json))
+        existing, _ = _stored_or_legacy(args.json, store_dir)
+        refresh = args.force or not snapshot_is_fresh(existing)
         _set_output('refresh', str(refresh).lower())
         print('社区快照：' + ('需要更新' if refresh else '四小时内已采集，复用'))
         return
@@ -198,9 +231,9 @@ def main():
             _install_optional_praw()
         return cd.generate_all_communities(market={}, now=now, obey_robots=True)
 
-    result = ensure_snapshot(args.json, force=args.force, fetcher=fetch)
+    result = ensure_snapshot(args.json, force=args.force, fetcher=fetch, store_dir=store_dir)
     _set_output('written', str(result['written']).lower())
-    print(f"社区快照：{result['action']} · {result['data']['snapshot']['attempted_at']} · {args.json}")
+    print(f"社区快照：{result['action']} · {result['data']['snapshot']['attempted_at']} · {store_dir} → {args.json}")
 
 
 if __name__ == '__main__':

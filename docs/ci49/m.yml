@@ -10,7 +10,8 @@
 #
 # 动态抓取管线 (每次运行均执行, 真正上线 — 行情+社区双动态):
 #   market_data.py      → market_data.json      (Yahoo Finance / Stooq 多源回退抓取最新行情)
-#   community_snapshot.py → community_data.json (四小时一次；帖子详情间隔 10 秒；失败标注未获取)
+#   community_snapshot.py → community_store/*.sqlite3 (49 独立库；四小时一次；帖子间隔 10 秒)
+#   community_store.py → community_data.json (从库导出静态快照，页面和推送读取后重新分析)
 #   tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md (量化平台舆情接口实测评分)
 #   sentiment_factors.py → sentiment_data.json (聚宽/米筐/掘金/优矿 + 免费兜底源舆情·新闻因子；境内取不到则 --mock 降级)
 #   build_site.py       → report.html           (把行情+社区+抓取日期注入页面与推送内容)
@@ -64,7 +65,17 @@ jobs:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
 
-      - name: 🗂️ 恢复社区采集快照
+      - name: 🗂️ 恢复 49 个社区数据库
+        uses: actions/cache/restore@v4
+        with:
+          path: community_store/
+          key: community-store-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            community-store-v1-
+
+      # One-time migration: a fresh v1 JSON snapshot is split into databases
+      # without collecting the same sources again within four hours.
+      - name: 🗂️ 恢复旧格式快照（仅用于首次迁移）
         uses: actions/cache/restore@v4
         with:
           path: community_data.json
@@ -85,18 +96,18 @@ jobs:
         # SDK 安装与到期判断在同一进程中完成，避免临界时刻检查与采集之间跨过四小时。
         run: python3 community_snapshot.py --install-praw-if-configured
 
-      - name: 💾 保存社区快照
+      - name: 💾 保存 49 个社区数据库
         if: ${{ steps.snapshot.outputs.written == 'true' }}
         uses: actions/cache/save@v4
         with:
-          path: community_data.json
-          key: community-snapshot-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          path: community_store/
+          key: community-store-v1-${{ github.run_id }}-${{ github.run_attempt }}
 
-      - name: 📤 分发本轮社区快照
+      - name: 📤 分发本轮社区数据库
         uses: actions/upload-artifact@v4
         with:
           name: community-snapshot
-          path: community_data.json
+          path: community_store/
           if-no-files-found: error
           retention-days: 1
 
@@ -128,7 +139,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: community-snapshot
-          path: .
+          path: community_store/
+
+      - name: 🗃️ 从社区数据库生成静态数据（不重新抓取）
+        run: python3 community_store.py --export --dir community_store --json community_data.json
 
       - name: 🔬 舆情接口实测 (tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md)
         run: python3 tools/probe_sentiment_apis.py --mock
@@ -222,7 +236,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: community-snapshot
-          path: .
+          path: community_store/
+
+      - name: 🗃️ 从社区数据库生成静态数据（不重新抓取）
+        run: python3 community_store.py --export --dir community_store --json community_data.json
 
       - name: 🔬 舆情接口实测 (tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md)
         run: python3 tools/probe_sentiment_apis.py --mock
@@ -297,7 +314,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: community-snapshot
-          path: .
+          path: community_store/
+
+      - name: 🗃️ 从社区数据库生成静态数据（不重新抓取）
+        run: python3 community_store.py --export --dir community_store --json community_data.json
 
       - name: 🔬 舆情接口实测 (tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md)
         run: python3 tools/probe_sentiment_apis.py --mock

@@ -16,7 +16,7 @@ import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin, urlparse
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import scrapling_core as sc
 import community_spider as common
@@ -28,6 +28,8 @@ COMMENT_MAX_AGE_DAYS = 7
 POST_INTERVAL_SECONDS = 10.0
 LIHKG_LIST_URL = 'https://lihkg.com/api_v2/thread/category?cat_id=15&page=1&count=20&type=now'
 LIHKG_HEADERS = {'Accept': 'application/json', 'X-LI-DEVICE-TYPE': 'browser'}
+BOGLEHEADS_BOARD = 'https://www.bogleheads.org/forum/viewforum.php?f=10'
+DISCUSS_HOSTS = ('www.discuss.com.hk', 'discuss.com.hk', 'finance.discuss.com.hk')
 REDDIT_SUBREDDITS = {
     'REDDIT': 'ChinaStocks', 'RINVESTING': 'investing',
     'ROPTIONS': 'options', 'RCRYPTO': 'CryptoCurrency',
@@ -81,6 +83,19 @@ def _is_lihkg(comm):
     url = comm.get('url', '')
     return (comm.get('key') == 'LIHKG' and _host(url) in ('lihkg.com', 'www.lihkg.com')
             and urlparse(url).path.rstrip('/') == '/category/15')
+
+
+def _is_bogleheads(comm):
+    url = comm.get('url', '')
+    return (comm.get('key') == 'BOGLEHEADS' and _host(url) in ('www.bogleheads.org', 'bogleheads.org')
+            and urlparse(url).path == '/forum/index.php')
+
+
+def _is_discuss(comm):
+    url = comm.get('url', '')
+    parsed = urlparse(url)
+    return (comm.get('key') == 'DISCUSS' and _host(url) in DISCUSS_HOSTS
+            and parsed.path == '/forumdisplay.php' and parse_qs(parsed.query).get('fid') == ['115'])
 
 
 def _is_reddit(comm):
@@ -273,6 +288,158 @@ def parse_lihkg_replies(response, thread, now=None, max_age_days=COMMENT_MAX_AGE
     return comments
 
 
+def _thread_url(href, base, hosts, path, id_field, allowed_forum=None):
+    """Allow only a same-site thread ID; discard tracking and pagination URLs."""
+    try:
+        url = urljoin(base, str(href or ''))
+        parsed = urlparse(url)
+        query = parse_qs(parsed.query)
+        ident = query.get(id_field, [])
+        if (parsed.scheme != 'https' or _host(url) not in hosts or parsed.path != path
+                or parsed.username is not None or parsed.password is not None or parsed.port not in (None, 443)
+                or len(ident) != 1 or not re.fullmatch(r'\d+', ident[0])):
+            return None
+        if allowed_forum and query.get('f', [allowed_forum]) != [allowed_forum]:
+            return None
+        return parsed.hostname, ident[0]
+    except ValueError:
+        return None
+
+
+def _reply_count(node, selector):
+    # Accept an explicit numeric counter only; a missing/abbreviated number is
+    # not a reason to invent hotness or treat a read-only announcement as a post.
+    text = _first_text(node, selector).replace(',', '')
+    match = re.fullmatch(r'(?:(?:Replies?|回复|回覆)\s*)?(\d+)(?:\s*(?:Replies?|回复|回覆))?',
+                         text, flags=re.I)
+    return int(match.group(1)) if match else None
+
+
+def bogleheads_thread_choices(response):
+    """phpBB board: up to three same-board threads by visible reply count."""
+    threads = []
+    for index, row in enumerate(itertools.islice(response.css('li.row'), 50)):
+        link = row.css('a.topictitle')
+        replies = _reply_count(row, '.posts')
+        if not link or replies is None or replies <= 0:
+            continue
+        title = common.strip_noise(link.first.get_all_text(separator=' ', strip=True))[:120]
+        parsed = _thread_url(link.first.attrib.get('href'), response.url,
+                             ('www.bogleheads.org', 'bogleheads.org'), '/forum/viewtopic.php', 't', '10')
+        if not parsed or not title:
+            continue
+        _, ident = parsed
+        # If the board exposes pagination, read its latest visible page rather
+        # than the opening page of a possibly years-old long-running topic.
+        last_start = 0
+        for page_link in row.css('a[href*="viewtopic.php"]'):
+            try:
+                page_url = urljoin(response.url, page_link.attrib.get('href') or '')
+            except ValueError:
+                continue
+            page_id = _thread_url(page_url, response.url, ('www.bogleheads.org', 'bogleheads.org'),
+                                  '/forum/viewtopic.php', 't', '10')
+            if not page_id or page_id[1] != ident:
+                continue
+            starts = parse_qs(urlparse(page_url).query).get('start', [])
+            if len(starts) == 1 and re.fullmatch(r'\d{1,7}', starts[0]):
+                last_start = max(last_start, int(starts[0]))
+        suffix = f'&start={last_start}' if last_start else ''
+        threads.append({'id': ident, 'title': title, 'replies': replies, 'index': index,
+                        'later_page': bool(last_start),
+                        'url': f'https://www.bogleheads.org/forum/viewtopic.php?f=10&t={ident}{suffix}'})
+    threads.sort(key=lambda t: (-t['replies'], t['index']))
+    unique = {}
+    for thread in threads:
+        unique.setdefault(thread['id'], thread)
+    return list(unique.values())[:MAX_THREADS]
+
+
+def discuss_thread_choices(response):
+    """Discuz board: up to three thread IDs with explicit visible reply counts."""
+    threads = []
+    for index, row in enumerate(itertools.islice(response.css('tbody[id^="normalthread_"]'), 50)):
+        replies = _reply_count(row, 'td.nums strong')
+        if replies is None or replies <= 0:
+            continue
+        for link in row.css('th.subject a'):
+            title = common.strip_noise(link.get_all_text(separator=' ', strip=True))[:120]
+            parsed = _thread_url(link.attrib.get('href'), response.url, DISCUSS_HOSTS, '/viewthread.php', 'tid')
+            if not parsed or not title:
+                continue
+            host, ident = parsed
+            if row.attrib.get('id') != f'normalthread_{ident}':
+                continue
+            threads.append({'id': ident, 'title': title, 'replies': replies, 'index': index,
+                            'url': f'https://{host}/viewthread.php?tid={ident}&page=1'})
+            break
+    threads.sort(key=lambda t: (-t['replies'], t['index']))
+    unique = {}
+    for thread in threads:
+        unique.setdefault(thread['id'], thread)
+    return list(unique.values())[:MAX_THREADS]
+
+
+def _own_post_text(selector):
+    """Exclude embedded quotes and hidden/script blocks from the author's text."""
+    pieces = []
+    def walk(node):
+        classes = set((node.attrib.get('class') or '').lower().split())
+        style = (node.attrib.get('style') or '').lower().replace(' ', '')
+        if (node.tag.lower() in ('blockquote', 'script', 'style', 'noscript', 'svg', 'iframe')
+                or classes.intersection(('quote', 'quotecontent', 'hidecontent', 'locked'))
+                or 'display:none' in style or 'visibility:hidden' in style
+                or 'hidden' in node.attrib or node.attrib.get('aria-hidden') == 'true'):
+            return
+        if node.text:
+            pieces.append(node.text)
+        for child in node.children:
+            walk(child)
+            if child.tail:
+                pieces.append(child.tail)
+    walk(selector._root)
+    return common.strip_noise(' '.join(pieces))
+
+
+def parse_forum_replies(response, thread, strategy):
+    """Parse bounded phpBB/Discuz replies; never claim per-reply popularity."""
+    if strategy == 'phpbb_html':
+        posts, id_pattern = response.css('div.post'), r'p(\d+)'
+        content_selector = '.content'
+    elif strategy == 'discuz_html':
+        posts, id_pattern = response.css('div[id^="postmessage_"], td[id^="postmessage_"]'), r'postmessage_(\d+)'
+        content_selector = None
+    else:
+        return []
+    comments = []
+    # Skip the first visible post conservatively: on page 1 it is the opening
+    # message; on a later page it can be a reply, which is merely omitted.
+    for index, post in enumerate(itertools.islice(posts, 1, MAX_COMMENTS_PER_THREAD + 1)):
+        match = re.fullmatch(id_pattern, str(post.attrib.get('id') or ''))
+        body = post.css(content_selector).first if content_selector else post
+        if not match or body is None:
+            continue
+        text = _own_post_text(body)
+        if not _useful_comment(text[:common.MAX_SNIPPET], thread['title']):
+            continue
+        post_id = match.group(1)
+        fragment = f'p{post_id}' if strategy == 'phpbb_html' else f'pid{post_id}'
+        comments.append({
+            'text': text[:common.MAX_SNIPPET], 'text_truncated': len(text) > common.MAX_SNIPPET,
+            'post_title': thread['title'], 'url': f"{thread['url']}#{fragment}",
+            'published_at': '', 'published_label': '发布时间未知',
+            'http_status': response.status, 'response_bytes': len(response.body or b''),
+            'kind': 'thread_reply', 'strategy': strategy,
+            'metric': {'type': 'thread_reply_count', 'value': thread['replies'],
+                       'label': f"所属帖回复数 {thread['replies']}（非回复点赞）"},
+            'scope': ('当前版块列表前 50 条中最多 3 个高回复帖，各取可见末页前 20 条回复；不代表全站排行'
+                      if thread.get('later_page') else
+                      '当前版块列表前 50 条中最多 3 个高回复帖，各取第一页前 20 条回复；不代表全站排行'),
+            '_rank': thread['replies'], '_order': index,
+        })
+    return comments
+
+
 def _finish_candidates(items):
     """Deterministic within-source sorting and deduplication; never mix metrics across sites."""
     ordered = sorted(items, key=lambda x: (-x['_rank'], x['url'], x['_order'], x['text']))
@@ -328,6 +495,14 @@ class CommentSpider(sc.Spider):
                 yield sc.Request(LIHKG_LIST_URL, callback=self.parse_lihkg_index,
                                  meta={'key': key, 'stage': 'index'}, headers=LIHKG_HEADERS,
                                  follow_redirects=False)
+            elif _is_bogleheads(comm):
+                self.attempts[key] = {'strategy': 'phpbb_html', 'status': 'no_comments'}
+                yield sc.Request(BOGLEHEADS_BOARD, callback=self.parse_forum_index,
+                                 meta={'key': key, 'stage': 'index'}, follow_redirects=False)
+            elif _is_discuss(comm):
+                self.attempts[key] = {'strategy': 'discuz_html', 'status': 'no_comments'}
+                yield sc.Request(url, callback=self.parse_forum_index,
+                                 meta={'key': key, 'stage': 'index'}, follow_redirects=False)
 
     def parse(self, response):
         return []
@@ -373,6 +548,29 @@ class CommentSpider(sc.Spider):
             self.attempts['LIHKG']['status'] = 'invalid_response'
         else:
             self.candidates.setdefault('LIHKG', []).extend(comments)
+        return []
+
+    def parse_forum_index(self, response):
+        key = response.request.meta['key']
+        hosts = ('www.bogleheads.org', 'bogleheads.org') if key == 'BOGLEHEADS' else DISCUSS_HOSTS
+        if not response.ok or _host(response.url) not in hosts:
+            self.attempts[key]['status'] = f'http_{response.status}'
+            return
+        choices = bogleheads_thread_choices(response) if key == 'BOGLEHEADS' else discuss_thread_choices(response)
+        for thread in choices:
+            yield sc.Request(thread['url'], callback=self.parse_forum_thread,
+                             meta={'key': key, 'stage': 'thread', 'thread': thread},
+                             transport=self._detail_transport, follow_redirects=False)
+
+    def parse_forum_thread(self, response):
+        key = response.request.meta['key']
+        hosts = ('www.bogleheads.org', 'bogleheads.org') if key == 'BOGLEHEADS' else DISCUSS_HOSTS
+        if not response.ok or _host(response.url) not in hosts:
+            self.attempts[key]['status'] = f'http_{response.status}'
+            return []
+        strategy = self.attempts[key]['strategy']
+        self.candidates.setdefault(key, []).extend(
+            parse_forum_replies(response, response.request.meta['thread'], strategy))
         return []
 
     def on_error(self, request, error):
@@ -491,7 +689,8 @@ def collect_comments(communities, session=None, timeout=10, retries=2, concurren
                      download_delay=0.15, now=None, post_limiter=None):
     """Collect bounded comments. Returns (per-source outcomes, crawler stats)."""
     post_limiter = post_limiter or PostInterval()
-    sources = [c for c in communities if _is_ptt(c) or _is_lihkg(c)]
+    sources = [c for c in communities if _is_ptt(c) or _is_lihkg(c)
+               or _is_bogleheads(c) or _is_discuss(c)]
     outcomes, stats = {}, {'requests_count': 0, 'robots_disallowed_count': 0, 'blocked_requests_count': 0}
     if sources:
         spider = CommentSpider(sources, session=session, now=now, post_limiter=post_limiter)
@@ -510,8 +709,10 @@ def collect_comments(communities, session=None, timeout=10, retries=2, concurren
             outcomes = spider.results()
             for comm in sources:
                 key = comm['key']
+                strategies = {'PTT': 'ptt_html', 'LIHKG': 'lihkg_api',
+                              'BOGLEHEADS': 'phpbb_html', 'DISCUSS': 'discuz_html'}
                 outcome = outcomes.setdefault(key, {'comments': [], 'attempt': {
-                    'strategy': 'ptt_html' if key == 'PTT' else 'lihkg_api', 'matched_comments': 0}})
+                    'strategy': strategies[key], 'matched_comments': 0}})
                 outcome['attempt']['status'] = 'partial' if outcome['comments'] else 'engine_error'
             stats['error'] = type(exc).__name__
     try:
