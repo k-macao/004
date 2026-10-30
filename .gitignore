@@ -34,3 +34,6 @@ eink_preview/
 .crawl/
 .crawl*/
 dev_cache/
+
+# 49 社区 SQLite 数据库与批次清单（Actions 缓存；不提交评论数据）
+community_store/
