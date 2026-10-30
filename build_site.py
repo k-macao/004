@@ -65,6 +65,7 @@ AI 预测注入 (04 节):
       若本地误提交了构建产物，构建会明确报错，恢复: git checkout -- report.html
 """
 import argparse
+import html as html_mod
 import json
 import os
 import re
@@ -322,16 +323,19 @@ def _community_fetch_status(cdata):
     gen = cdata.get('generated_at') or ''
     fetch_date = cdata.get('fetch_date') or ''
     mode = cdata.get('mode') or ''
+    coverage = (f' · 采样评论/热帖回复 {summary.get("comment_sources", 0)} 源'
+                f'，普通页摘录 {summary.get("page_excerpt_sources", 0)} 源（非热评）'
+                if 'comment_sources' in summary else '')
     if mode == 'demo':
-        return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen} · 核验日期 {fetch_date}'
+        return f'本地演示模式（{total} 条演示样本，非实盘抓取）· 生成于 {gen} · 样本日期 {fetch_date}'
     if ok is None:
         return f'社区数据已加载 · 生成于 {gen} · 核验日期 {fetch_date}'
     if total == ok and total > 0:
-        return f'{ok}/{total} 个社区源实抓成功 · 抓取于 {gen} · 核验日期 {fetch_date}'
+        return f'{ok}/{total} 个社区源实抓成功{coverage} · 抓取于 {gen} · 核验日期 {fetch_date}'
     if ok == 0:
         return (f'0/{total} 个社区实抓成功（受站点风控或未检出财经讨论正文，已全部如实标注「未获取」，'
                 f'不编造热评）· 抓取于 {gen} · 核验日期 {fetch_date}')
-    return (f'{ok}/{total} 个社区实抓成功，其余 {total - ok} 个如实标注「未获取」（不回填模板）'
+    return (f'{ok}/{total} 个社区实抓成功，其余 {total - ok} 个如实标注「未获取」（不回填模板）{coverage}'
             f' · 抓取于 {gen} · 核验日期 {fetch_date}')
 
 
@@ -401,6 +405,36 @@ def build_ai_quant_html(text, market=None, hint=None, compact=False, note=''):
     return quant_pair.render_web(rec, compact=compact, note=note)
 
 
+def community_evidence_html(c):
+    """Render bounded comment samples and safe provenance links (never HTML from the source)."""
+    comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
+    url = community_mod.safe_source_url(c.get('source_url'))
+    link = (f'<a href="{html_mod.escape(url, quote=True)}" target="_blank" '
+            f'rel="noopener noreferrer">查看原帖/原页</a>') if url else ''
+    if not comments:
+        return f'  <div class="pub-meta">{link}</div>\n' if link else ''
+    first = comments[0]
+    details = [first.get('published_label') or '发布时间未知', first.get('scope') or '有限样本']
+    if c.get('matched_comments') is not None:
+        details.append(f"本次匹配 {c.get('matched_comments')} 条，展示 {len(comments)} 条")
+    detail_html = _esc(' · '.join(str(x) for x in details if x))
+    parts = [f'  <div class="pub-meta">{detail_html}{" · " + link if link else ""}</div>\n']
+    if len(comments) > 1:
+        parts.append('  <div class="pub-meta">其他采样回复：</div>\n  <ul class="pixel-list">\n')
+        for item in comments[1:]:
+            text = _esc((item.get('text') or '') + ('…' if item.get('text_truncated') else ''))
+            title = _esc(item.get('post_title') or '')
+            metric = _esc((item.get('metric') or {}).get('label') or '热度未知')
+            published = _esc(item.get('published_label') or '发布时间未知')
+            item_url = community_mod.safe_source_url(item.get('url'))
+            item_link = (f' · <a href="{html_mod.escape(item_url, quote=True)}" target="_blank" '
+                         f'rel="noopener noreferrer">原帖</a>') if item_url else ''
+            parts.append(f'    <li>【{title}】{text} <span class="pub-meta">'
+                         f'{metric} · {published}{item_link}</span></li>\n')
+        parts.append('  </ul>\n')
+    return ''.join(parts)
+
+
 def build_community_html(communities, market=None):
     """根据 community_data.json 生成 49 个社区的 HTML 列表（实抓源展示摘录与词库指标，未获取源诚实标注且不编造指标）。"""
     html_parts = []
@@ -420,6 +454,9 @@ def build_community_html(communities, market=None):
         meta = _esc(c.get('meta') or default_meta)
 
         if is_avail:
+            quote_label = {'comment': '采样评论', 'thread_reply': '热帖回复',
+                           'demo': '演示样本'}.get(c.get('content_kind'), '公开页摘录（未核验为评论）')
+            evidence_html = community_evidence_html(c)
             quant_html = build_quant_html(quant)
             event = ((quant or {}).get('event') or {}).get('label') or ''
             ai_html = build_ai_quant_html(
@@ -434,7 +471,8 @@ def build_community_html(communities, market=None):
             article = (
                 f'<article class="pub-card" data-verdict="{_esc(vclass)}">\n'
                 f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
-                f'  <p class="pub-quote"><strong>公开页实抓摘录：</strong>{quote}</p>\n'
+                f'  <p class="pub-quote"><strong>{quote_label}：</strong>{quote}</p>\n'
+                f'{evidence_html}'
                 f'{verdict_block}'
                 f'{quant_line}'
                 f'{ai_line}'
@@ -1137,9 +1175,9 @@ def main():
             with open(args.community, encoding='utf-8') as f:
                 community_data = json.load(f)
         except ValueError as e:
-            print(f'警告: {args.community} 解析失败({e})，社区将回退到模板静态内容', file=sys.stderr)
+            print(f'警告: {args.community} 解析失败({e})，社区将标记为未获取', file=sys.stderr)
     else:
-        print(f'警告: 未找到 {args.community}，社区将回退到模板静态内容；请先运行 python3 community_data.py',
+        print(f'警告: 未找到 {args.community}，社区将标记为未获取；请先运行 python3 community_data.py',
               file=sys.stderr)
 
     sentiment_data = {}

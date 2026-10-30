@@ -12,7 +12,7 @@
   • DevCache                 —— 开发模式缓存当次响应，离线/重复调试不再重复打站点；
   • CheckpointManager        —— 断点续爬（默认关闭；传 --crawl-dir 才开启）；
   • Selector + Adaptive      —— CSS 候选选择器 + 元素指纹（SQLite）自适应回捞：
-                                站点改版后仍能定位到同一块「最新热评」；
+                                站点改版后尝试回捞相似页面摘录，不保证是评论；
   • Convertor                —— 噪音/隐藏内容清洗 + HTML→Markdown，抽取干净的活数据片段。
 
 抽取口径（与社区数据层同一套反陈旧口径）：
@@ -50,6 +50,8 @@ TOPIC_KEYWORDS = (
     '恒指', '恒生', '港股', '恒科', '国企指数', '南向', '北水', '港元', '港交所',
     '恒生指數', '港股通', '中概', 'adr', '腾讯', '阿里', '美团', '小米', '比亚迪',
     '恆指', '恆生', '比亞迪', '騰訊', '牛熊', '窩輪', '窝轮', '蓝筹', '紅籌', '红筹',
+    '指數', '大盤', '股價', '台股', '權值股', '殖利率',
+    '資金', '籌碼', '成交量', '投資', '買進', '賣出', '跌停', '漲停',
     # 中文宏观 / 交易 / 资产配置术语
     'A股', '沪深', '美股', '纳指', '标普', '道指', '股票', '股市', '指数', '大盘',
     '基金', 'etf', '可转债', '转债', '套利', '打新', '估值', '股息', '红利', '分红',
@@ -169,15 +171,14 @@ def real_scrapling_transport():
         return None
 
     def transport(method, url, headers, timeout, proxy=None, body=None):
-        kwargs = {'timeout': max(int(timeout), 1), 'retries': 1}
+        # Redirects are handled by FetcherSession, which can disable them for
+        # comment-detail requests. Never let the optional backend bypass that.
+        kwargs = {'timeout': max(int(timeout), 1), 'retries': 1, 'follow_redirects': False}
         if proxy:
             kwargs['proxy'] = proxy
         if headers:
             kwargs['headers'] = headers
-        try:
-            response = Fetcher.get(url, **kwargs)
-        except TypeError:
-            response = Fetcher.get(url)
+        response = Fetcher.get(url, **kwargs)
         return (response.status, getattr(response, 'reason', '') or '',
                 dict(getattr(response, 'headers', {}) or {}), response.body, url)
     return transport
@@ -380,6 +381,7 @@ class CommunitySpider(sc.Spider):
             'ok': valid_ok, 'topic_hits': topic_hits,
             'title': title, 'snippet': snippet if valid_ok else '', 'selector': used_selector if valid_ok else '',
             'adaptive': adaptive_hit and valid_ok, 'bytes': len(response.body or b''),
+            'content_kind': 'page_excerpt', 'strategy': 'scrapling_page',
             'error': err_reason,
         }
         yield self.results[key]
@@ -392,7 +394,7 @@ class CommunitySpider(sc.Spider):
         key = meta.get('key') or ''
         self.results[key] = {
             'key': key, 'id': meta.get('id', ''), 'name': meta.get('name', key),
-            'ctype': meta.get('ctype', ''), 'url': request.url, 'status': 0, 'ok': False,
+            'ctype': meta.get('ctype', ''), 'url': request.url, 'status': getattr(error, 'status', 0) or 0, 'ok': False,
             'title': '', 'snippet': '', 'selector': '', 'adaptive': False, 'bytes': 0,
             'error': str(error)[:200],
         }
@@ -422,7 +424,7 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                         obey_robots: bool = False, crawldir: str = None, session=None,
                         verbose: bool = True, backend: str = 'auto',
                         autothrottle: bool = True, max_blocked_retries: int = 2,
-                        download_delay: float = 0.15):
+                        download_delay: float = 0.15, now=None, comment_strategies: bool = True):
     """跑一轮社区抓取：返回 (结果字典, 统计字典)。
 
     结果字典形如 {key: {'snippet': ..., 'status': ..., 'adaptive': ..., 'selector': ...}}；
@@ -430,7 +432,9 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     """
     communities = list(communities) if communities else load_communities(limit)
     backend_name, transport = ('injected', None) if session is not None else resolve_backend(backend)
-    if session is None and transport is not None:
+    if session is None:
+        # Share one transport with the comment adapters so injected sessions,
+        # timeouts and the selected backend apply to every HTTP request.
         session = sc.FetcherSession(transport=transport, timeout=timeout, retries=retries,
                                     retry_delay=0.5, respect_retry_after=True)
     spider = CommunitySpider(communities, storage_file=storage_file, adaptive=adaptive,
@@ -458,7 +462,53 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                 'ok': False, 'title': '', 'snippet': '', 'selector': '', 'adaptive': False,
                 'bytes': 0, 'error': 'no_response',
             }
+    # Prefer actual, attributable comments over the generic page excerpt. A
+    # failed adapter never suppresses an otherwise valid base-page result.
+    comment_stats = {'attempted_sources': 0, 'comment_sources': 0, 'matched_comments': 0,
+                     'requests_count': 0, 'attempts': {}}
+    if comment_strategies:
+        try:
+            import community_comments as comment_mod
+            outcomes, comment_stats = comment_mod.collect_comments(
+                communities, session=session, timeout=timeout, retries=retries,
+                concurrency=concurrency, obey_robots=obey_robots, autothrottle=autothrottle,
+                max_blocked_retries=max_blocked_retries, download_delay=download_delay, now=now)
+            for key, outcome in outcomes.items():
+                item = spider.results.get(key)
+                if item is None:
+                    continue
+                item['comment_attempt'] = outcome['attempt']
+                comments = outcome['comments']
+                if not comments:
+                    continue
+                first = comments[0]
+                item.update({
+                    'ok': True, 'http_ok': True,
+                    # PRAW does not expose HTTP status or response bytes; do not reuse page metadata.
+                    'status': first.get('http_status', 0), 'bytes': first.get('response_bytes'),
+                    'url': first['url'], 'title': first['post_title'], 'snippet': first['text'],
+                    'topic_hits': count_topic_hits(first['post_title'] + ' ' + first['text']),
+                    'selector': first['strategy'], 'adaptive': False, 'error': '',
+                    'content_kind': first['kind'], 'strategy': first['strategy'],
+                    'comments': comments,
+                    'matched_comments': outcome['attempt']['matched_comments'],
+                })
+        except Exception as exc:  # an optional adapter must not interrupt the report
+            comment_stats['error'] = type(exc).__name__
+            if verbose:
+                print(f'  ⚠️ 评论采集适配器失败（{type(exc).__name__}），保留公开页摘录', file=sys.stderr)
+
     stats = result.stats.to_dict()
+    for field in ('requests_count', 'blocked_requests_count', 'robots_disallowed_count',
+                  'failed_requests_count', 'response_bytes'):
+        stats[field] = stats.get(field, 0) + comment_stats.get(field, 0)
+    for status, count in comment_stats.get('response_status_count', {}).items():
+        status_counts = stats.setdefault('response_status_count', {})
+        status_counts[status] = status_counts.get(status, 0) + count
+    elapsed = max(time.time() - started, 0.0)
+    stats['elapsed_seconds'] = round(elapsed, 2)
+    stats['requests_per_second'] = round(stats['requests_count'] / elapsed, 2) if elapsed else 0
+    stats['comment_fetch'] = comment_stats
     stats.update({
         'engine': sc.ENGINE_NAME,
         'backend': backend_name,
@@ -531,6 +581,7 @@ def main():
     parser.add_argument('--crawl-dir', default='', help='开启断点续爬（保存 checkpoint 的目录）')
     parser.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling'),
                         help='传输层：auto=装了 scrapling 包就用它，否则用标准库移植层')
+    parser.add_argument('--no-comments', action='store_true', help='只抓公开页摘录，关闭多方案评论采样')
     parser.add_argument('--self-test', action='store_true', help='离线自检（零联网）')
     args = parser.parse_args()
 
@@ -540,10 +591,12 @@ def main():
     results, stats = fetch_live_snippets(limit=args.limit, timeout=args.timeout, retries=args.retries,
                                          concurrency=args.concurrency, adaptive=not args.no_adaptive,
                                          storage_file=args.adapt_db, obey_robots=args.robots,
-                                         crawldir=args.crawl_dir or None, backend=args.backend)
+                                         crawldir=args.crawl_dir or None, backend=args.backend,
+                                         comment_strategies=not args.no_comments)
     for key, item in results.items():
         flag = '✅' if item.get('ok') else '⚠️'
-        print(f"  {flag} {item.get('name') or key: <18} {item.get('status'): >4} "
+        status = 'API' if item.get('strategy') == 'reddit_praw' and item.get('ok') else item.get('status', 0)
+        print(f"  {flag} {item.get('name') or key: <18} {status: >4} "
               f"{(item.get('selector') or '—')[:28]: <28} {item.get('snippet', '')[:50]}")
     print(f"📦 社区抓取：{stats['ok']}/{stats['sources']} 成功 · 自适应回捞 {stats['adaptive_hits']} 次 · "
           f"耗时 {stats['elapsed']}s · 引擎 {stats['engine']} · 传输层 {stats['backend']}")

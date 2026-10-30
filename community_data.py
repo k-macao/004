@@ -29,6 +29,7 @@ import os
 import re
 import sys
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 
 import community_spider as spider_mod
 import scrapling_core as sc
@@ -69,7 +70,7 @@ COMMUNITIES = [
     {"id": "07", "key": "DISCUSS", "name": "香港讨论区财经版", "icon": "🇭🇰", "ctype": "粤语本地论坛",
      "url": "https://www.discuss.com.hk/forumdisplay.php?fid=115"},
     {"id": "08", "key": "LIHKG", "name": "LIHKG 连登财经台", "icon": "🔥", "ctype": "粤语本地论坛",
-     "url": "https://lihkg.com/category/5"},
+     "url": "https://lihkg.com/category/15"},
     {"id": "09", "key": "JIUQUAN", "name": "韭圈儿 / 红岸社区", "icon": "🥦", "ctype": "中文机构持仓社区",
      "url": "https://www.jiucaishuo.com"},
     {"id": "10", "key": "ANTFORTUNE", "name": "蚂蚁财富港股社区", "icon": "🐜", "ctype": "中文基民社区",
@@ -272,12 +273,13 @@ def _detect_event(text: str) -> dict:
     return {
         "label": best_label,
         "matched_terms": best_terms[:5],
-        "desc": "按实抓片段关键词实配事件场景；未命中特定事件词时归为市场讨论",
+        "desc": "按样本关键词匹配事件场景；未命中特定事件词时归为市场讨论",
     }
 
 
-def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_snippets=None) -> dict:
-    """对真实抓到的公开片段执行确定性词库情感与相关性计算（零 MD5 伪随机、零写死标签）。"""
+def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_snippets=None,
+                         content_kind: str = 'page_excerpt') -> dict:
+    """对样本文本执行确定性词库情感与相关性计算（零 MD5 伪随机、零写死标签）。"""
     combined = spider_mod.strip_noise(f"{title} {snippet}" if title and title not in snippet else snippet)
     nlp_res = snlp.score_text(combined)
     pos_hits = list(nlp_res.get('pos_hits') or [])
@@ -332,14 +334,14 @@ def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_sn
             "score": uniq,
             "label": "批内独立度",
             "display": f"{uniq}/100 (批内独立度 · 无首发时间链)",
-            "desc": "单页公开抓取不含跨站发布时间链，仅计算当次批内去重独立度，不伪造首发/转载",
+            "desc": "样本不含跨站发布时间链，仅计算当次批内去重独立度，不伪造首发/转载",
         }
     else:
         nov_obj = {
             "score": None,
             "label": "未评级",
             "display": "— (无首发时间链，不伪造首发/转载)",
-            "desc": "单页公开抓取不含首发时间链，不伪造首发/转载评分",
+            "desc": "样本不含首发时间链，不伪造首发/转载评分",
         }
 
     event_obj = _detect_event(combined)
@@ -350,7 +352,7 @@ def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_sn
             "display": senti_display,
             "pos_hits": pos_hits[:6],
             "neg_hits": neg_hits[:6],
-            "desc": "基于实抓公开片段的金融词库净值（零哈希伪随机）",
+            "desc": "基于样本文本的金融词库净值（零哈希伪随机）",
         },
         "event": event_obj,
         "relevance": {
@@ -358,7 +360,7 @@ def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_sn
             "core_hits": len(core_hits),
             "topic_hits": topic_hits,
             "display": rel_display,
-            "desc": "按实抓片段命中的港股核心词与财经主题词密度实算",
+            "desc": "按样本命中的港股核心词与财经主题词密度实算",
         },
         "novelty": nov_obj,
     }
@@ -368,12 +370,15 @@ def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_sn
         evidence_parts.append(f"正向词「{'、'.join(pos_hits[:3])}」")
     if neg_hits:
         evidence_parts.append(f"负向词「{'、'.join(neg_hits[:3])}」")
+    sample_label = {'comment': '本条采样评论', 'thread_reply': '本条热帖回复',
+                    'demo': '演示文本'}.get(content_kind, '本次公开页摘录')
+    limitation = '仅用于演示，不代表实盘抓取。' if content_kind == 'demo' else '仅反映局部信息，不外推全站共识。'
     if evidence_parts:
         verdict = (f"{vlabel}（词库净值 {senti_display}，命中{'与'.join(evidence_parts)}）。"
-                   f"以上结论仅基于本次公开页面实抓片段（{event_obj['label']}），不外推全站未抓取帖文。")
+                   f"以上分析仅基于{sample_label}（{event_obj['label']}）；{limitation}")
     else:
         verdict = (f"{vlabel}（词库净值 {senti_display}，片段命中 {topic_hits} 个财经主题词但无显著多空极性词）。"
-                   f"单页公开摘录仅反映局部信息，不外推全站共识。")
+                   f"以上分析仅基于{sample_label}；{limitation}")
 
     return {
         "verdict_class": vclass,
@@ -391,6 +396,8 @@ def format_unavailable_reason(hit: dict | None) -> str:
         return f"站点风控或访问受限 HTTP {status}"
     if status >= 400:
         return f"站点返回 HTTP {status}"
+    if err == 'robots_disallowed':
+        return "robots.txt 不允许抓取"
     if err == 'no_topic_snippet':
         return "公开页未检出财经讨论正文（动态渲染空壳或登录墙）"
     if err and err != 'no_response':
@@ -406,7 +413,7 @@ def build_unavailable_record(comm: dict, fetch_date: str = '', reason: str = '�
         meta = f"当次未获取（{reason}）· {ctype} · 抓取核验 {fetch_date}"
         source = 'unavailable'
     else:
-        meta = f"未执行社区抓取（缺 community_data.json）· {ctype}"
+        meta = f"未执行社区抓取（{reason}）· {ctype}"
         source = 'offline'
     return {
         "id": comm["id"],
@@ -427,10 +434,27 @@ def build_unavailable_record(comm: dict, fetch_date: str = '', reason: str = '�
     }
 
 
+def safe_source_url(url) -> str:
+    """Only allow normal HTTP(S) links in generated HTML; never embed credentials."""
+    url = str(url or '').strip()
+    if not url or any(ch.isspace() or ord(ch) < 32 for ch in url):
+        return ''
+    try:
+        parsed = urlparse(url)
+        if (parsed.scheme.lower() not in ('http', 'https') or not parsed.hostname
+                or parsed.username is not None or parsed.password is not None):
+            return ''
+        _ = parsed.port  # reject malformed ports
+    except ValueError:
+        return ''
+    return url
+
+
 def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = '',
                       selector: str = '', adaptive: bool = False, peer_snippets=None,
-                      source: str = 'live') -> dict:
-    """用真实抓取到的公开片段构建社区记录。"""
+                      source: str = 'live', evidence: dict | None = None) -> dict:
+    """用真实抓取到的公开片段构建社区记录，保留评论的出处和排序口径。"""
+    evidence = evidence or {}
     clean_snip = spider_mod.strip_noise(snippet)[:300]
     clean_title = spider_mod.strip_noise(title)[:80]
     if clean_title and clean_title not in clean_snip and clean_title != comm.get('name'):
@@ -438,14 +462,30 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
     else:
         quote = clean_snip
 
-    analysis = analyze_live_snippet(clean_snip, title=clean_title,
-                                    ctype=comm.get('ctype', ''), peer_snippets=peer_snippets)
+    kind = evidence.get('content_kind') or ('demo' if source == 'demo' else 'page_excerpt')
+    # A parent headline can provide topic context, but must not vote on behalf
+    # of the author of the sampled reply. For comments score only their text.
+    analysis_title = '' if kind in ('comment', 'thread_reply') else clean_title
+    analysis = analyze_live_snippet(clean_snip, title=analysis_title,
+                                    ctype=comm.get('ctype', ''), peer_snippets=peer_snippets,
+                                    content_kind=kind)
     ctype = comm.get('ctype', '')
+    comments = evidence.get('comments') or []
+    first = comments[0] if comments and isinstance(comments[0], dict) else {}
+    if first.get('text_truncated'):
+        quote += '…'
     if source == 'demo':
-        meta = f"演示样本（非实盘抓取 · {len(clean_snip)} 字）· {ctype} · 抓取核验 {fetch_date}"
+        meta = f"演示样本（非实盘抓取 · {len(clean_snip)} 字）· {ctype} · 样本生成 {fetch_date}"
     else:
         adapt_note = " · 指纹自适应回捞" if adaptive else ""
-        meta = f"公开页实抓摘录（{len(clean_snip)} 字{adapt_note}）· {ctype} · 抓取核验 {fetch_date}"
+        if kind in ('comment', 'thread_reply') and first:
+            label = '实抓采样评论' if kind == 'comment' else '实抓热帖回复'
+            metric = (first.get('metric') or {}).get('label') or '热度未知'
+            meta = (f"{label}（{len(clean_snip)} 字 · {metric}）"
+                    f"· {ctype} · 抓取核验 {fetch_date}")
+        else:
+            meta = (f"公开页实抓摘录（{len(clean_snip)} 字{adapt_note} · 未核验为评论）"
+                    f"· {ctype} · 抓取核验 {fetch_date}")
 
     return {
         "id": comm["id"],
@@ -462,6 +502,12 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
         "quant": analysis["quant"],
         "meta": meta,
         "selector": selector,
+        "content_kind": kind,
+        "strategy": evidence.get('strategy') or ('demo' if source == 'demo' else 'scrapling_page'),
+        "source_url": safe_source_url(evidence.get('url')) if source == 'live' else '',
+        "comments": comments,
+        "matched_comments": evidence.get('matched_comments', 0),
+        "comment_attempt": evidence.get('comment_attempt') or {},
         "fetch_date": fetch_date,
         "source": source,
     }
@@ -485,7 +531,8 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
                              obey_robots: bool = False, crawldir: str | None = None,
                              backend: str = 'auto', limit: int = 0, session=None,
                              verbose: bool = True, autothrottle: bool = True,
-                             max_blocked_retries: int = 2, download_delay: float = 0.15) -> dict:
+                             max_blocked_retries: int = 2, download_delay: float = 0.15,
+                             comment_strategies: bool = True) -> dict:
     """运行 49 源抓取并构建完整 community_data 数据集（实抓入库，失败诚实降级为 unavailable）。"""
     now = now or datetime.now(timezone.utc)
     if market is None:
@@ -535,7 +582,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         adaptive=adaptive, storage_file=storage_file, obey_robots=obey_robots,
         crawldir=crawldir, session=session, verbose=verbose, backend=backend,
         autothrottle=autothrottle, max_blocked_retries=max_blocked_retries,
-        download_delay=download_delay)
+        download_delay=download_delay, now=now, comment_strategies=comment_strategies)
 
     live_snippets = [
         spider_mod.strip_noise((results.get(c["key"]) or {}).get("snippet") or "")[:300]
@@ -546,6 +593,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
     communities_out = []
     failed = []
     ok_count = 0
+    checked_keys = {c['key'] for c in sources}
 
     for comm in COMMUNITIES:
         hit = results.get(comm["key"]) or {}
@@ -556,17 +604,21 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
                 comm, live_snippet, fetch_date=fetch_date,
                 title=hit.get("title") or "", selector=hit.get("selector") or "",
                 adaptive=bool(hit.get("adaptive")), peer_snippets=live_snippets,
-                source='live')
+                source='live', evidence=hit)
             communities_out.append(rec)
             if verbose:
                 tail = " · 自适应回捞" if hit.get("adaptive") else ""
-                print(f'  ✅ {comm["name"]: <18} live  HTTP {hit.get("status")} · '
+                transport_label = 'PRAW API' if hit.get('strategy') == 'reddit_praw' else f'HTTP {hit.get("status")}'
+                print(f'  ✅ {comm["name"]: <18} live  {transport_label} · '
                       f'{len(live_snippet)} 字 · 立场 {rec["verdict_label"]}{tail}')
         else:
-            reason = format_unavailable_reason(hit)
+            checked = comm['key'] in checked_keys
+            reason = format_unavailable_reason(hit) if checked else '调试限制未请求此源'
             failed.append(comm["name"])
-            communities_out.append(build_unavailable_record(
-                comm, fetch_date=fetch_date, reason=reason, checked=True))
+            record = build_unavailable_record(
+                comm, fetch_date=fetch_date if checked else '', reason=reason, checked=checked)
+            record['comment_attempt'] = hit.get('comment_attempt') or {}
+            communities_out.append(record)
             if verbose:
                 print(f'  ⚠️ {comm["name"]: <18} 未获取（{reason}）—— 不编造热评', file=sys.stderr)
 
@@ -582,13 +634,17 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         "summary": {
             "ok": ok_count,
             "live_ok": ok_count,
+            "comment_sources": sum(c.get('content_kind') in ('comment', 'thread_reply') for c in communities_out),
+            "page_excerpt_sources": sum(c.get('available') and c.get('content_kind') == 'page_excerpt'
+                                        for c in communities_out),
             "unavailable": len(COMMUNITIES) - ok_count,
             "total": len(COMMUNITIES),
             "failed": failed,
         },
         "fetch_engine": spider_stats,
         "notes": [
-            "严格真实口径：仅 source=live 展示公开页实抓摘录并参与多空计数",
+            "严格真实口径：仅 source=live 的采样评论或公开页摘录参与多空计数",
+            "评论按单站有限样本排序；PTT 为高推帖回复而非按回复点赞排序，普通页面摘录未核验为评论",
             "未抓到或风控拦截源一律标记 verdict_class=unavailable（未获取），不回填模板、不编造指标",
         ],
     }
@@ -661,6 +717,7 @@ def main():
     ap.add_argument('--crawl-dir', default='', help='开启断点续爬：checkpoint 落盘目录')
     ap.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling'),
                     help='传输层：auto=装了 scrapling 包就用真包，否则用标准库移植层')
+    ap.add_argument('--no-comments', action='store_true', help='关闭多方案评论采样，仅保留公开页摘录')
     ap.add_argument('--demo', action='store_true', help='写入显式标注的本地演示数据（非实盘抓取）')
     ap.add_argument('--offline', action='store_true', help='断网降级：写出诚实「未获取」结构，不篡改旧日期')
     args = ap.parse_args()
@@ -680,14 +737,17 @@ def main():
         timeout=args.timeout, retries=args.retries, concurrency=args.concurrency,
         adaptive=not args.no_adaptive, storage_file=args.adaptive_db,
         obey_robots=args.robots, crawldir=args.crawl_dir or None,
-        backend=args.backend, limit=args.limit, verbose=True)
+        backend=args.backend, limit=args.limit, verbose=True, comment_strategies=not args.no_comments)
 
     with open(args.json, 'w', encoding='utf-8') as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
     s = out['summary']
-    print(f'📝 社区数据已写入 {args.json}：实抓成功 {s["ok"]}/{s["total"]} · '
-          f'未获取 {s["unavailable"]} · 模式 {out["mode"]}')
+    if out['mode'] == 'demo':
+        print(f'📝 社区数据已写入 {args.json}：演示记录 {s["ok"]}/{s["total"]} · 非实盘抓取')
+    else:
+        print(f'📝 社区数据已写入 {args.json}：实抓成功 {s["ok"]}/{s["total"]} · '
+              f'未获取 {s["unavailable"]} · 模式 {out["mode"]}')
 
 
 if __name__ == '__main__':
