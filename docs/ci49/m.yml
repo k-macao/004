@@ -168,6 +168,14 @@ jobs:
       - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
         # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
         # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
+        #
+        # RSSHUB_BASE：GitHub Actions 的出口 IP 会被 rsshub.app 前的 Cloudflare 直接
+        # 回 403（实测整批路线集体 403，而同一路线在其它出口是 200）。所以默认挂一串
+        # 探活过的社区镜像按序回退；仓库变量 RSSHUB_BASE 可整体覆盖（例如自建实例、
+        # 或用 RSSHUB_PROXY 指定出站代理换出口）。
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
         run: |
           set +e
           timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
@@ -273,6 +281,14 @@ jobs:
       - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
         # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
         # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
+        #
+        # RSSHUB_BASE：GitHub Actions 的出口 IP 会被 rsshub.app 前的 Cloudflare 直接
+        # 回 403（实测整批路线集体 403，而同一路线在其它出口是 200）。所以默认挂一串
+        # 探活过的社区镜像按序回退；仓库变量 RSSHUB_BASE 可整体覆盖（例如自建实例、
+        # 或用 RSSHUB_PROXY 指定出站代理换出口）。
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
         run: |
           set +e
           timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
@@ -365,6 +381,14 @@ jobs:
       - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
         # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
         # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
+        #
+        # RSSHUB_BASE：GitHub Actions 的出口 IP 会被 rsshub.app 前的 Cloudflare 直接
+        # 回 403（实测整批路线集体 403，而同一路线在其它出口是 200）。所以默认挂一串
+        # 探活过的社区镜像按序回退；仓库变量 RSSHUB_BASE 可整体覆盖（例如自建实例、
+        # 或用 RSSHUB_PROXY 指定出站代理换出口）。
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
         run: |
           set +e
           timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1

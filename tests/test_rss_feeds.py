@@ -389,6 +389,145 @@ class TestWechatSection(unittest.TestCase):
         self.assertIn('今日未获取', _plain(html))
 
 
+class TestRsshubFailover(unittest.TestCase):
+    """RSSHub 多实例轮换 + 边缘拦截熔断。
+
+    事故背景（CI run 41168249465）：GitHub Actions 出口访问 rsshub.app 全部 403，
+    13 条路线集体「未获取」。同一条路线在本机/独立出口上是 200 且有最新条目，
+    说明是 Cloudflare **按 IP 拦边缘**，不是路由坏死。所以要做两件事：
+      ① 403 时自动换下一个实例（多个社区镜像）；
+      ② 换也全被拦时本轮熔断，别让 49 源 × N 实例的 403 风暴把构建拖死。
+    必须区分：403/429（边缘拦 IP，可换）vs 200+错误页 / 4xx5xx 路由自身坏（换也没用）。
+    """
+
+    CLAUDE_SRC = {'id': 22, 'key': 'CLS', 'name': '财联社', 'endpoints': ['rsshub:/cls/telegraph'],
+                  'lang': 'zh'}
+
+    def setUp(self):
+        self._srv = None
+        self._thread = None
+
+    def _serve(self, behaviour):
+        """behaviour: callable(path) -> ('ok'|'403'|'500'|'empty')"""
+        import http.server
+        import threading
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                kind = behaviour(self.path)
+                if kind == 'ok':
+                    body = (b'<?xml version="1.0"?><rss version="2.0"><channel><title>t</title>'
+                            b'<item><title>good node item</title>'
+                            b'<pubDate>Sat, 31 Oct 2026 04:00:00 GMT</pubDate>'
+                            b'<link>https://example.com/a</link><guid>g1</guid></item>'
+                            b'</channel></rss>')
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/rss+xml')
+                    self.end_headers()
+                    self.wfile.write(body)
+                elif kind == '403':
+                    self.send_response(403)
+                    self.end_headers()
+                    self.wfile.write(b'blocked')
+                elif kind == '500':
+                    self.send_response(500)
+                    self.end_headers()
+                    self.wfile.write(b'boom')
+                else:                      # 200 但报文不是 RSS（RSSHub 错误页的等价物）
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'text/html')
+                    self.end_headers()
+                    self.wfile.write(b'<html>Route error</html>')
+
+            def log_message(self, *args):
+                pass
+
+        srv = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(srv.shutdown)
+        self.addCleanup(srv.server_close)
+        return f'http://127.0.0.1:{srv.server_address[1]}'
+
+    def _state(self, trip_after=3):
+        return {'failed_bases': [], 'tripped': False, 'rescued': 0, 'trip_after': trip_after}
+
+    def test_403_on_first_instance_falls_over_to_the_next(self):
+        base = self._serve(lambda path: '403' if path.startswith('/dead/') else 'ok')
+        env = {'RSSHUB_BASE': f'{base}/dead,{base}/live'}
+        with mock.patch.dict(os.environ, env):
+            st = self._state()
+            items, meta = rf.fetch_source(self.CLAUDE_SRC, timeout=5, rsshub_state=st, quiet=True)
+        self.assertTrue(meta['endpoint'].startswith(f'{base}/live'), meta['endpoint'])
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]['title'], 'good node item')
+        self.assertEqual(st['rescued'], 1, '靠换实例救回来的源要计数，便于排查 IP 拦截')
+
+    def test_all_instances_blocked_trips_the_breaker_and_stops_network(self):
+        base = self._serve(lambda path: '403')
+        env = {'RSSHUB_BASE': f'{base}/a,{base}/b'}
+        with mock.patch.dict(os.environ, env):
+            st = self._state(trip_after=2)
+            with self.assertRaises(RuntimeError):
+                rf.fetch_source(self.CLAUDE_SRC, timeout=5, rsshub_state=st, quiet=True)
+            self.assertTrue(st['tripped'], '连续两个实例被 403 应触发熔断')
+            self.assertEqual(len(st['failed_bases']), 2)
+            # 熔断后：同一源的后续端点不得再打网络
+            calls = []
+            real_get = rf.http_get
+
+            def spy(url, *a, **kw):
+                calls.append(url)
+                return real_get(url, *a, **kw)
+
+            with mock.patch.object(rf, 'http_get', side_effect=spy):
+                with self.assertRaises(RuntimeError):
+                    rf.fetch_source(self.CLAUDE_SRC, timeout=5, rsshub_state=st, quiet=True)
+            self.assertEqual(calls, [], '熔断后不得再对 RSSHub 发请求')
+
+    def test_route_level_errors_do_not_trip_the_breaker(self):
+        """路由自身坏死（200 错误页 / 500）换实例也没用，不该把整条通道判死。"""
+        base = self._serve(lambda path: '500')
+        env = {'RSSHUB_BASE': f'{base}/a,{base}/b,{base}/c,{base}/d'}
+        with mock.patch.dict(os.environ, env):
+            st = self._state(trip_after=2)
+            with self.assertRaises(RuntimeError):
+                rf.fetch_source(self.CLAUDE_SRC, timeout=5, rsshub_state=st, quiet=True)
+        self.assertFalse(st['tripped'], '500 不是边缘拦 IP，不能触发熔断')
+        self.assertEqual(st['failed_bases'], [])
+
+    def test_default_instance_chain_has_probed_fallbacks(self):
+        """默认实例链必须多于一个，且官方实例排在最前（本地出口它最快）。"""
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('RSSHUB_BASE', None)
+            bases = rf.rsshub_bases()
+        self.assertGreaterEqual(len(bases), 2, '只挂一个实例 = CI 被 403 时全军覆没')
+        self.assertEqual(bases[0], 'https://rsshub.app')
+        for b in bases:
+            self.assertTrue(b.startswith('https://'), b)
+
+    def test_proxy_is_configurable(self):
+        with mock.patch.dict(os.environ, {'RSSHUB_PROXY': 'http://127.0.0.1:7890'}):
+            self.assertEqual(rf.rsshub_proxy(), 'http://127.0.0.1:7890')
+        with mock.patch.dict(os.environ, {'HTTPS_PROXY': 'http://10.0.0.1:8080'}, clear=False):
+            os.environ.pop('RSSHUB_PROXY', None)
+            self.assertEqual(rf.rsshub_proxy(), 'http://10.0.0.1:8080')
+
+    def test_http_get_honours_explicit_proxy_argument(self):
+        seen = []
+
+        def fake_opener(*handlers):
+            seen.append(handlers)
+            raise RuntimeError('stop here')
+
+        with mock.patch.object(rf.urllib.request, 'build_opener', side_effect=fake_opener):
+            with self.assertRaises(RuntimeError):
+                rf.http_get('https://example.com/x', timeout=1, proxy='http://127.0.0.1:7890')
+        self.assertTrue(seen)
+        proxy_handler = seen[0][0]
+        self.assertEqual(proxy_handler.proxies.get('https'), 'http://127.0.0.1:7890')
+
+
 class TestBootstrapAndBuildSite(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
