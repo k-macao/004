@@ -176,6 +176,9 @@ jobs:
         env:
           RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
           RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          # DeepSeek Search API：只给「RSS 路由坏死 / 站点端点消失」的源做检索兜底。
+          # 没有配这个 secret 时自动跳过，逐源照旧如实标「未获取」。
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set +e
           timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
@@ -289,6 +292,9 @@ jobs:
         env:
           RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
           RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          # DeepSeek Search API：只给「RSS 路由坏死 / 站点端点消失」的源做检索兜底。
+          # 没有配这个 secret 时自动跳过，逐源照旧如实标「未获取」。
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set +e
           timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
@@ -389,6 +395,9 @@ jobs:
         env:
           RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
           RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          # DeepSeek Search API：只给「RSS 路由坏死 / 站点端点消失」的源做检索兜底。
+          # 没有配这个 secret 时自动跳过，逐源照旧如实标「未获取」。
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set +e
           timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1

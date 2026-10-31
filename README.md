@@ -357,6 +357,30 @@ RSSHub 是第三方公共服务。**GitHub Actions 的出口 IP 会被 `rsshub.a
 
 CI 里用仓库变量 `vars.RSSHUB_BASE` / secret `RSSHUB_PROXY` 注入，可整体覆盖默认链（例如换成自建实例）。
 
+### DeepSeek Search API 检索兜底
+
+有些源的失败是**换节点也救不了**的：RSSHub 路由自身坏死（WSJ 上游 401、雪球要浏览器），
+或站点端点已经消失（Seeking Alpha / 福布斯 / Kitco 404、FXStreet / DailyFX 403、QuantStart 503）。
+这类源改走 **DeepSeek Search API**（2026-10-17 上线的官方搜索引擎接口）：
+
+| 项 | 值 |
+|---|---|
+| 端点 | `POST https://api.deepseek.com/v1/tools/search` |
+| 请求 | `{query, count, need_content}`，`count` 1–50 |
+| 检索式 | `site:<站点> <主题词> lang:<语种> after:<窗口起点>`（如 `site:wsj.com economy markets lang:en after:2026-10-17`） |
+| 返回 | `title / url / summary / date(RFC3339) / rerank_score(0–3) / authority(0–4)` |
+| 计费 | $0.75 / 1000 次**成功**请求（失败、空结果、超时免费），5 QPS |
+
+用法与环境变量：
+
+- `DEEPSEEK_API_KEY`：key（CI 里读 `secrets.DEEPSEEK_API_KEY`）。**没有 key 就自动跳过**，逐源照旧如实标「未获取」。
+- `DEEPSEEK_SEARCH=0`：即使配了 key 也关掉这条兜底。
+- `DEEPSEEK_MAX_PER_RUN`（默认 20）：每轮最多调用几次，防失控刷钱（按 20 次算约 $0.015/轮）。
+- `DEEPSEEK_MIN_SCORE`（默认 0，即不过滤）：低于该 `rerank_score` 的结果直接丢弃（官方口径 ≥1.5 为高质量）。
+
+**口径不变**：只在目录里标了 `deepseek_fallback` 的 **10 个坏死源**上启用；**不替代**已跑通的原生 RSS；
+检索回来的条目同样过 14 天时效窗口，`kind="deepseek"` 在页面上如实标注「DeepSeek 检索」，不冒充原生源。
+
 **必须区分两类失败**：`403/429` 是边缘按 IP 拦截，换实例或换出口有意义；而 **`200` + RSSHub 错误页**
 （如 WSJ 上游 `401 Unauthorized`、雪球要浏览器）是**路由自身坏死**，换实例无效 —— 这类照旧如实标「未获取」。
 
