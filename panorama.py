@@ -50,8 +50,34 @@ except Exception:                                     # pragma: no cover - 词�
     nlp = None
 
 import quant_pair                                     # 每条力量后的 AI 量化配对（网页/微信同一口径）
+import rss_feeds as rss_mod                           # 第 5 路数据源：49 源 RSS 的可用率
 
 MINUS = '\u2212'
+
+# 五路数据源的覆盖度算法（panorama / forecast 共用同一口径，避免两端漂移）
+COVERAGE_ROUTES = 5
+
+
+def _coverage_of(gap_count, rss_sig):
+    """五路覆盖度：前四路按「有/无」计，第五路（RSS 49 源）按可用率折算。
+
+    gap_count 只数**前四路**的缺口（行情/宏观/舆情/社区），RSS 这一路由 rss_sig 单独表达，
+    否则 RSS 会既在缺口里扣一次、又在 base 里扣一次，等于占两路权重：
+    例如「仅行情可用 + RSS 全绿」应该是 2/5 = 40%，不是 60%。
+
+    设计取舍：
+      · RSS 这一路「拿到产物」只算满分的 0.5，另外 0.5 按 49 源的可用率折算 ——
+        产物在但只抓到 3 源，不应该和 49 源全绿同权；
+      · 没拿到产物时整路归零（由 data_gaps 记一条缺口）。
+    这样「覆盖 100% 但十条源未获取」的矛盾就不会再出现。
+    """
+    routes = float(COVERAGE_ROUTES)
+    base = (COVERAGE_ROUTES - 1 - gap_count) / routes
+    if rss_sig and rss_sig.get('available'):
+        rss_part = (0.5 + 0.5 * max(0.0, min(1.0, float(rss_sig.get('ratio') or 0.0)))) / routes
+    else:
+        rss_part = 0.0
+    return round(max(0.0, min(1.0, base + rss_part)), 2)
 
 # ---------------------------------------------------------------------------
 # 噪音阈值：单日涨跌幅绝对值低于该值 = 日内噪音（不同资产波动率不同，阈值分开给）
@@ -495,8 +521,14 @@ def _community_counts(community):
 # ---------------------------------------------------------------------------
 # 主扫描
 # ---------------------------------------------------------------------------
-def scan(market=None, macro=None, sentiment=None, community=None, now=None, top_n=5):
-    """把四路当次数据合成为「每日全球全景扫描」结论。纯函数，无 IO。"""
+def scan(market=None, macro=None, sentiment=None, community=None, rss=None,
+         now=None, top_n=5):
+    """把五路当次数据合成为「每日全球全景扫描」结论。纯函数，无 IO。
+
+    rss 是**第 5 路**：49 源 RSS 情报源（05 节那份产物）。它不产出「力量」，
+    只产出**覆盖度**——原先前四路齐全就报 100%，哪怕 49 源里一半抓不到，
+    这正是「覆盖 100% 却十条源未获取」的假高置信度。现在按可用率折算进覆盖度。
+    """
     now = now or datetime.now(timezone.utc)
     market, macro = market or {}, macro or {}
     sentiment, community = sentiment or {}, community or {}
@@ -546,7 +578,14 @@ def scan(market=None, macro=None, sentiment=None, community=None, now=None, top_
         gaps.append('舆情因子（sentiment_data.json）未获取 —— 情绪读数以社区研判替代')
     if not sum(_community_counts(community).values()):
         gaps.append('社区研判（community_data.json）未获取 —— 多空家数无法统计')
-    coverage = round((4 - len(gaps)) / 4.0, 2)
+    pre_gaps = len(gaps)                     # 前四路的缺口数，RSS 由 rss_sig 单独表达
+    rss_sig = rss_mod.coverage_signal(rss)
+    if not rss_sig['available']:
+        gaps.append(rss_sig['why'])
+    coverage = _coverage_of(pre_gaps, rss_sig)
+    if rss_sig['available'] and coverage < 1.0 and rss_sig['ratio'] < 0.999:
+        # 覆盖度被 RSS 拉低时必须说清是谁拉低的，否则页面上只是一个没有依据的百分比。
+        gaps.append(rss_sig['why'])
 
     # ---------- 做多合成分 ----------
     num = den = 0.0
@@ -646,6 +685,7 @@ def scan(market=None, macro=None, sentiment=None, community=None, now=None, top_
         'focus': focus,
         'coverage': coverage,
         'data_gaps': gaps,
+        'source_stats': {'routes': COVERAGE_ROUTES, 'rss': rss_sig},
         'verdict': {
             'long_score': long_score,
             'stance': stance,
@@ -870,12 +910,13 @@ def _load(path):
 
 
 def scan_from_files(root=REPO_ROOT, now=None):
-    """按仓库约定路径读取四份 json（环境变量可覆盖，与推送/建站一致）。"""
+    """按仓库约定路径读取五份 json（环境变量可覆盖，与推送/建站一致）。"""
     return scan(
         market=_load(os.environ.get('MARKET_DATA', os.path.join(root, 'market_data.json'))),
         macro=_load(os.environ.get('MACRO_DATA', os.path.join(root, 'macro_data.json'))),
         sentiment=_load(os.environ.get('SENTIMENT_DATA', os.path.join(root, 'sentiment_data.json'))),
         community=_load(os.environ.get('COMMUNITY_DATA', os.path.join(root, 'community_data.json'))),
+        rss=_load(os.environ.get('RSSFEEDS_DATA', os.path.join(root, 'rssfeeds_data.json'))),
         now=now)
 
 
@@ -908,7 +949,8 @@ def _self_test():
     empty = scan(now=now)
     check(empty['forces'] == [] and empty['verdict']['can_long'] == 'unknown',
           '空数据：不给做多结论，且不产出任何力量')
-    check(empty['coverage'] == 0.0 and len(empty['data_gaps']) == 4, '空数据：覆盖度 0 且四项缺口全部标注')
+    check(empty['coverage'] == 0.0 and len(empty['data_gaps']) == COVERAGE_ROUTES,
+          f'空数据：覆盖度 0 且 {COVERAGE_ROUTES} 路缺口全部标注（含 RSS 49 源）')
     check(all(fc['dir_word'] == '未获取' for fc in empty['focus']), '空数据：三大关注面全部标注「未获取」')
 
     bull_market = {'fetch_date': '2026-09-17', 'quotes': {

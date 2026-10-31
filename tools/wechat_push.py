@@ -1024,8 +1024,10 @@ def build_single_wechat_html(now=None):
     else:
         print('  🌡️ 微信推送 00 栏：VIX 今日未获取 —— 不回填历史读数')
 
-    # ---------- 01 栏：每日全球全景扫描（四路当次数据现算，零写死叙事） ----------
-    _scan = panorama.scan(market=_md, macro=_xd, sentiment=_sd, community=_cd, now=now)
+    # ---------- 01 栏：每日全球全景扫描（五路当次数据现算，零写死叙事） ----------
+    # 第 5 路是 49 源 RSS（05 栏同一份产物）：与网页 01 节共用同一套覆盖度口径。
+    _scan = panorama.scan(market=_md, macro=_xd, sentiment=_sd, community=_cd,
+                          rss=_rss, now=now)
     panorama_block = panorama.render_wechat(_scan, neon=NEON, green=GR, ink=INK)
     print(f'  🌍 微信推送 01 栏：全景扫描输出 {len(_scan["forces"])} 大力量 · '
           f'噪音 {len(_scan["noise"])} 项 · 覆盖 {int(_scan["coverage"] * 100)}% · '
@@ -1044,7 +1046,7 @@ def build_single_wechat_html(now=None):
     _fc_review = forecast_mod.review_from_history(
         forecast_mod.default_history_path(), market=_md, now=now)
     _fc = forecast_mod.predict(market=_md, macro=_xd, sentiment=_sd, community=_cd,
-                               now=now, review=_fc_review)
+                               rss=_rss, now=now, review=_fc_review)
     if _fc.get('available'):
         print(f'  🔮 微信推送 04 栏：AI 预测 {len(_fc["forecasts"])} 个标的 · '
               f'基准日 {_fc["base_date"]} → 目标日 {_fc["target_date"]} · '

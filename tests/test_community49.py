@@ -216,12 +216,16 @@ class TestStrictZeroHallucination(unittest.TestCase):
         scan_res = panorama.scan(market=MARKET, macro={}, sentiment={}, community=all_failed, now=NOW)
         self.assertTrue(any('社区研判' in g for g in scan_res['data_gaps']),
                         '49 源全未抓到时，01 全景扫描必须将社区计为数据缺口')
-        self.assertEqual(scan_res['coverage'], 0.25, '仅行情一路可用时覆盖度必须为 25%，不得因空壳社区虚增到 50%')
+        # 覆盖度按「路数」计：行情可用、其余各路全缺 → 1/路数。
+        # 不写死百分比，路由数变化时断言仍成立，但「空壳社区不得虚增覆盖」这条不被放宽。
+        expect = round(1.0 / panorama.COVERAGE_ROUTES, 2)
+        self.assertEqual(scan_res['coverage'], expect,
+                         f'仅行情一路可用时覆盖度必须为 {expect:.0%}，不得因空壳社区虚增')
 
         fc_res = fc.predict(market=MARKET, macro={}, sentiment={}, community=all_failed, now=NOW)
         self.assertTrue(any('社区研判' in g for g in fc_res['data_gaps']),
                         '49 源全未抓到时，04 AI 预测必须将社区计为数据缺口')
-        self.assertEqual(fc_res['coverage'], 0.25)
+        self.assertEqual(fc_res['coverage'], expect)
         self.assertIsNone(fc_res['signals']['sentiment'].get('z'),
                           '0 个实抓社区时不得向 AI 预测注入虚假负向或正向情绪偏置')
         self.assertEqual(fc_res['signals']['sentiment']['counts'],

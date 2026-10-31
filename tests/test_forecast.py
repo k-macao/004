@@ -268,7 +268,9 @@ class TestDegradation(unittest.TestCase):
         self.assertIsNone(d['headline'])
         self.assertEqual(d['unavailable_reason'], 'no_quotes')
         self.assertEqual(d['coverage'], 0.0)
-        self.assertEqual(len(d['data_gaps']), 4)
+        # 五路数据源（第 5 路 = 49 源 RSS）：缺口按路数计，RSS 缺产物也要记一条
+        self.assertEqual(len(d['data_gaps']), fc.COVERAGE_ROUTES)
+        self.assertTrue(any('RSS' in g for g in d['data_gaps']))
         for html in (fc.render_web(d), fc.render_wechat(d)):
             plain = _plain(html)
             self.assertIn('本栏不预测', plain)
