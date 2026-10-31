@@ -301,6 +301,11 @@ CI 里用仓库变量 `vars.RSSHUB_BASE` / secret `RSSHUB_PROXY` 注入，可整
 - `DEEPSEEK_SEARCH=0`：即使配了 key 也关掉这条兜底。
 - `DEEPSEEK_MAX_PER_RUN`（默认 20）：每轮最多调用几次，防失控刷钱（按 20 次算约 $0.015/轮）。
 - `DEEPSEEK_MIN_SCORE`（默认 0，即不过滤）：低于该 `rerank_score` 的结果直接丢弃（官方口径 ≥1.5 为高质量）。
+- `RSS_CONCURRENCY`（默认 8）：49 源并发线程数。串行时一条慢源就能吃掉整轮预算 —— 实测 CI 里
+  整步会正好撞上 `timeout 300` 被 SIGTERM 杀掉，随后构建期补抓只剩 90s，31 源连请求都没发出。
+- **CI 里 key 必须传到「补抓那一步」**：`rss_feeds.py` 那步失败时，真正的取数发生在
+  `build_site.py` / `wechat_push.py` 的 `ensure()` 补抓里，这两步没有 `env:` 就等于没配 key
+  （2026-10-31 线上实测：05 节显示「未启用（无 DEEPSEEK_API_KEY）」，而 secret 其实已经配好）。
 
 **两个检索词字段不能混用**（2026-10-31 事故）：
 
@@ -629,7 +634,7 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `macro_data.availability()` | **02 栏兜底口径的单一事实源**：判定本次到底有没有可用快讯，返回 `reason` ∈ `no_file`（文件读不到）/ `bad_type`（产物写坏被截断）/ `no_items`（窗口内 0 条，公开源全挂或全部超窗）/ `stale_snapshot`（读到前几天构建的旧快照，超过 `SNAPSHOT_MAX_AGE_DAYS=1`）。网页与微信两端共用，避免两套渲染各写一套口径而漂移 |
 | `tests/test_macro_data.py` | 快讯层测试（16 项，零联网）：RSS/JSONP 解析、跨源去重、分类路由（IMF+关税 必须落宏观而非大宗）、超窗与无日期拦截、`--mock` 输出契约 |
 | `tests/test_wechat_push_macro.py` | 宏观快讯渲染回归（推送 02 栏 + 网页 02 节，9 项）：必须渲染当次快讯且每条带日期；**四种不可用形态都要落到同一段「今日未获取」兜底文案**；过期快照不得从 01 / 07 栏漏出；网页 `MACROLIST` 注入幂等；正文/注入区禁止再出现 628.69 亿、8 月 12 日、25,440.17 等写死历史内容 |
-| `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（超时、逐端点回退、RSSHub 实例可换、每轮请求上限）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--text` / `--self-test` |
+| `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（**并发 8 路**、超时、逐端点回退、RSSHub 实例可换、每轮请求上限、`--budget` 软墙钟）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--budget` / `--text` / `--self-test` |
 | `docs/rss-49-feeds.md` | **49 源目录与端点核对表**（`python3 rss_feeds.py --catalog-md docs/rss-49-feeds.md` 生成，禁止手改）：六大板块逐源列语种 / 主端点 / 回退端点 / 核验状态 / 口径说明；`tests/test_rss_feeds.py` 断言文档与 `CATALOG` 不漂移 |
 | `tests/test_rss_feeds.py` | **05 栏回归（32 项，零联网）**：目录就是那份 49 源清单（10-10-11-8-6-4、编号 1..49、无裸域名、必备源齐全）、三种报文解析与端点回退、超窗丢弃 + 无日期永不冒充最新、四种不可用形态统一兜底（缺产物/写坏/0 条/旧快照，且**不得出现任何历史标题**）、网页 `RSSFEEDS` 注入幂等且不串进 02 节、微信 05 栏预算降级（完整→标准→名录→缩略）**一源不删**且整页仍在 95,000 门禁内、渲染路径绝不联网、`build_site.py` 端到端补抓落盘 |
 | `community_data.py` | **社区数据层**：49 源经多方案评论采样与 Scrapling 公开页回退生成记录；失败标为未获取；`reanalyze_snapshot()` 根据已存文本重算，`offline_dataset()` 提供 49 源未获取兜底。 |

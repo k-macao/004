@@ -181,17 +181,29 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set +e
-          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
+          # --budget 240：接近墙钟上限时剩余源记 skipped_deadline，**仍然写出** JSON，
+          # 而不是让 SIGTERM 半路杀掉、一条都用不上（2026-10-31 实测：串行 49 源 +
+          # 多实例回退会正好撞上 timeout 300，整步被掐断；随后 build_site 只用 90s
+          # 预算补抓，31 源连请求都没发出）。并发 + 软预算后两者都不会再发生。
+          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --budget 240 --text > rss_summary.txt 2>&1
           rc=$?
           set -e
           if [ $rc -ne 0 ] || [ ! -s rssfeeds_data.json ]; then
-            echo "⚠️ RSS 情报源当次抓取失败：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+            echo "⚠️ RSS 情报源当次抓取失败（rc=$rc）：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+            echo "::warning title=04/05 数据不全::RSS 抓取失败 rc=$rc 或产物为空 —— 01/04 覆盖度会按缺口下调"
           fi
           cat rss_summary.txt
           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
 
       - name: 🏗️ 动态构建报告 (build_site.py → report.html · 行情+社区双注入)
+        # 上一步若没写出产物，build_site 的 ensure() 会就地补抓 —— 补抓同样要用
+        # DeepSeek 检索兜底，所以这里必须把 key 一起传下去，否则「已配置 key」在
+        # 补抓路径上等于没配（2026-10-31 线上实测：05 节显示「未启用」）。
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python3 build_site.py
 
       - name: 💾 保存 AI 预测存档 (供下次运行结算已到期的预测)
@@ -205,6 +217,10 @@ jobs:
           key: forecast-history-${{ github.run_id }}-${{ github.job }}
 
       - name: 🧩 内嵌微信推送负载 (wechat-parts → report.html)
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python3 tools/wechat_push.py --embed
 
       - name: 📁 准备部署目录
@@ -217,6 +233,10 @@ jobs:
           cp -r docs _site/docs 2>/dev/null || echo "docs/ not found, skip"
 
       - name: 🧩 生成微信推送内容 (wechat.json)
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python3 tools/wechat_push.py --emit _site/wechat.json
 
       - name: ⚙️ 配置 Pages
@@ -297,11 +317,16 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set +e
-          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
+          # --budget 240：接近墙钟上限时剩余源记 skipped_deadline，**仍然写出** JSON，
+          # 而不是让 SIGTERM 半路杀掉、一条都用不上（2026-10-31 实测：串行 49 源 +
+          # 多实例回退会正好撞上 timeout 300，整步被掐断；随后 build_site 只用 90s
+          # 预算补抓，31 源连请求都没发出）。并发 + 软预算后两者都不会再发生。
+          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --budget 240 --text > rss_summary.txt 2>&1
           rc=$?
           set -e
           if [ $rc -ne 0 ] || [ ! -s rssfeeds_data.json ]; then
-            echo "⚠️ RSS 情报源当次抓取失败：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+            echo "⚠️ RSS 情报源当次抓取失败（rc=$rc）：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+            echo "::warning title=04/05 数据不全::RSS 抓取失败 rc=$rc 或产物为空 —— 01/04 覆盖度会按缺口下调"
           fi
           cat rss_summary.txt
           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -309,6 +334,10 @@ jobs:
 
 
       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区双注入)
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python3 build_site.py
 
       - name: 💾 保存 AI 预测存档 (供下次运行结算已到期的预测)
@@ -400,11 +429,16 @@ jobs:
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: |
           set +e
-          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
+          # --budget 240：接近墙钟上限时剩余源记 skipped_deadline，**仍然写出** JSON，
+          # 而不是让 SIGTERM 半路杀掉、一条都用不上（2026-10-31 实测：串行 49 源 +
+          # 多实例回退会正好撞上 timeout 300，整步被掐断；随后 build_site 只用 90s
+          # 预算补抓，31 源连请求都没发出）。并发 + 软预算后两者都不会再发生。
+          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --budget 240 --text > rss_summary.txt 2>&1
           rc=$?
           set -e
           if [ $rc -ne 0 ] || [ ! -s rssfeeds_data.json ]; then
-            echo "⚠️ RSS 情报源当次抓取失败：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+            echo "⚠️ RSS 情报源当次抓取失败（rc=$rc）：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+            echo "::warning title=04/05 数据不全::RSS 抓取失败 rc=$rc 或产物为空 —— 01/04 覆盖度会按缺口下调"
           fi
           cat rss_summary.txt
           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
@@ -413,6 +447,10 @@ jobs:
           set -e
 
       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区+宏观快讯注入)
+        env:
+          RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
+          RSSHUB_PROXY: ${{ secrets.RSSHUB_PROXY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
         run: python3 build_site.py
 
       - name: 💾 保存 AI 预测存档 (供下次运行结算已到期的预测)

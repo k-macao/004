@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
@@ -245,6 +246,64 @@ class TestParsingAndStaleness(unittest.TestCase):
         self.assertEqual(data['summary']['ok'], 0)
         self.assertTrue(all((m.get('error') or '').startswith('skipped_deadline')
                             for g in data['groups'].values() for m in g['sources']))
+
+    def test_sources_are_fetched_concurrently_so_the_wall_clock_fits(self):
+        """49 源全串行会在 CI 里把整步拖到 timeout 300（线上实测 31 源从未发出请求）。
+
+        并发版必须：① 明显快于串行；② 逐源结果与串行完全等价（不丢源、不重源）。
+        """
+        feed = ('<rss version="2.0"><channel><title>t</title>'
+                '<item><title>并发标题</title><link>https://e.com/x</link>'
+                '<pubDate>Sat, 31 Oct 2026 06:00:00 GMT</pubDate></item>'
+                '</channel></rss>')
+        delay = 0.02
+        real_get = rf.http_get
+        real_conc = rf.RSS_CONCURRENCY
+
+        def slow_get(url, timeout=10, proxy=None):
+            time.sleep(delay)
+            return feed, delay * 1000
+
+        try:
+            rf.http_get = slow_get
+            rf.RSS_CONCURRENCY = 1
+            t0 = time.time()
+            serial = rf.build(quiet=True)
+            serial_s = time.time() - t0
+
+            rf.RSS_CONCURRENCY = 8
+            t0 = time.time()
+            conc = rf.build(quiet=True)
+            conc_s = time.time() - t0
+        finally:
+            rf.http_get = real_get
+            rf.RSS_CONCURRENCY = real_conc
+
+        self.assertEqual(conc['summary']['ok'], 49, '并发不得漏源')
+        self.assertEqual(conc['summary']['total'], serial['summary']['total'])
+        self.assertEqual(conc['summary']['items'], serial['summary']['items'],
+                         '并发与串行必须给出同一批条目')
+        self.assertLess(conc_s, serial_s * 0.6,
+                        f'并发未生效：串行 {serial_s:.2f}s / 并发 {conc_s:.2f}s')
+
+    def test_cli_budget_writes_json_instead_of_being_killed(self):
+        """--budget 是软截止：撞上墙钟也要把 JSON 写出来（记 skipped_deadline），
+        绝不能像 timeout 300 那样被 SIGTERM 杀掉、让构建只能靠 90s 补抓。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'rssfeeds_data.json')
+            env = dict(os.environ, RSS_CONCURRENCY='1')
+            with mock.patch.dict(os.environ, env):
+                cp = subprocess.run(
+                    [sys.executable, 'rss_feeds.py', '--json', out, '--mock',
+                     '--budget', '1', '--quiet'],
+                    cwd=REPO_ROOT, capture_output=True, text=True, timeout=120)
+            self.assertEqual(cp.returncode, 0, cp.stderr[-500:])
+            self.assertTrue(os.path.getsize(out) > 0, '预算用尽也必须写出产物')
+            with open(out, encoding='utf-8') as f:
+                data = json.load(f)
+            self.assertIn(data['mode'], ('mock', 'live'))
+            srcs = [m for g in data['groups'].values() for m in g['sources']]
+            self.assertEqual(len(srcs), 49, '软截止只跳过请求，不许把源从产物里丢掉')
 
 
 class TestAvailability(unittest.TestCase):

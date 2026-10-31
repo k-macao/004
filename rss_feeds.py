@@ -45,11 +45,13 @@ rsshub.app …），域名本身不是订阅地址。这里逐条落成**可用�
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import html as html_mod
 import json
 import os
 import re
 import sys
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -85,6 +87,10 @@ DEFAULT_RSSHUB_BASE = ','.join([
     'https://rsshub.isrss.com',        # 🇺🇸 isRSS，实测同上
     'https://rsshub.cups.moe',         # 🇺🇸 FunnyCups，实测 /test/cache 正常
 ])
+# 并发抓取线程数：49 源全是网络 I/O，串行时一条慢源就能吃掉整轮预算
+# （实测 CI：路由超时 3 次 × 10s 的源排在前面时，整步被 timeout 300 掐断，
+#  31 源根本没发出请求）。默认 8 路，单源最长耗时 ≈ timeout × 端点链长度。
+RSS_CONCURRENCY = int(os.environ.get('RSS_CONCURRENCY', '8') or 8)
 RSSHUB_MAX_PER_RUN = int(os.environ.get('RSSHUB_MAX_PER_RUN', '20') or 20)
 # 连续失败多少个不同实例后，本轮直接放弃 RSSHub（避免 49 源 × N 实例 的 403 风暴把构建拖死）
 RSSHUB_TRIP_AFTER = int(os.environ.get('RSSHUB_TRIP_AFTER', '3') or 3)
@@ -860,8 +866,22 @@ def dedup_titles(items):
 # ---------------------------------------------------------------------------
 # 抓取
 # ---------------------------------------------------------------------------
+class _NoLock:
+    """串行调用时的空锁（把「可选并发」写成同一份代码）。"""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+_NO_LOCK = _NoLock()
+
+
 def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_DEFAULT,
-                 rsshub_budget=None, rsshub_state=None, quiet=False, deepseek_budget=None):
+                 rsshub_budget=None, rsshub_state=None, quiet=False, deepseek_budget=None,
+                 lock=None):
     """单个源 → (items, meta)。全部端点失败抛异常，由调用方归类为 sources[].error。"""
     now = now or datetime.now(timezone.utc)
     meta = {'endpoint': '', 'kind': '', 'latency_ms': 0.0, 'attempts': []}
@@ -880,16 +900,23 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
     errors = []
     for url in resolve_endpoints(src):
         is_rsshub = _is_rsshub_url(url)
-        if is_rsshub and rsshub_budget is not None and rsshub_budget[0] <= 0:
-            errors.append(f'{url}: 本轮 RSSHub 请求数已达上限，跳过')
-            continue
-        if is_rsshub and rsshub_state is not None and rsshub_state.get('tripped'):
-            errors.append(f'{url}: 本轮 RSSHub 已熔断（多实例均被拦），跳过')
-            continue
+        if is_rsshub and rsshub_budget is not None:
+            with (lock or _NO_LOCK):
+                over = rsshub_budget[0] <= 0
+            if over:
+                errors.append(f'{url}: 本轮 RSSHub 请求数已达上限，跳过')
+                continue
+        if is_rsshub and rsshub_state is not None:
+            with (lock or _NO_LOCK):
+                tripped = bool(rsshub_state.get('tripped'))
+            if tripped:
+                errors.append(f'{url}: 本轮 RSSHub 已熔断（多实例均被拦），跳过')
+                continue
         try:
             text, ms = http_get(url, timeout)
             if is_rsshub and rsshub_budget is not None:
-                rsshub_budget[0] -= 1
+                with (lock or _NO_LOCK):
+                    rsshub_budget[0] -= 1
             raw = parse_feed(text)
             if not raw:
                 raise ValueError(f'报文非 RSS/Atom 或没有条目（{len(text)} 字节）')
@@ -900,7 +927,8 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
             # 注意不清空 failed_bases：那是本轮「出口被拦」的累计证据，清掉就再也
             # 攒不到熔断阈值；单个源救回来 ≠ 出口重新可信。
             if is_rsshub and errors and rsshub_state is not None:
-                rsshub_state['rescued'] = rsshub_state.get('rescued', 0) + 1
+                with (lock or _NO_LOCK):
+                    rsshub_state['rescued'] = rsshub_state.get('rescued', 0) + 1
             return normalize(raw, src, now=now, limit=limit), meta
         except Exception as e:  # noqa: BLE001 — 端点失败继续试下一个，全部失败才抛
             errors.append(f'{url}: {type(e).__name__}: {e}'[:220])
@@ -909,11 +937,14 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
             # 也没用，不计入 —— 否则 WSJ 上游 401 这类会把整条 RSSHub 通道误判死。
             if is_rsshub and rsshub_state is not None and _is_edge_block(e):
                 inst = _instance_of(url)
-                blocked = rsshub_state.setdefault('failed_bases', [])
-                if inst and inst not in blocked:
-                    blocked.append(inst)
-                if len(blocked) >= rsshub_state.get('trip_after', 3):
-                    rsshub_state['tripped'] = True
+                with (lock or _NO_LOCK):
+                    blocked = rsshub_state.setdefault('failed_bases', [])
+                    if inst and inst not in blocked:
+                        blocked.append(inst)
+                    tripped_now = len(blocked) >= rsshub_state.get('trip_after', 3)
+                    if tripped_now:
+                        rsshub_state['tripped'] = True
+                if tripped_now:
                     if not quiet:
                         print(f'  ⚠️ RSSHub：已有 {len(blocked)} 个实例被边缘按 IP 拦截（403/429），'
                               '本轮停止使用 RSSHub → 05 节按目录回退原生 RSS / 检索载体',
@@ -923,7 +954,9 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
     # 只对目录里显式声明了 query 的源启用（catalog['deepseek_fallback']），
     # 且必须有 key —— 没有就照旧如实标「未获取」，绝不伪造。
     if src.get('deepseek_fallback') and deepseek_enabled():
-        if deepseek_budget is not None and deepseek_budget[0] <= 0:
+        with (lock or _NO_LOCK):
+            ds_left = None if deepseek_budget is None else deepseek_budget[0]
+        if ds_left is not None and ds_left <= 0:
             errors.append('DeepSeek 检索：本轮调用次数已达上限，跳过')
         else:
             try:
@@ -932,13 +965,16 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
                 if not raw:
                     raise ValueError('检索无结果')
                 if deepseek_budget is not None:
-                    deepseek_budget[0] -= 1
+                    with (lock or _NO_LOCK):
+                        deepseek_budget[0] -= 1
                 meta.update({'endpoint': f'{DEEPSEEK_SEARCH_URL}?q={query}',
                              'kind': 'deepseek',
                              'latency_ms': round((time.time() - t0) * 1000, 1)})
                 meta['attempts'] = errors + [f'DeepSeek 检索式: {query}']
                 if rsshub_state is not None:
-                    rsshub_state['deepseek_rescued'] = rsshub_state.get('deepseek_rescued', 0) + 1
+                    with (lock or _NO_LOCK):
+                        rsshub_state['deepseek_rescued'] = \
+                            rsshub_state.get('deepseek_rescued', 0) + 1
                 return normalize(raw, src, now=now, limit=limit), meta
             except Exception as e:  # noqa: BLE001 — 兜底也失败就照旧标未获取
                 errors.append(f'DeepSeek 检索: {type(e).__name__}: {e}'[:220])
@@ -982,7 +1018,10 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
                     'deepseek_rescued': 0, 'trip_after': max(1, int(RSSHUB_TRIP_AFTER))}
     deepseek_budget = [max(0, int(deepseek_max))] if not mock else None
 
-    for src in targets:
+    lock = threading.Lock() if (not mock and RSS_CONCURRENCY > 1) else None
+
+    def run_one(src, rsshub_budget):
+        """抓一个源 → (meta, kept)。异常在内部归类，绝不外抛（与串行版同一语义）。"""
         meta = {'id': src['id'], 'key': src['key'], 'name': src['name'], 'lang': src['lang'],
                 'site': src.get('site', ''), 'catalog_kind': src.get('verified'),
                 'note': src.get('note', ''), 'ok': False, 'kind': '', 'endpoint': '',
@@ -991,29 +1030,45 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
             meta['error'] = 'skipped_deadline: 超出本轮抓取的墙钟预算，未请求'
             if not quiet:
                 print(f'  ⏱️ {src["key"]} 跳过：超出时间预算', file=sys.stderr)
-            groups[src['group']]['sources'].append({**meta, 'items_list': []})
-            continue
+            return meta, []
         try:
             items, fmeta = fetch_source(src, timeout=timeout, mock=mock, now=now,
-                                        limit=limit, rsshub_budget=[rsshub_max] if not mock else None,
+                                        limit=limit, rsshub_budget=rsshub_budget,
                                         rsshub_state=rsshub_state, quiet=quiet,
-                                        deepseek_budget=deepseek_budget)
+                                        deepseek_budget=deepseek_budget, lock=lock)
             kept, dropped = filter_stale(items, max_age_days=max_age_days, now=now)
             kept = sort_items(dedup_titles(kept))
-            total_stale += dropped['stale_dropped']
-            total_undated += dropped['undated_kept']
-            total_kept += len(kept)
             meta.update({k: v for k, v in fmeta.items() if k != 'attempts'})
             meta.update({'ok': True, 'items': len(kept),
                          'attempts': fmeta.get('attempts') or []})
             if not quiet:
                 print(f'  ✅ {src["key"]: <16} {len(kept):>2} 条  [{meta["kind"]}] {meta["endpoint"]}')
+            return meta, kept, (len(kept), dropped['stale_dropped'], dropped['undated_kept'])
         except Exception as e:  # noqa: BLE001 — 单源失败不阻断（与行情/社区/快讯同一策略）
-            kept = []
             meta['error'] = f'{type(e).__name__}: {e}'[:400]
             if not quiet:
                 print(f'  ⚠️ {src["key"]} 失败: {meta["error"][:160]}（跳过，不影响其余源）',
                       file=sys.stderr)
+            return meta, [], (0, 0, 0)
+
+    # RSSHub 请求预算每源独立一份（与串行版口径一致：--rsshub-max 是「单源上限」）
+    budgets = [None if mock else [rsshub_max] for _ in targets]
+    workers = 1 if mock else max(1, min(int(RSS_CONCURRENCY or 1), len(targets)))
+    if workers > 1:
+        # 并发只在网络 I/O 上并行；共享的熔断/预算状态经同一把锁读写。
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(run_one, src, budgets[i]) for i, src in enumerate(targets)]
+            results = [f.result() for f in futures]
+    else:
+        results = [run_one(src, budgets[i]) for i, src in enumerate(targets)]
+
+    for src, res in zip(targets, results):
+        meta = res[0]
+        kept = res[1] if len(res) > 1 else []
+        stat = res[2] if len(res) > 2 else (0, 0, 0)
+        total_kept += stat[0]
+        total_stale += stat[1]
+        total_undated += stat[2]
         groups[src['group']]['sources'].append({**meta, 'items_list': kept})
 
     ok = sum(1 for g in groups.values() for s in g['sources'] if s['ok'])
@@ -1119,7 +1174,9 @@ def availability(data, now=None, snapshot_max_age_days=SNAPSHOT_MAX_AGE_DAYS):
 # 构建期补抓（与 macro_data.ensure 同一套策略，不依赖 workflow 权限）
 # ---------------------------------------------------------------------------
 AUTO_FETCH_TIMEOUT = 6
-AUTO_FETCH_BUDGET_SECONDS = 90
+# 构建期补抓的墙钟预算：50s 覆盖「并发 8 路 × 单源 6s 超时」的常态；原先 90s 会在
+# CI 里把 49 源拖成 31 源「未请求」的假缺口（2026-10-31 两次运行的线上事实）。
+AUTO_FETCH_BUDGET_SECONDS = 50
 REFETCH_REASONS = ('no_file', 'bad_type', 'stale_snapshot')
 
 
@@ -1713,6 +1770,8 @@ def main():
                     help=f'单源最多保留条数；默认 {LIMIT_PER_SOURCE_DEFAULT}')
     ap.add_argument('--only', default='', help='只抓指定 key（逗号分隔，联调用）')
     ap.add_argument('--timeout', type=int, default=10, help='单次请求超时秒数')
+    ap.add_argument('--budget', type=int, default=0,
+                    help='本轮墙钟预算（秒）：到点后剩余源记 skipped_deadline 但照常写出 JSON；0=不限')
     ap.add_argument('--mock', action='store_true', help='离线回放 tests/fixtures（本地/CI 联调）')
     ap.add_argument('--offline', action='store_true', help='断网兜底：读取已有 JSON，仅刷新时间戳')
     ap.add_argument('--text', action='store_true', help='打印人读摘要')
@@ -1761,8 +1820,10 @@ def main():
             sys.exit(2)
     if args.mock and only is None:
         only = None  # mock 一遍全目录，输出同构
+    t_start = time.time()
     data = build(max_age_days=args.days, limit=args.limit, timeout=args.timeout,
-                 mock=args.mock, quiet=args.quiet, only=only)
+                 mock=args.mock, quiet=args.quiet, only=only,
+                 deadline=(t_start + args.budget) if args.budget > 0 else None)
     with open(args.json, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
