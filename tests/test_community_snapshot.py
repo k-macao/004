@@ -221,18 +221,25 @@ class TestRenderTimeAnalysis(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             community_file = os.path.join(tmp, 'community.json')
             out = os.path.join(tmp, 'report.html')
+            rss_file = os.path.join(tmp, 'rss.json')
             with open(community_file, 'w', encoding='utf-8') as handle:
                 json.dump(data, handle)
             args = ['build_site.py', '--community', community_file, '--out', out,
                     '--data', os.path.join(tmp, 'market.json'), '--macro', os.path.join(tmp, 'macro.json'),
                     '--sentiment', os.path.join(tmp, 'sentiment.json'), '--macro-no-fetch',
-                    '--forecast-no-history']
-            with (mock.patch('sys.argv', args),
+                    '--rss', rss_file, '--rss-no-fetch', '--forecast-no-history']
+            # CI enables RSS bootstrap by default. This community-only test
+            # must neither fetch feeds nor create a shared repository artifact.
+            with (mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RSSFEEDS_AUTO_FETCH': '1'}),
+                  mock.patch('sys.argv', args),
                   mock.patch.object(cd, 'analyze_live_snippet', wraps=cd.analyze_live_snippet) as analyze,
                   mock.patch.object(cd.spider_mod, 'fetch_live_snippets', side_effect=AssertionError('network')),
+                  mock.patch.object(bs.rss_mod, 'build', side_effect=AssertionError('network')) as rss_build,
                   contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO())):
                 bs.main()
             self.assertGreater(analyze.call_count, 0)
+            rss_build.assert_not_called()
+            self.assertFalse(os.path.exists(rss_file))
             with open(out, encoding='utf-8') as handle:
                 html = handle.read()
             self.assertIn('本次读取分析', html)
