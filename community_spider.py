@@ -438,7 +438,24 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
         # timeouts and the selected backend apply to every HTTP request.
         session = sc.FetcherSession(transport=transport, timeout=timeout, retries=retries,
                                     retry_delay=0.5, respect_retry_after=True)
-    spider = CommunitySpider(communities, storage_file=storage_file, adaptive=adaptive,
+    # RSS 优先：有公开 RSS 地址的源先尝试订阅源，成功则跳过网页/APP 公开信息流；
+    # 不可用或无 RSS 的源留在 spider_communities 中，由下方的网页爬虫与评论策略处理。
+    rss_outcomes = {}
+    rss_ok_keys = set()
+    if comment_strategies:
+        import community_comments as comment_mod
+        for community in communities:
+            if not comment_mod._rss_feed_url(community):
+                continue
+            outcome = comment_mod.fetch_rss_feed(
+                community, session=session, timeout=timeout, now=now,
+                post_limiter=post_limiter)
+            rss_outcomes[community.get('key')] = outcome
+            if outcome['attempt'].get('status') == 'ok' and outcome['comments']:
+                rss_ok_keys.add(community.get('key'))
+    spider_communities = [c for c in communities if c.get('key') not in rss_ok_keys]
+
+    spider = CommunitySpider(spider_communities, storage_file=storage_file, adaptive=adaptive,
                              crawldir=crawldir, session=session, verbose=verbose)
     spider.name = 'community'
     spider.request_timeout = timeout
@@ -457,6 +474,8 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     for community in communities:
         key = community.get('key')
         if key and key not in spider.results:
+            if key in rss_ok_keys:
+                continue
             spider.results[key] = {
                 'key': key, 'id': community.get('id', ''), 'name': community.get('name', key),
                 'ctype': community.get('ctype', ''), 'url': community.get('url', ''), 'status': 0,
@@ -471,11 +490,13 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
         try:
             import community_comments as comment_mod
             outcomes, comment_stats = comment_mod.collect_comments(
-                communities, session=session, timeout=timeout, retries=retries,
+                spider_communities, session=session, timeout=timeout, retries=retries,
                 concurrency=concurrency, obey_robots=obey_robots, autothrottle=autothrottle,
                 max_blocked_retries=max_blocked_retries, download_delay=download_delay, now=now,
                 post_limiter=post_limiter)
             for key, outcome in outcomes.items():
+                if key in rss_ok_keys:
+                    continue
                 item = spider.results.get(key)
                 if item is None:
                     continue
@@ -499,6 +520,25 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
             comment_stats['error'] = type(exc).__name__
             if verbose:
                 print(f'  ⚠️ 评论采集适配器失败（{type(exc).__name__}），保留公开页摘录', file=sys.stderr)
+
+    # 把 RSS 成功的源写入结果，优先于网页/APP 公开信息流；这些源未经过 CommunitySpider。
+    comm_by_key = {c.get('key'): c for c in communities}
+    for key in rss_ok_keys:
+        outcome = rss_outcomes[key]
+        first = outcome['comments'][0] if outcome['comments'] else {}
+        comm = comm_by_key.get(key, {})
+        spider.results[key] = {
+            'key': key, 'id': comm.get('id', ''), 'name': comm.get('name', key),
+            'ctype': comm.get('ctype', ''), 'url': first.get('url', ''),
+            'status': first.get('http_status', 200), 'http_ok': True, 'ok': True,
+            'topic_hits': count_topic_hits(first.get('post_title', '') + ' ' + first.get('text', '')),
+            'title': first.get('post_title', ''), 'snippet': first.get('text', ''),
+            'selector': '', 'adaptive': False, 'bytes': first.get('response_bytes', 0),
+            'error': '', 'content_kind': 'thread_reply', 'strategy': 'rss_feed',
+            'comments': outcome['comments'],
+            'matched_comments': outcome['attempt']['matched_comments'],
+            'comment_attempt': outcome['attempt'],
+        }
 
     stats = result.stats.to_dict()
     for field in ('requests_count', 'blocked_requests_count', 'robots_disallowed_count',

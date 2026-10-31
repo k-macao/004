@@ -54,6 +54,19 @@ VERDICT_LABELS = {
     'unavailable': UNAVAILABLE_VERDICT_LABEL,
 }
 
+# 各源优先 RSS 地址（空表示该源无公开 RSS，直接回退到网站/APP 公开信息流）。
+# 仅列出有明确 RSS 订阅地址的源；其余 49 源中未列出者统一视为「无 RSS」，
+# 采集时优先尝试 RSS，不可用再回退到公开网页摘录与评论策略。
+RSS_FEEDS = {
+    'REDDIT': 'https://www.reddit.com/r/ChinaStocks/.rss',
+    'RINVESTING': 'https://www.reddit.com/r/investing/.rss',
+    'ROPTIONS': 'https://www.reddit.com/r/options/.rss',
+    'RCRYPTO': 'https://www.reddit.com/r/CryptoCurrency/.rss',
+    'BOGLEHEADS': 'https://www.bogleheads.org/forum/rss.php?f=10',
+    'DISCUSS': 'https://www.discuss.com.hk/rss.php?fid=115',
+    'SEEKINGALPHA': 'https://seekingalpha.com/market-news.rss',
+}
+
 # 49 大社区目录（保留完整 49 源编号与多语种/多类型覆盖；修正错配 URL，移除预设多空立场与「10 条」虚报口径）
 COMMUNITIES = [
     {"id": "01", "key": "FUTU", "name": "富途牛牛社区", "icon": "🐮", "ctype": "中文行情社区",
