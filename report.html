@@ -532,34 +532,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
   line-height:1.7;
 }
 .quant-metrics-title { margin-bottom:6px; color:var(--violet); font-weight:700; font-size:12px; }
-.quant-metrics-list, .ai-quant-list { list-style:none; margin:0; padding:0; }
-.quant-metrics-list li { position:relative; margin-bottom:5px; padding-left:16px; }
-.quant-metrics-list li::before { content:"▸"; position:absolute; left:0; color:var(--violet); }
-/* AI 量化及栏目内容：统一采用中性灰度字体与低对比边框/底色，减弱视觉权重，避免喧宾夺主 */
-.ai-quant {
-  --ai-quant-ink:#808080;
-  --ai-quant-ink-strong:#8e8e8e;
-  --ai-quant-ink-dim:#6e6e6e;
-  margin-top:9px;
-  padding:9px 11px;
-  color:var(--ai-quant-ink);
-  background:rgba(255,255,255,.02);
-  border:1px solid rgba(150,150,150,.15);
-  border-left:2px solid #4d4d4d;
-  border-radius:4px;
-  font-size:11px;
-  line-height:1.68;
-}
-.ai-quant strong { color:var(--ai-quant-ink-strong); font-weight:500; }
-.ai-quant-compact { padding:6px 9px; margin-top:6px; font-size:10.5px; line-height:1.62; }
-.ai-quant-title { margin-bottom:5px; color:var(--ai-quant-ink-strong); font-weight:600; font-size:11px; }
-.ai-quant-title span { display:inline-block; margin-left:6px; padding:2px 5px; color:#858585; background:rgba(255,255,255,.04); border:1px solid rgba(150,150,150,.18); border-radius:2px; font:500 9px/1 var(--mono); }
-.ai-quant .ai-quant-list li { position:relative; margin-bottom:3px; padding-left:15px; color:var(--ai-quant-ink); line-height:1.68; }
-.ai-quant .ai-quant-list li::before { content:"◆"; position:absolute; left:0; top:.14em; color:#666666; font-size:7.5px; }
-.ai-quant .ai-quant-forecast { margin-top:4px; }
-.ai-quant .ai-quant-forecast li { color:#787878; }
-.ai-quant-meta { margin-top:4px; color:var(--ai-quant-ink-dim); font-size:10px; }
-.footer p.ai-quant-rule { color:#6e6e6e; }
+.quant-metrics-list { list-style:none; margin:0; padding:0; }
 .pixel-list { list-style:none; margin:11px 0; }
 .pixel-list li { position:relative; margin-bottom:9px; padding-left:19px; color:#d8e0f6; line-height:1.78; }
 .pixel-list li::before { content:"◆"; position:absolute; left:0; top:.08em; color:var(--pink); font-size:9px; }
@@ -731,7 +704,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 
     <div class="push-wrap">
       <div class="push-title">微信推送 · 一对一专属单页完整直推 (Token 本人)</div>
-      <p class="push-tip">点击下方按钮，将本报告<strong>行情 + {{COMMUNITY_TOTAL}} 社区 · 含核心量化指标 · 每条内容后附跨域 AI 量化配对</strong>推送给 Token 对应的微信本人。</p>
+      <p class="push-tip">点击下方按钮，将本报告<strong>行情 + {{COMMUNITY_TOTAL}} 社区 · 含核心量化指标 · 49 源实抓摘录</strong>推送给 Token 对应的微信本人。</p>
       <button class="pixel-push-btn" id="pushBtn" onclick="manualPush()">▶ 立即推送微信单页完整版</button>
       <div class="terminal-log-box" id="pushStatus">STATUS &gt; 一对一专属推送已就绪 (Token 本人)<span>▌</span></div>
     </div>
@@ -760,7 +733,6 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
         <tr><td>美元/在岸人民币</td><td>{{USDCNY_LAST}}</td><td>{{USDCNY_CHG}}</td><td class="q-pct">{{USDCNY_PCT}}</td><td>{{USDCNY_ASOF}}</td></tr>
       </table>
       <div class="pub-meta">{{FETCH_STATUS}} · {{COMMUNITY_FETCH_STATUS}}</div>
-<!-- AI_QUANT:QUOTES -->
       <div id="macroList" style="border-top:1px dashed var(--border); margin-top:12px; padding-top:10px;">
 <!-- MACROLIST -->
 <div class="pub-sub">◆ 宏观快讯 — 今日未获取</div>
@@ -847,7 +819,6 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
         <li><strong>社区实抓情绪</strong>：实抓 {{COMMUNITY_LIVE_OK}}/{{COMMUNITY_TOTAL}} 源（偏多 {{CF_BULL}} · 偏空 {{CF_BEAR}} · 中性 {{CF_NEUTRAL}} · 分歧 {{CF_MIXED}} · 未获取 {{CF_UNAVAILABLE}}）。</li>
       </ul>
 <!-- VERDICT:END -->
-<!-- AI_QUANT:VERDICT -->
     </div>
     <div class="pub-box start">
       <strong style="color:#141414;">⚠️ 风险提示：</strong>仅供参考，不构成投资建议。数据可能延迟，操作前请核实最新实时数据。
@@ -857,8 +828,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 
   <footer class="footer">
     <div class="author">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</div>
-    <p id="pageGenTime">生成时间：{{TS_FULL}} · 内容发布时间见各条目 · 100K 完整单页直推版 · 含核心量化指标 · AI 量化配对</p>
-    <p class="ai-quant-rule">{{QUANT_RULE}}</p>
+    <p id="pageGenTime">生成时间：{{TS_FULL}} · 内容发布时间见各条目 · 100K 完整单页直推版 · 含核心量化指标</p>
   </footer>
 
 </div>

@@ -81,7 +81,6 @@ import vix_daily                                           # noqa: E402  00 节�
 import panorama                                            # noqa: E402  01 节「每日全球全景扫描」推理引擎
 import macro_data as macro_data_mod                        # noqa: E402  02 节快讯可用性判定（兜底口径单一事实源）
 import community_data as community_mod                     # noqa: E402  03 节 49 源严格真实口径与离线降级目录
-import quant_pair                                          # noqa: E402  每条内容后的 AI 量化配对
 import forecast as forecast_mod                            # noqa: E402  04 节「AI 预测 · 未来函数」推理引擎
 import rss_feeds as rss_mod                                # noqa: E402  05 节「49 大财经 RSS 情报源」目录/抓取/兜底
 
@@ -131,10 +130,6 @@ RSS_END = '<!-- RSSFEEDS:END -->'
 RSS_CLOSE = '<!-- /RSSFEEDS -->'
 VERDICT_BEGIN = '<!-- VERDICT:BEGIN -->'
 VERDICT_END = '<!-- VERDICT:END -->'
-# 行情快照与 07 结论是模板静态块，构建时在标记处补上 AI 量化（重复构建只替换标记，不追加）；
-# 行情不足时这些标记一律替换为空串（整段隐藏），不留「数据不足」占位
-AI_QUANT_QUOTES = '<!-- AI_QUANT:QUOTES -->'
-AI_QUANT_VERDICT = '<!-- AI_QUANT:VERDICT -->'
 
 def fmt_last(q, nd=None):
     """最新价 → "25,440.17"；缺失 → "—"。GOLD 且 >=1000 时取整数。"""
@@ -204,7 +199,6 @@ def build_tokens(data, now, community_data=None, sentiment_data=None, rss_data=N
     for i in range(1, 50):   # 49 大社区（14 原有 + 20 前次新增 + 15 本次扩容）
         tokens[f'{{{{CD_{i:02d}}}}}'] = cd
 
-    tokens['{{QUANT_RULE}}'] = quant_pair.rule_note_web()
     tokens['{{FETCH_STATUS}}'] = _fetch_status(data)
     tokens['{{COMMUNITY_FETCH_STATUS}}'] = _community_fetch_status(community_data)
     # 战情面板把 49 源 RSS 的当次可用率摊在最上层：它现在是 01/04 覆盖度的第 5 路。
@@ -413,16 +407,6 @@ def build_quant_html(quant):
     )
 
 
-def build_ai_quant_html(text, market=None, hint=None, compact=False, note=''):
-    """一条内容 → 一条 AI 量化配对（网页版）。
-
-    行情不全（两腿涨跌幅不齐）时**整段隐藏** —— 返回空串，不渲染「数据不足」段；
-    数据层照旧返回 action='no_data'（quant_pair.is_hidden 可判），只是不进页面。
-    """
-    rec = quant_pair.recommend(text or '', market, hint=hint)
-    return quant_pair.render_web(rec, compact=compact, note=note)
-
-
 def community_evidence_html(c):
     """Render bounded comment samples and safe provenance links (never HTML from the source)."""
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
@@ -476,16 +460,11 @@ def build_community_html(communities, market=None):
                            'demo': '演示样本'}.get(c.get('content_kind'), '公开页摘录（未核验为评论）')
             evidence_html = community_evidence_html(c)
             quant_html = build_quant_html(quant)
-            event = ((quant or {}).get('event') or {}).get('label') or ''
-            ai_html = build_ai_quant_html(
-                f"{c.get('name', '')} {ctype} {c.get('quote', '')} {event}",
-                market, hint=c.get('key'))
             verdict_block = (
                 f'  <div class="pub-verdict"><strong>▶ 词库极性与摘录说明：</strong>{verdict}</div>\n'
                 if verdict else ''
             )
             quant_line = f'{quant_html}\n' if quant_html else ''
-            ai_line = f'{ai_html}\n' if ai_html else ''
             article = (
                 f'<article class="pub-card" data-verdict="{_esc(vclass)}">\n'
                 f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
@@ -493,44 +472,19 @@ def build_community_html(communities, market=None):
                 f'{evidence_html}'
                 f'{verdict_block}'
                 f'{quant_line}'
-                f'{ai_line}'
                 f'  <div class="pub-meta">{meta}</div>\n'
                 f'</article>'
             )
         else:
-            ai_html = build_ai_quant_html(
-                f"{c.get('name', '')} {ctype}", market, hint=c.get('key'),
-                note='社区热评未获取，配对仅依当次实时行情计算；行情不全时整段隐藏。')
-            ai_line = f'{ai_html}\n' if ai_html else ''
             article = (
                 f'<article class="pub-card" data-verdict="unavailable">\n'
                 f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
                 f'  <p class="pub-quote"><strong>抓取状态：</strong>{quote}</p>\n'
-                f'{ai_line}'
                 f'  <div class="pub-meta">{meta}</div>\n'
                 f'</article>'
             )
         html_parts.append(article)
     return "\n".join(html_parts)
-
-
-def ensure_community_ai_quant(html, market=None):
-    """社区列表若仍是模板静态卡片（没有动态注入），也在每条 </article> 前补上 AI 量化。"""
-    if COMMUNITY_LIST_BEGIN not in html or COMMUNITY_LIST_END not in html:
-        return html
-    pre, rest = html.split(COMMUNITY_LIST_BEGIN, 1)
-    mid, post = rest.split(COMMUNITY_LIST_END, 1)
-
-    def repl(m):
-        block = m.group(0)
-        if 'class="ai-quant"' in block:
-            return block
-        text = re.sub(r'<[^>]+>', ' ', block)
-        insert = build_ai_quant_html(text, market)
-        return block.replace('</article>', insert + '\n</article>', 1)
-
-    mid = re.sub(r'<article\b.*?</article>', repl, mid, flags=re.S)
-    return pre + COMMUNITY_LIST_BEGIN + mid + COMMUNITY_LIST_END + post
 
 
 def inject_community_list(template, community_html):
@@ -587,8 +541,6 @@ def build_macro_unavailable_html(avail, market=None):
            'python3 macro_data.py --json macro_data.json --days 7 --text</code></div>\n'
            if detail else '')
         + '</div>\n'
-        + build_ai_quant_html('宏观快讯未获取 港股行情', market, hint='hk_tape',
-                              note='快讯缺失，配对只使用当次行情；行情也不全时不给方向。')
     )
 
 
@@ -636,11 +588,9 @@ def build_macro_html(macro_data, now=None, market=None):
             raw_snip = (it.get('snippet') or '').strip()
             ttl = _esc(raw_title)
             snip = _esc(raw_snip[:72])
-            ai = build_ai_quant_html(f'{label} {raw_title} {raw_snip}', market, hint=ckey, compact=True)
             rows.append(
                 f'  <li><strong style="color:#000;">[{_esc(_md_cn(it.get("published_date")))}]</strong> {ttl}'
                 + (f' <span style="color:var(--muted);font-size:11px;">{snip}</span>' if snip else '')
-                + ai
                 + '</li>'
             )
         parts.append(f'<div class="pub-sub" style="margin-top:10px;">◆ {_esc(label)}</div>')
@@ -860,8 +810,6 @@ def build_sentiment_html(s, market=None):
                 '或 <code>python3 sentiment_factors.py --mock</code> 用录制报文离线回放。'
                 + ('<div class="pub-meta">接入评测与打分由 <code>tools/probe_sentiment_apis.py</code> 生成，'
                    '结论详见 <code>docs/sentiment-api-eval.md</code>。</div>' if show_api_eval() else '')
-                + build_ai_quant_html('舆情因子未获取', market, hint='sentiment',
-                                      note='因子节点未生成，配对只使用当次行情。')
                 + '</div>')
 
     m = s.get('market') or {}
@@ -887,9 +835,6 @@ def build_sentiment_html(s, market=None):
              '带原生情感字段者直接采用平台口径，其余由自建中文金融词库打分'),
     ]
     parts.append('<div class="stat-grid">' + ''.join(cards) + '</div>')
-    parts.append(build_ai_quant_html(
-        f"市场舆情 {m.get('label') or ''} 净情感 {m.get('net_senti')} 风险 {m.get('risk_score')}",
-        market, hint='sentiment'))
 
     # ---- 采集 → 匹配：新闻舆情按关键词对齐到日报标的与主题（对外不显示来源） ----
     mm = s.get('matches') or {}
@@ -920,11 +865,6 @@ def build_sentiment_html(s, market=None):
                '只计入市场级读数，不进标的表）。</div>' if mm.get('unmatched') else '')
             + '<div class="pub-meta">匹配规则：标题命中权重 0.4 / 正文 0.15，净情感与风险分复用同一套'
               '自建中文金融词库口径（平台已给原生情感字段时优先采用平台口径）。</div>'
-            + quant_pair.render_web_list([
-                quant_pair.recommend(
-                    f"{t.get('name', '')} {((t.get('top_titles') or [{}])[0]).get('title', '')}",
-                    market, hint=t.get('key'))
-                for t in tgts])
             + '</div>')
 
     # ---- 平台接入评测（9 阶段实测）矩阵：默认对外隐藏 ----
@@ -973,10 +913,6 @@ def build_sentiment_html(s, market=None):
             '<th>净情感</th><th>新闻数</th><th>风险分</th></tr>' + ''.join(rows) + '</table>'
             '<div class="pub-meta">关注指数为量化平台现成热度类因子（小时/日频，无极性）；'
             '净情感来自平台原生情感字段或自建中文金融词库打分。</div>'
-            + quant_pair.render_web_list([
-                quant_pair.recommend(
-                    f"{st.get('name') or ''} {st.get('symbol') or ''}", market, hint=st.get('symbol'))
-                for st in stocks])
             + '</div>')
 
     events = (m.get('events') or [])[:5]
@@ -1002,9 +938,6 @@ def build_sentiment_html(s, market=None):
         parts.append('<div class="pub-box"><div class="pub-sub">◆ 情感样本极值（可回溯：命中词与权重 · 不含来源）</div>'
                      '<ul class="pixel-list">' + ''.join(li(x, '负面') for x in top_neg)
                      + ''.join(li(x, '正面') for x in top_pos) + '</ul>'
-                     + build_ai_quant_html(
-                         ' '.join((x.get('title') or '') for x in (top_neg + top_pos)),
-                         market, hint='sentiment')
                      + '</div>')
 
     srcs = s.get('sources') or []
@@ -1068,23 +1001,6 @@ def _f2(v, fmt='.2f'):
 def _esc(t):
     import html
     return html.escape(str(t if t is not None else ''), quote=False)
-
-
-def fill_ai_quant_markers(html, market=None):
-    """把模板里的行情快照 / 07 结论标记换成当次配对推荐。标记缺失则原样返回。"""
-    if AI_QUANT_QUOTES in html:
-        html = html.replace(
-            AI_QUANT_QUOTES,
-            build_ai_quant_html(
-                '行情快照 恒生指数 恒生科技 标普 纳斯达克 道琼斯 黄金 原油 人民币',
-                market, hint='tape'),
-            1)
-    if AI_QUANT_VERDICT in html:
-        html = html.replace(
-            AI_QUANT_VERDICT,
-            build_ai_quant_html('核心结论 港股 配置 黄金 原油 防御', market, hint='hk_tape'),
-            1)
-    return html
 
 
 def build_verdict_html(data, macro_data, community_data):
@@ -1162,7 +1078,7 @@ def inject_sentiment(template, block_html):
 
 
 def main():
-    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 动态建站（行情+社区+舆情三动态+量化指标+跨域配对）')
+    ap = argparse.ArgumentParser(description='章鱼 AI·舆情004 — 动态建站（行情+社区+舆情三动态+量化指标+预测+49 源）')
     ap.add_argument('--data', default='market_data.json', help='行情数据 JSON 路径')
     ap.add_argument('--community', default='community_data.json', help='社区数据 JSON 路径')
     ap.add_argument('--sentiment', default='sentiment_data.json',
@@ -1257,7 +1173,6 @@ def main():
 
     now = datetime.now(timezone.utc)
     community_data = community_mod.reanalyze_snapshot(community_data, now=now)
-    quant_pair.reset_hidden_render_count()      # 行情不足的隐藏处数：本次构建单独计数
 
     # 02 节快讯产物：缺失 / 写坏 / 旧快照时**就地补抓一次**（构建期兜底）。
     # 线上 workflow 至今没有 macro_data.py 这一步（补丁待有 workflows 权限的账号应用），
@@ -1333,7 +1248,6 @@ def main():
         print('  ℹ️ 未读到有效 community_data.json，03 节按严格真实口径注入 49 源「未获取」状态（不保留旧静态卡片）')
         offline_comms = community_mod.offline_dataset(market=data, now=now)['communities']
         template = inject_community_list(template, build_community_html(offline_comms, market=data))
-    template = ensure_community_ai_quant(template, market=data)
 
     template = inject_vix(template, build_vix_html(data))
     template = inject_panorama(template, build_panorama_html(
@@ -1346,7 +1260,6 @@ def main():
         history=not (args.check or args.forecast_no_history),
         history_path=args.forecast_history))
     template = inject_verdict(template, build_verdict_html(data, macro_data, community_data))
-    template = fill_ai_quant_markers(template, market=data)
 
     missing = sorted(set(find_leftovers(template)) - set(tokens))
     if missing:
@@ -1391,10 +1304,6 @@ def main():
     print(f"   RSS 情报源: {rss_status}")
     print(f"   宏观快讯: {_macro_status(macro_data)}"
           + (f" · 入库 {macro_summ.get('kept_items')} 条" if macro_data else ''))
-    hidden_n = quant_pair.hidden_render_count()
-    if hidden_n:
-        print(f'  🔒 行情不足：{hidden_n} 处 AI 量化配对已整段隐藏（两腿涨跌幅不齐，'
-              '不渲染「数据不足」，也不编方向）')
 
 
 if __name__ == '__main__':

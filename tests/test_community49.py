@@ -33,7 +33,6 @@ import community_data as cd        # noqa: E402
 import community_spider as cs      # noqa: E402
 import forecast as fc              # noqa: E402
 import panorama                    # noqa: E402
-import quant_pair                  # noqa: E402
 import scrapling_core as sc        # noqa: E402
 import wechat_push as wp           # noqa: E402
 
@@ -284,63 +283,6 @@ class TestScraplingEngineWiring(unittest.TestCase):
         self.assertEqual(data['fetch_engine']['backend'], 'injected')
 
 
-class TestCrossDomainPairs(unittest.TestCase):
-    def test_pair_catalog_and_recommendations_are_always_cross_domain(self):
-        self.assertEqual(quant_pair.cross_domain_catalog_errors(), [])
-        all_hints = {h for s in quant_pair.STRATEGIES for h in s['hints']}
-        missing_hints = [c['key'] for c in cd.COMMUNITIES if c['key'] not in all_hints]
-        self.assertEqual(missing_hints, [], f'49 个社区源都应显式映射跨域策略 hint，缺: {missing_hints}')
-        quotes = {'quotes': {k: {'name': v['name'], 'pct': v['pct']} for k, v in MARKET['quotes'].items()}}
-        for c in cd.COMMUNITIES:
-            rec = quant_pair.recommend(f"{c['name']} {c['ctype']}", quotes, hint=c['key'])
-            self.assertNotEqual(rec['domain_a'], rec['domain_b'],
-                                f"{c['key']} 给出的是同域组合：{rec['domain_pair']}")
-            self.assertTrue(rec['cross_domain'])
-            self.assertNotEqual(rec['leg_a']['key'], rec['leg_b']['key'])
-
-    def test_every_community_card_in_the_web_page_has_a_cross_domain_pair(self):
-        d = _mock_checked_dataset()
-        html = bs.build_community_html(d['communities'], market=MARKET)
-        self.assertEqual(html.count('<article class="pub-card"'), 49)
-        self.assertEqual(html.count('class="ai-quant"'), 49)
-        # 仅 3 个实抓源渲染 quant-metrics，46 个未获取源绝不伪造核心量化指标框
-        self.assertEqual(html.count('class="quant-metrics"'), 3)
-        pairs = re.findall(r'data-domain-pair="([^"]+)"', html)
-        self.assertEqual(len(pairs), 49)
-        for p in pairs:
-            a, b = [x.strip() for x in p.split('×')]
-            self.assertTrue(a and b, f'域对标签不完整: {p}')
-            self.assertNotEqual(a, b, f'同域组合不允许出现在卡片里: {p}')
-        self.assertEqual(html.count('跨域组合：'), 49)
-
-    def test_report_template_labels_are_dynamic_not_hardcoded_14(self):
-        with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as f:
-            tpl = f.read()
-        for token in ('{{COMMUNITY_TOTAL}}', '{{COMMUNITY_LIVE_OK}}', '{{COMMUNITY_TYPE_TOTAL}}',
-                      '{{CF_BULL}}', '{{CF_BEAR}}', '{{CF_NEUTRAL}}', '{{CF_MIXED}}', '{{CF_UNAVAILABLE}}'):
-            self.assertIn(token, tpl, f'模板应使用动态口径 token: {token}')
-        self.assertNotIn('全部 14 平台', tpl)
-        self.assertNotIn('14 SOURCE FEEDS', tpl)
-
-    def test_build_site_tokens_follow_the_dataset_honestly(self):
-        checked = _mock_checked_dataset(live_keys=('FUTU', 'XUEQIU', 'REDDIT'), now=NOW)
-        tokens = bs.build_tokens(MARKET, NOW, community_data=checked)
-        self.assertEqual(tokens['{{COMMUNITY_TOTAL}}'], '49')
-        self.assertEqual(tokens['{{COMMUNITY_LIVE_OK}}'], '3')
-        self.assertEqual(tokens['{{CF_UNAVAILABLE}}'], '46')
-        self.assertEqual(int(tokens['{{CF_BULL}}']) + int(tokens['{{CF_BEAR}}'])
-                         + int(tokens['{{CF_NEUTRAL}}']) + int(tokens['{{CF_MIXED}}']), 3)
-        for index in range(1, 50):
-            self.assertEqual(tokens[f'{{{{CD_{index:02d}}}}}'], TODAY)
-
-        # 无社区数据时返回 49 源「全部未获取（0 实抓）」，绝不再退回旧「14 平台 / 6 偏多」常数
-        empty = bs.build_tokens(MARKET, NOW, community_data={})
-        self.assertEqual(empty['{{COMMUNITY_TOTAL}}'], '49')
-        self.assertEqual(empty['{{COMMUNITY_LIVE_OK}}'], '0')
-        self.assertEqual(empty['{{CF_UNAVAILABLE}}'], '49')
-        self.assertEqual(empty['{{CF_BULL}}'], '0')
-
-
 class TestWechat49Sources(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -382,8 +324,8 @@ class TestWechat49Sources(unittest.TestCase):
         self.assertEqual(set(markers), {TODAY})
         self.assertIn('49 大平台', html)
         self.assertIn('南向资金大幅净买入', html, '微信推送必须保留实盘抓到的真实片段')
-        per_source_blocks = len(re.findall(r'◆ AI 量化|跨域配对：', html))
-        self.assertGreaterEqual(per_source_blocks, 49)
+        self.assertNotIn('跨域配对：', html, '配对交易已下线，推送里不应再出现跨域配对标签')
+        self.assertNotIn('◆ AI 量化', html, '配对交易已下线，推送里不应再出现 AI 量化块')
         self.assertLess(len(html), wp.CONTENT_SAFE_LIMIT, '49 源仍须落在推送字符门禁之内')
         for key in ('ZHIHU', 'PTT', 'FTALPHA', 'JISILU', 'NAVER', 'AASTOCKS'):
             src = next(c for c in d['communities'] if c['key'] == key)

@@ -49,7 +49,6 @@ try:
 except Exception:                                     # pragma: no cover - 词库缺失时降级为纯行情推导
     nlp = None
 
-import quant_pair                                     # 每条力量后的 AI 量化配对（网页/微信同一口径）
 import rss_feeds as rss_mod                           # 第 5 路数据源：49 源 RSS 的可用率
 
 MINUS = '\u2212'
@@ -557,12 +556,6 @@ def scan(market=None, macro=None, sentiment=None, community=None, rss=None,
         f['rank'] = i
     noise = [f for f in forces if f['tier'] == '噪音' and f not in top]
 
-    # 每条力量后面挂一条 AI 量化配对：策略从本条证据里找，方向只看当次两腿涨跌幅。
-    for f in forces:
-        f['ai_quant'] = quant_pair.recommend(
-            f"{f.get('name', '')} {f.get('category', '')} {f.get('read', '')} {f.get('impact', '')}",
-            quotes, hint=f.get('key'))
-
     # ---------- 覆盖度与数据缺口 ----------
     # 只认「真的有值」的数据：文件存在但全是 null（抓取失败的常见形态）一律计为缺口，
     # 否则会出现「覆盖 100% 却一条行情都没有」的假高置信度。
@@ -668,17 +661,10 @@ def scan(market=None, macro=None, sentiment=None, community=None, rss=None,
     bulls = [f['name'] for f in effective if f['direction'] > 0]
     bears = [f['name'] for f in effective if f['direction'] < 0]
 
-    verdict_ai = quant_pair.recommend(
-        ' '.join([stance] + bulls + bears), quotes, hint='hk_tape')
-
     return {
         'generated_at': now.strftime('%Y-%m-%d %H:%M:%S UTC'),
         'scan_date': now.strftime('%Y-%m-%d'),
         'quote_date': hsi.get('as_of') or (market.get('fetch_date') or ''),
-        'pair_quotes': {k: {'name': (q or {}).get('name') or '',
-                            'pct': _num((q or {}).get('pct')),
-                            'as_of': (q or {}).get('as_of') or ''}
-                        for k, q in quotes.items() if isinstance(q, dict)},
         'forces': top,
         'all_forces': forces,
         'noise': noise,
@@ -698,7 +684,6 @@ def scan(market=None, macro=None, sentiment=None, community=None, rss=None,
             'score_text': score_text_of(long_score, can_long),
             'rule': ('合成分 = Σ(方向 × 力量分 × 权重) / Σ(力量分 × 权重)，噪音不计入；'
                      '≥25 可做多 / ≥10 轻仓 / −10~10 观望 / ≤−10 防御'),
-            'ai_quant': verdict_ai,
         },
     }
 
@@ -719,33 +704,6 @@ def _ev_line(e):
 
 HEAD_NOTE = ('口径：力量分 = 45% 幅度 + 30% 印证度 + 25% 时效；'
              '≥55 重点 / 35~55 次要 / <35 或未过噪音阈值均计噪音。')
-
-_FOCUS_HINT = {
-    '宏观事件': 'macro_growth',
-    '板块轮动': 'rotation',
-    '情绪变化': 'sentiment',
-    '是否可以做多': 'hk_tape',
-}
-
-
-def _force_ai(force, data):
-    """力量上已挂的配对结果优先；旧结果缺字段时按当次行情现算。"""
-    aq = (force or {}).get('ai_quant')
-    if aq:
-        return aq
-    return quant_pair.recommend(
-        f"{(force or {}).get('name', '')} {(force or {}).get('category', '')} "
-        f"{(force or {}).get('read', '')} {(force or {}).get('impact', '')}",
-        (data or {}).get('pair_quotes'),
-        hint=(force or {}).get('key'))
-
-
-def _focus_ai(fc, data):
-    return quant_pair.recommend(
-        f"{fc.get('category', '')} {fc.get('summary', '')} {fc.get('lead', '')}",
-        (data or {}).get('pair_quotes'),
-        hint=_FOCUS_HINT.get(fc.get('category')))
-
 
 def render_web(data):
     """01 栏网页版 HTML（沿用 report.html 的 .pub-* / .pixel-list 类）。"""
@@ -773,7 +731,6 @@ def render_web(data):
             f'<strong>当次读数：</strong>{_esc(f["read"])}</p>'
             + (f'<ul class="pixel-list" style="margin:8px 0 0;">{evs}</ul>' if evs else '')
             + f'<div class="pub-verdict"><strong style="color:#000;">▶ 如何利好利空：</strong>{_esc(f["impact"])}</div>'
-            + quant_pair.render_web(_force_ai(f, data))
             + '</div>')
 
     parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化</div>')
@@ -781,7 +738,6 @@ def render_web(data):
     for fc in data['focus']:
         focus_bits.append(
             f'<li><strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}'
-            + quant_pair.render_web(_focus_ai(fc, data), compact=True, brief=True)
             + '</li>')
     parts.append('<ul class="pixel-list">' + ''.join(focus_bits) + '</ul>')
 
@@ -790,8 +746,6 @@ def render_web(data):
     if noise:
         parts.append('<ul class="pixel-list">' + ''.join(
             f'<li><strong>{_esc(n["name"])}</strong>（{n["score"]} 分）—— {_esc(n["read"])}'
-            + quant_pair.render_web(_force_ai(n, data), compact=True, brief=True,
-                                    note='噪音段：配对只作对照，不作为做多依据。')
             + '</li>'
             for n in noise) + '</ul>')
     else:
@@ -815,9 +769,6 @@ def render_web(data):
         + ''.join(f'<div class="pub-meta" style="margin-top:4px;">调整项：{_esc(a)}</div>' for a in v['adjust'])
         + f'<div class="pub-meta" style="margin-top:8px;">{_esc(v["rule"])}'
           '（规则化推导，不构成投资建议）</div>'
-        + quant_pair.render_web(v.get('ai_quant') or _focus_ai(
-            {'category': '是否可以做多', 'summary': v.get('stance') or ''}, data),
-            note='配对推荐独立于上方做多合成分，两腿行情不全时不给方向。')
         + '</div>')
 
     if data['data_gaps']:
@@ -858,13 +809,11 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
             f'<br/><strong>归类：</strong>{_esc(f["category"])}　<strong>当次读数：</strong>{_esc(f["read"])}'
             + evs
             + f'<br/><strong style="color:{green};">如何利好利空：</strong>{_esc(f["impact"])}'
-            + quant_pair.render_wechat(_force_ai(f, data))
             + '</div>')
 
     out.append('<br/>' + sub('◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化'))
     out.append(''.join(
         f'· <strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}'
-        + quant_pair.render_wechat(_focus_ai(fc, data), compact=True, brief=True)
         + '<br/>'
         for fc in data['focus']))
 
@@ -887,9 +836,6 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
     for a in v['adjust']:
         out.append('<br/><span style="color:#9aa6c3;font-size:10.5px;">调整项：' + _esc(a) + '</span>')
     out.append(meta(_esc(v['rule']) + '（规则化推导，不构成投资建议）'))
-    out.append(quant_pair.render_wechat(v.get('ai_quant') or _focus_ai(
-        {'category': '是否可以做多', 'summary': v.get('stance') or ''}, data),
-        note='配对推荐独立于上方做多合成分，两腿行情不全时不给方向。'))
     if data['data_gaps']:
         out.append(meta('数据缺口：' + _esc('；'.join(data['data_gaps'])) + '（按空值处理，不回填旧文）'))
     out.append('</div>')
