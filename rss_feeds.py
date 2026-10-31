@@ -104,7 +104,21 @@ GROUP_LABELS = {k: label for k, label, _desc in GROUPS}
 GROUP_DESCS = {k: desc for k, _label, desc in GROUPS}
 GROUP_EXPECTED = {'macro': 10, 'us': 10, 'cn': 11, 'cmdty': 8, 'crypto': 6, 'masters': 4}
 
-KIND_LABELS = {'native': '原生 RSS', 'rsshub': 'RSSHub 路由', 'gnews': '检索载体'}
+KIND_LABELS = {'native': '原生 RSS', 'rsshub': 'RSSHub 路由', 'gnews': '检索载体',
+               'deepseek': 'DeepSeek 检索'}
+
+# DeepSeek Search API（2026-10-17 上线）：官方自建搜索引擎的原始 JSON 接口。
+#   POST https://api.deepseek.com/v1/tools/search
+#   {query, count, need_content, ori_question, localization}
+#   → results[{title,url,snippet,summary,content,date(RFC3339),rerank_score(0-3),authority(0-4)}]
+# 用途定位：**只给「RSS 路由自身坏死 / 站点端点消失」的源做检索兜底**，
+# 不用它替代已跑通的原生 RSS（拿搜索结果冒充订阅源既更贵也更差）。
+DEEPSEEK_SEARCH_URL = 'https://api.deepseek.com/v1/tools/search'
+DEEPSEEK_TIMEOUT = int(os.environ.get('DEEPSEEK_TIMEOUT', '20') or 20)
+# 低质量结果门槛：官方口径 rerank_score ≥ 1.5 视为高质量；0 表示不过滤。
+DEEPSEEK_MIN_SCORE = float(os.environ.get('DEEPSEEK_MIN_SCORE', '0') or 0)
+# 每轮最多调用几次（省钱 + 避开 5 QPS）：失败/空结果免费，只有成功才计费。
+DEEPSEEK_MAX_PER_RUN = int(os.environ.get('DEEPSEEK_MAX_PER_RUN', '20') or 20)
 
 
 def _rsshub(path):
@@ -130,6 +144,8 @@ CATALOG = [
      'verified': 'native',
      'note': '英国《金融时报》官方 RSS 首页源（含全球经济/市场要闻）；付费墙文章只给摘要。'},
     {'id': 3, 'key': 'WSJ_ECON', 'name': 'WSJ 经济板块', 'group': 'macro', 'lang': 'en',
+     'query': 'economy markets',
+     'deepseek_fallback': True,
      'site': 'https://www.wsj.com/news/economy',
      'endpoints': [_rsshub('/wsj/en-us/economy'), _rsshub('/wsj/zh-cn/economy')],
      'verified': 'rsshub_doc',
@@ -176,6 +192,8 @@ CATALOG = [
 
     # ---------------- 二、美股、科技创新与公司财报（11-20） ----------------
     {'id': 11, 'key': 'WSJ_BIZ', 'name': 'WSJ 全美商业', 'group': 'us', 'lang': 'en',
+     'query': 'business companies',
+     'deepseek_fallback': True,
      'site': 'https://www.wsj.com/news/business',
      'endpoints': [_rsshub('/wsj/en-us/business'), _rsshub('/wsj/zh-cn/business')],
      'verified': 'rsshub_doc',
@@ -197,6 +215,8 @@ CATALOG = [
      'verified': 'rsshub_doc',
      'note': 'RSSHub /barronschina/:id（默认快讯栏目；原版 barrons.com 无公开 RSS）。'},
     {'id': 15, 'key': 'SEEKINGALPHA', 'name': 'Seeking Alpha 美股选股', 'group': 'us', 'lang': 'en',
+     'query': 'market news stocks',
+     'deepseek_fallback': True,
      'site': 'https://seekingalpha.com/market-news',
      'endpoints': ['https://seekingalpha.com/market-news.rss',
                    _rsshub('/seekingalpha/TSM/news')],
@@ -241,11 +261,15 @@ CATALOG = [
      'verified': 'rsshub_doc',
      'note': 'RSSHub /cls/telegraph（另有 watch/announcement/red/hk_us 等分类）。'},
     {'id': 23, 'key': 'XUEQIU', 'name': '雪球今日话题', 'group': 'cn', 'lang': 'zh-CN',
+     'query': '今日话题 港股 A股',
+     'deepseek_fallback': True,
      'site': 'https://xueqiu.com/today',
      'endpoints': [_rsshub('/xueqiu/today'), _rsshub('/xueqiu/hots')],
      'verified': 'rsshub_doc',
      'note': 'RSSHub /xueqiu/today（路由标记 antiCrawler，需实例可拿 Cookie；失败如实标未获取）。'},
     {'id': 24, 'key': 'SINA_FIN', 'name': '新浪财经聚合', 'group': 'cn', 'lang': 'zh-CN',
+     'query': '财经 滚动新闻',
+     'deepseek_fallback': True,
      'site': 'https://finance.sina.com.cn/',
      'endpoints': [_rsshub('/sina/finance/rollnews'), _rsshub('/sina/finance/china')],
      'verified': 'rsshub_doc',
@@ -303,6 +327,8 @@ CATALOG = [
      'verified': 'native',
      'note': 'Investing.com 官方分类 RSS（news_25 经济指标；商品/外汇各有对应编号）。'},
     {'id': 33, 'key': 'KITCO', 'name': 'Kitco 黄金', 'group': 'cmdty', 'lang': 'en',
+     'query': 'gold silver news',
+     'deepseek_fallback': True,
      'site': 'https://www.kitco.com/news/',
      'endpoints': ['https://www.kitco.com/rss/KitcoNews.xml', 'https://www.kitco.com/rss/'],
      'verified': 'needs_check',
@@ -313,11 +339,15 @@ CATALOG = [
      'verified': 'native',
      'note': 'Oilprice.com 官方主源（油价、OPEC 政策与地缘风险）。'},
     {'id': 35, 'key': 'FXSTREET', 'name': 'FXStreet 外汇', 'group': 'cmdty', 'lang': 'en',
+     'query': 'forex news analysis',
+     'deepseek_fallback': True,
      'site': 'https://www.fxstreet.com/news',
      'endpoints': ['https://www.fxstreet.com/rss/news'],
      'verified': 'native',
      'note': 'FXStreet 官方新闻 RSS（主要货币对与技术分析）。'},
     {'id': 36, 'key': 'DAILYFX', 'name': 'DailyFX', 'group': 'cmdty', 'lang': 'en',
+     'query': 'forex market news',
+     'deepseek_fallback': True,
      'site': 'https://www.dailyfx.com/',
      'endpoints': ['https://www.dailyfx.com/feeds/all'],
      'verified': 'native',
@@ -328,6 +358,8 @@ CATALOG = [
      'verified': 'rsshub_doc',
      'note': 'RSSHub /jin10/:important?（留空=全部快讯，传任意值只看重要）。'},
     {'id': 38, 'key': 'FX678', 'name': '汇通网', 'group': 'cmdty', 'lang': 'zh-CN',
+     'query': '快讯 外汇 商品',
+     'deepseek_fallback': True,
      'site': 'https://www.fx678.com/',
      'endpoints': [_rsshub('/fx678/kx')],
      'verified': 'rsshub_doc',
@@ -385,6 +417,8 @@ CATALOG = [
      'verified': 'native',
      'note': 'Blogspot 官方 Atom/RSS 出口（纽约大学估值教授博客）。'},
     {'id': 48, 'key': 'QUANTSTART', 'name': 'QuantStart（量化交易）', 'group': 'masters',
+     'query': 'quantitative trading algorithms',
+     'deepseek_fallback': True,
      'lang': 'en', 'site': 'https://www.quantstart.com/',
      'endpoints': ['https://www.quantstart.com/feed/', 'https://www.quantstart.com/articles/feed/'],
      'verified': 'needs_check',
@@ -488,6 +522,109 @@ def _is_edge_block(err):
     text = str(err)
     return ('403' in text or '429' in text
             or 'Forbidden' in text or 'Too Many Requests' in text)
+
+
+def deepseek_key():
+    """DeepSeek API Key（DEEPSEEK_API_KEY）；没有就返回空串。"""
+    return str(os.environ.get('DEEPSEEK_API_KEY') or '').strip()
+
+
+def deepseek_enabled():
+    """DeepSeek 检索兜底是否可用：有 key 且没被显式关掉。"""
+    if str(os.environ.get('DEEPSEEK_SEARCH', '')).strip().lower() in ('0', 'false', 'no', 'off'):
+        return False
+    return bool(deepseek_key())
+
+
+def _http_post_json(url, payload, headers=None, timeout=20, proxy=None):
+    """POST JSON → dict。与 http_get 同一套「自己建 opener」的做法（不吃全局代理设置）。"""
+    data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+    req = urllib.request.Request(url, data=data, method='POST', headers={
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': UA,
+        **(headers or {}),
+    })
+    proxy_url = proxy if proxy is not None else rsshub_proxy()
+    if proxy_url:
+        handlers = [urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url})]
+    else:
+        handlers = [urllib.request.ProxyHandler({})]
+    opener = urllib.request.build_opener(*handlers)
+    with opener.open(req, timeout=timeout) as resp:
+        raw = resp.read()
+    return json.loads(raw.decode('utf-8', errors='replace') or '{}')
+
+
+def build_deepseek_query(src, now=None):
+    """把目录条目拼成检索式：锁定站点 + 语言 + 时效，尽量贴近「订阅这个板块」。
+
+    site: 取站点主机名（保留可能的子域路径语义）；after: 收紧到时效窗口起点，
+    避免把几个月前的旧闻当今日情报；lang: 让中英文站点各走各的语言。
+    """
+    now = now or datetime.now(timezone.utc)
+    site = ''
+    raw_site = str(src.get('site') or '')
+    if raw_site:
+        parsed = urllib.parse.urlparse(raw_site if '//' in raw_site else 'https://' + raw_site)
+        site = (parsed.hostname or '').lower()
+    if site.startswith('www.'):
+        site = site[4:]
+    parts = []
+    if site:
+        parts.append(f'site:{site}')
+    topic = str(src.get('query') or '').strip()
+    if topic:
+        parts.append(topic)
+    lang = str(src.get('lang') or '').lower()
+    if lang.startswith('zh'):
+        parts.append('lang:zh')
+    elif lang:
+        parts.append('lang:en')
+    since = (now - timedelta(days=MAX_AGE_DAYS_DEFAULT)).strftime('%Y-%m-%d')
+    parts.append(f'after:{since}')
+    return ' '.join(parts)[:128]
+
+
+def deepseek_search(query, count=10, now=None, timeout=None, proxy=None, key=None):
+    """调 DeepSeek Search API → 归一化后的条目列表（与 parse_feed 的产物同构）。
+
+    失败抛异常，由 fetch_source 归类；**没有 key 时抛 RuntimeError**（不算错误配置，
+    只是这条兜底路没开，渲染层会照常标「未获取」）。
+    """
+    api_key = key if key is not None else deepseek_key()
+    if not api_key:
+        raise RuntimeError('未配置 DEEPSEEK_API_KEY，DeepSeek 检索兜底不可用')
+    payload = {'query': query[:128], 'count': max(1, min(50, int(count))),
+               'need_content': False}
+    body = _http_post_json(DEEPSEEK_SEARCH_URL, payload,
+                           headers={'Authorization': f'Bearer {api_key}'},
+                           timeout=timeout or DEEPSEEK_TIMEOUT, proxy=proxy)
+    results = body.get('results') or []
+    out = []
+    for r in results:
+        title = str(r.get('title') or '').strip()
+        url = str(r.get('url') or '').strip()
+        if not title or not url:
+            continue
+        score = r.get('rerank_score')
+        try:
+            score = float(score) if score is not None else None
+        except (TypeError, ValueError):
+            score = None
+        # 低分结果直接丢：宁缺毋滥，避免把 SEO 垃圾当情报
+        if DEEPSEEK_MIN_SCORE and score is not None and score < DEEPSEEK_MIN_SCORE:
+            continue
+        out.append({
+            'title': title,
+            'url': url,
+            'summary': str(r.get('summary') or r.get('snippet') or '').strip(),
+            'publisher': str(r.get('site_name') or '').strip(),
+            'published_raw': r.get('date') or '',
+            'rerank_score': score,
+            'authority': r.get('authority'),
+        })
+    return out
 
 
 def gnews_url(query, lang='en'):
@@ -724,7 +861,7 @@ def dedup_titles(items):
 # 抓取
 # ---------------------------------------------------------------------------
 def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_DEFAULT,
-                 rsshub_budget=None, rsshub_state=None, quiet=False):
+                 rsshub_budget=None, rsshub_state=None, quiet=False, deepseek_budget=None):
     """单个源 → (items, meta)。全部端点失败抛异常，由调用方归类为 sources[].error。"""
     now = now or datetime.now(timezone.utc)
     meta = {'endpoint': '', 'kind': '', 'latency_ms': 0.0, 'attempts': []}
@@ -781,6 +918,30 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
                         print(f'  ⚠️ RSSHub：已有 {len(blocked)} 个实例被边缘按 IP 拦截（403/429），'
                               '本轮停止使用 RSSHub → 05 节按目录回退原生 RSS / 检索载体',
                               file=sys.stderr)
+    # ---- 检索兜底：真实端点全挂了（路由坏死 / 站点端点消失 / 被边缘拦）时，
+    # 用 DeepSeek Search API 按 site: 锁定站点检索，抢救「今天这个源说了什么」。
+    # 只对目录里显式声明了 query 的源启用（catalog['deepseek_fallback']），
+    # 且必须有 key —— 没有就照旧如实标「未获取」，绝不伪造。
+    if src.get('deepseek_fallback') and deepseek_enabled():
+        if deepseek_budget is not None and deepseek_budget[0] <= 0:
+            errors.append('DeepSeek 检索：本轮调用次数已达上限，跳过')
+        else:
+            try:
+                query = build_deepseek_query(src, now=now)
+                raw = deepseek_search(query, count=max(5, limit * 3), now=now)
+                if not raw:
+                    raise ValueError('检索无结果')
+                if deepseek_budget is not None:
+                    deepseek_budget[0] -= 1
+                meta.update({'endpoint': f'{DEEPSEEK_SEARCH_URL}?q={query}',
+                             'kind': 'deepseek',
+                             'latency_ms': round((time.time() - t0) * 1000, 1)})
+                meta['attempts'] = errors + [f'DeepSeek 检索式: {query}']
+                if rsshub_state is not None:
+                    rsshub_state['deepseek_rescued'] = rsshub_state.get('deepseek_rescued', 0) + 1
+                return normalize(raw, src, now=now, limit=limit), meta
+            except Exception as e:  # noqa: BLE001 — 兜底也失败就照旧标未获取
+                errors.append(f'DeepSeek 检索: {type(e).__name__}: {e}'[:220])
     raise RuntimeError('; '.join(errors)[:400] or '无可用端点')
 
 
@@ -805,7 +966,8 @@ def _redate_for_demo(raws, now):
 
 
 def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, timeout=10,
-          mock=False, quiet=False, deadline=None, only=None, rsshub_max=RSSHUB_MAX_PER_RUN):
+          mock=False, quiet=False, deadline=None, only=None, rsshub_max=RSSHUB_MAX_PER_RUN,
+          deepseek_max=DEEPSEEK_MAX_PER_RUN):
     """抓全部源 → 归一 → 时效过滤 → 分板块，返回 rssfeeds data dict。
 
     deadline: 可选墙钟截止（秒）；超时的源记 skipped_deadline，不把构建拖死。
@@ -817,7 +979,8 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
     total_kept = total_stale = total_undated = 0
     # 本轮 RSSHub 通道状态：多实例轮换 + 连续被拦熔断（跨源共享，避免 403 风暴）
     rsshub_state = {'failed_bases': [], 'tripped': False, 'rescued': 0,
-                    'trip_after': max(1, int(RSSHUB_TRIP_AFTER))}
+                    'deepseek_rescued': 0, 'trip_after': max(1, int(RSSHUB_TRIP_AFTER))}
+    deepseek_budget = [max(0, int(deepseek_max))] if not mock else None
 
     for src in targets:
         meta = {'id': src['id'], 'key': src['key'], 'name': src['name'], 'lang': src['lang'],
@@ -833,7 +996,8 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
         try:
             items, fmeta = fetch_source(src, timeout=timeout, mock=mock, now=now,
                                         limit=limit, rsshub_budget=[rsshub_max] if not mock else None,
-                                        rsshub_state=rsshub_state, quiet=quiet)
+                                        rsshub_state=rsshub_state, quiet=quiet,
+                                        deepseek_budget=deepseek_budget)
             kept, dropped = filter_stale(items, max_age_days=max_age_days, now=now)
             kept = sort_items(dedup_titles(kept))
             total_stale += dropped['stale_dropped']
@@ -874,6 +1038,9 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
             'stale_dropped': total_stale,
             'undated_kept': total_undated,
             'by_kind': kinds,
+            'deepseek': {'enabled': deepseek_enabled(),
+                         'rescued': int(rsshub_state.get('deepseek_rescued', 0)),
+                         'calls_left': int(deepseek_budget[0]) if deepseek_budget else 0},
             'rsshub': {'instances': len(rsshub_bases()),
                        'tripped': bool(rsshub_state['tripped']),
                        'rescued': int(rsshub_state.get('rescued', 0)),
@@ -1031,6 +1198,11 @@ def text_report(data):
     lines.append(f'  源 {summ.get("ok", 0)}/{summ.get("total", 0)} 可用 · '
                  f'条目 {summ.get("items", 0)} 条 · 拦截超窗 {summ.get("stale_dropped", 0)} 条 · '
                  f'无日期保留 {summ.get("undated_kept", 0)} 条 · 按类型 {summ.get("by_kind") or {}}')
+    ds = summ.get('deepseek') or {}
+    if ds.get('enabled') or ds.get('rescued'):
+        state = '已启用' if ds.get('enabled') else '未启用（无 DEEPSEEK_API_KEY）'
+        lines.append(f'  ◆ DeepSeek 检索兜底 {state} · 本轮救回 {ds.get("rescued", 0)} 源 · '
+                     f'剩余调用额度 {ds.get("calls_left", 0)}')
     rh = summ.get('rsshub') or {}
     if rh:
         state = '已熔断（多实例被拦 → 只走原生/检索回退）' if rh.get('tripped') else '正常'
@@ -1068,7 +1240,7 @@ def _md_cn(date_str):
 
 
 KIND_BADGE = {'native': '原生 RSS', 'rsshub': 'RSSHub', 'gnews': '检索载体',
-              'fixture': '离线回放', '': '未获取'}
+              'deepseek': 'DeepSeek 检索', 'fixture': '离线回放', '': '未获取'}
 
 
 def build_unavailable_html(avail):
@@ -1203,7 +1375,8 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
             f'{summ.get("items", 0)} 条 · 窗口 {win.get("max_age_days", "—")} 天 · '
             f'抓取于 {_esc(data.get("generated_at") or "—")}'
             + (' · 离线回放样本' if data.get('mode') == 'mock' else '')
-            + '　逐源核验：原生 RSS / RSSHub 路由 / 检索载体；失败源如实标「未获取」</div>')
+            + '　逐源核验：原生 RSS / RSSHub 路由 / 检索载体 / DeepSeek 检索兜底；'
+              '失败源如实标「未获取」</div>')
     compact = (level == 'compact')
     rows = [head if not compact else
             f'<div style="color:{cyan};font-weight:700;font-size:12px;margin-bottom:3px;">'

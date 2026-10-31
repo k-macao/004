@@ -612,6 +612,189 @@ class TestBootstrapAndBuildSite(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path), '--check 是纯校验，绝不联网补抓')
 
 
+class TestDeepSeekSearchFallback(unittest.TestCase):
+    """DeepSeek Search API 检索兜底（只针对「路由坏死 / 站点端点消失」的源）。
+
+    官方接口（2026-10-17 上线）：
+      POST https://api.deepseek.com/v1/tools/search
+      {query, count, need_content} → results[{title,url,summary,date,rerank_score,authority}]
+    设计口径：
+      · **不替代**已跑通的原生 RSS —— 只给目录里标了 deepseek_fallback 的源兜底；
+      · 有 key 才启用；没 key 照旧如实标「未获取」，绝不伪造；
+      · 每轮有调用额度上限（DEEPSEEK_MAX_PER_RUN），避免失控刷钱；
+      · 低质量结果按 rerank_score 丢弃，宁缺毋滥。
+    """
+
+    def setUp(self):
+        self.calls = []
+        self._patch = None
+
+    def _serve(self, results=None, status=200):
+        import http.server
+        import threading
+
+        payload = {'results': results if results is not None else [
+            {'rerank_score': 2.4, 'title': 'Fed signals patience',
+             'url': 'https://www.wsj.com/articles/fed', 'snippet': 'snip',
+             'summary': 'long summary for the model', 'content': '',
+             'site_name': 'WSJ', 'site_icon': None,
+             'date': '2026-10-30T12:00:00+00:00', 'authority': 4},
+        ]}
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(404)
+                self.end_headers()
+
+            def do_POST(self):
+                length = int(self.headers.get('Content-Length') or 0)
+                body = json.loads(self.rfile.read(length) or b'{}')
+                self.server.calls.append({'path': self.path, 'body': body,
+                                          'auth': self.headers.get('Authorization')})
+                if status != 200:
+                    self.send_response(status)
+                    self.end_headers()
+                    return
+                data = json.dumps(payload).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def log_message(self, *args):
+                pass
+
+        srv = http.server.HTTPServer(('127.0.0.1', 0), Handler)
+        srv.calls = []
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        self.addCleanup(srv.server_close)
+        self.calls = srv.calls
+        return f'http://127.0.0.1:{srv.server_address[1]}'
+
+    # ---------- 目录标记 ----------
+    def test_only_broken_sources_are_marked_for_fallback(self):
+        marked = {c['key'] for c in rf.CATALOG if c.get('deepseek_fallback')}
+        self.assertIn('WSJ_ECON', marked)
+        self.assertIn('KITCO', marked)
+        # 已经跑通的原生 RSS 不该被标（拿搜索结果冒充订阅源既更贵也更差）
+        for healthy in ('ECONOMIST', 'FT', 'COINDESK', 'TECHCRUNCH'):
+            self.assertNotIn(healthy, marked, f'{healthy} 是健康原生源，不该走检索兜底')
+        self.assertLess(len(marked), len(rf.CATALOG), '不能把所有源都改成检索')
+
+    def test_query_locks_site_language_and_window(self):
+        src = rf.CATALOG_BY_KEY['WSJ_ECON']
+        q = rf.build_deepseek_query(src, now=NOW)
+        self.assertIn('site:wsj.com', q)
+        self.assertIn('lang:en', q)
+        self.assertIn(f'after:{(NOW - timedelta(days=rf.MAX_AGE_DAYS_DEFAULT)).strftime("%Y-%m-%d")}', q)
+        self.assertLessEqual(len(q), 128, 'query 上限 128 字符')
+        zh = rf.build_deepseek_query(rf.CATALOG_BY_KEY['XUEQIU'], now=NOW)
+        self.assertIn('site:xueqiu.com', zh)
+        self.assertIn('lang:zh', zh)
+
+    # ---------- 接口契约 ----------
+    def test_request_shape_matches_official_contract(self):
+        base = self._serve()
+        with mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
+            out = rf.deepseek_search('site:wsj.com economy', count=5, key='sk-test')
+        self.assertEqual(len(out), 1)
+        sent = self.calls[0]['body']
+        self.assertEqual(sent['query'], 'site:wsj.com economy')
+        self.assertEqual(sent['count'], 5)
+        self.assertFalse(sent['need_content'], '默认不取正文，省流量也省钱')
+        self.assertEqual(self.calls[0]['auth'], 'Bearer sk-test')
+        # 响应字段要能喂进现有归一化管线
+        self.assertEqual(out[0]['published_raw'], '2026-10-30T12:00:00+00:00')
+        self.assertEqual(out[0]['publisher'], 'WSJ')
+        self.assertEqual(out[0]['rerank_score'], 2.4)
+
+    def test_count_is_clamped_to_documented_range(self):
+        base = self._serve()
+        with mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
+            rf.deepseek_search('q', count=999, key='k')
+            rf.deepseek_search('q', count=0, key='k')
+        self.assertEqual(self.calls[0]['body']['count'], 50, '官方上限 50')
+        self.assertEqual(self.calls[1]['body']['count'], 1, '官方下限 1')
+
+    def test_low_quality_results_are_dropped(self):
+        base = self._serve(results=[
+            {'rerank_score': 2.4, 'title': 'good', 'url': 'https://a/1', 'date': None},
+            {'rerank_score': 0.3, 'title': 'spam', 'url': 'https://a/2', 'date': None},
+        ])
+        with mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'),                 mock.patch.object(rf, 'DEEPSEEK_MIN_SCORE', 1.5):
+            out = rf.deepseek_search('q', key='k')
+        self.assertEqual([r['title'] for r in out], ['good'])
+
+    def test_titles_or_urls_missing_are_skipped(self):
+        base = self._serve(results=[
+            {'rerank_score': 2.0, 'title': '', 'url': 'https://a/1'},
+            {'rerank_score': 2.0, 'title': 'no url', 'url': ''},
+            {'rerank_score': 2.0, 'title': 'ok', 'url': 'https://a/3'},
+        ])
+        with mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
+            out = rf.deepseek_search('q', key='k')
+        self.assertEqual([r['title'] for r in out], ['ok'])
+
+    # ---------- 灰度与成本 ----------
+    def test_disabled_without_key(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('DEEPSEEK_API_KEY', None)
+            self.assertFalse(rf.deepseek_enabled())
+            with self.assertRaises(RuntimeError):
+                rf.deepseek_search('q')
+
+    def test_switch_can_turn_it_off_even_with_key(self):
+        with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'sk-x', 'DEEPSEEK_SEARCH': '0'}):
+            self.assertFalse(rf.deepseek_enabled())
+
+    # ---------- 端到端 ----------
+    def test_fallback_rescues_source_when_all_endpoints_fail(self):
+        base = self._serve()
+        src = dict(rf.CATALOG_BY_KEY['WSJ_ECON'])
+        env = {'DEEPSEEK_API_KEY': 'sk-test', 'RSSHUB_BASE': f'{base}/down'}
+        with mock.patch.dict(os.environ, env),                 mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
+            st = {'failed_bases': [], 'tripped': False, 'rescued': 0,
+                  'deepseek_rescued': 0, 'trip_after': 3}
+            items, meta = rf.fetch_source(src, timeout=5, now=NOW, quiet=True,
+                                          rsshub_state=st, deepseek_budget=[5])
+        self.assertEqual(meta['kind'], 'deepseek')
+        self.assertEqual(items[0]['title'], 'Fed signals patience')
+        self.assertEqual(items[0]['published_date'], '2026-10-30')
+        self.assertEqual(st['deepseek_rescued'], 1)
+        self.assertIn('DeepSeek 检索式', ' '.join(meta['attempts']))
+
+    def test_no_key_keeps_the_honest_failure(self):
+        base = self._serve()
+        src = dict(rf.CATALOG_BY_KEY['WSJ_ECON'])
+        with mock.patch.dict(os.environ, {'RSSHUB_BASE': f'{base}/down'}, clear=False):
+            os.environ.pop('DEEPSEEK_API_KEY', None)
+            with self.assertRaises(RuntimeError):
+                rf.fetch_source(src, timeout=5, now=NOW, quiet=True, deepseek_budget=[5])
+        self.assertEqual(self.calls, [], '没 key 时不得发出任何检索请求')
+
+    def test_budget_exhaustion_skips_the_call(self):
+        base = self._serve()
+        src = dict(rf.CATALOG_BY_KEY['WSJ_ECON'])
+        env = {'DEEPSEEK_API_KEY': 'sk-test', 'RSSHUB_BASE': f'{base}/down'}
+        with mock.patch.dict(os.environ, env),                 mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
+            with self.assertRaises(RuntimeError) as ctx:
+                rf.fetch_source(src, timeout=5, now=NOW, quiet=True, deepseek_budget=[0])
+        self.assertIn('已达上限', str(ctx.exception))
+        self.assertEqual(self.calls, [], '额度用尽后不得再调用')
+
+    def test_unmarked_source_never_uses_deepseek(self):
+        base = self._serve()
+        src = dict(rf.CATALOG_BY_KEY['ECONOMIST'])   # 原生源，未标记兜底
+        env = {'DEEPSEEK_API_KEY': 'sk-test', 'RSSHUB_BASE': f'{base}/down'}
+        with mock.patch.dict(os.environ, env),                 mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
+            src['endpoints'] = ['rsshub:/broken/route']
+            with self.assertRaises(RuntimeError):
+                rf.fetch_source(src, timeout=5, now=NOW, quiet=True, deepseek_budget=[5])
+        self.assertEqual(self.calls, [])
+
+
 class TestSuiteStaysHermetic(unittest.TestCase):
     """单测不得靠真实出口抓 05 栏的源，也不得在仓库根留下产物。
 
