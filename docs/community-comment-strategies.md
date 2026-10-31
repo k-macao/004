@@ -53,6 +53,17 @@ Scrapling 公开页抓取组合：优先使用可核验的评论或热帖回复�
 项目爬虫的每域并发上限和退避；PRAW 使用其自身 API 限速。主题可以在回复或所属帖子标题中，
 但词库情感只对回复文本打分。列表页、帖页和评论采样都有上限，可能遗漏更热或更相关的内容。
 
+## RSS 优先信息流（49 源）
+
+49 个社区源采集时优先尝试公开 RSS 订阅；RSS 地址由 `community_data.RSS_FEEDS` 映射（Reddit 4
+个社区、Bogleheads、Discuss.com.hk、Seeking Alpha 等），未列出的源视为无 RSS，直接回退到
+网站/APP 公开信息流。
+
+- RSS 条目必须命中财经/市场主题词并落在采集时刻前 7 天窗口内，否则跳过；不编造标题、链接或发布时间。
+- RSS 不可用（无地址、网络错误、XML 解析失败、无命中条目）时，立即回退到现有的公开网页摘录与评论策略（PTT/LIHKG/Bogleheads/Discuss/Reddit PRAW），单源失败不影响其他源。
+- RSS 成功的源不再触发 HTML 页面抓取与评论采样，直接使用 RSS 条目作为该源的实抓片段（`content_kind` 为 `thread_reply`，`strategy` 为 `rss_feed`）。
+- 同一采集进程内，RSS 请求与 PTT/LIHKG 的帖子详情读取共享串行限速器：上一次帖子/源读取结束后至少等待 10 秒才开始下一次。
+
 ## 3. 四小时快照、帖子间隔与重新分析
 
 - `community_snapshot.py` 是常规入口：首次采集后，把 49 源结果分别写入各自的 SQLite 数据库

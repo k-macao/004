@@ -9,17 +9,20 @@ See docs/community-comment-strategies.md for sources, limitations and licences.
 """
 from __future__ import annotations
 
+import email.utils
 import itertools
 import json
 import os
 import re
 import threading
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from urllib.parse import parse_qs, urljoin, urlparse
 
 import scrapling_core as sc
 import community_spider as common
+import community_data as cd
 
 MAX_THREADS = 3
 MAX_COMMENTS_PER_THREAD = 20
@@ -733,3 +736,167 @@ def collect_comments(communities, session=None, timeout=10, retries=2, concurren
     stats['post_interval_seconds'] = post_limiter.interval
     stats['post_fetch_attempts'] = post_limiter.started
     return outcomes, stats
+
+
+# ---------------------------------------------------------------------------
+# RSS 优先策略：对每个源先尝试公开 RSS 订阅，不可用再回退到网站/APP 公开信息流。
+# RSS 条目与 HTML 摘录一样，必须命中财经主题词并落在时间窗口内，绝不编造内容。
+# ---------------------------------------------------------------------------
+
+def _rss_feed_url(comm):
+    """取该源的 RSS 地址：优先条目自带 rss 字段，再查全局 RSS_FEEDS 映射，无则空字符串。"""
+    if not isinstance(comm, dict):
+        return ''
+    return (comm.get('rss') or cd.RSS_FEEDS.get(comm.get('key'), '') or '').strip()
+
+
+def _parse_rss_date(value, now, max_age_days):
+    """把 RSS pubDate / Atom published 解析为 UTC ISO 字符串；超窗或不可解析返回空。"""
+    if not value:
+        return ''
+    try:
+        dt = email.utils.parsedate_to_datetime(str(value))
+    except (TypeError, ValueError, OverflowError, OSError):
+        dt = None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+        except (TypeError, ValueError, OverflowError, OSError):
+            return ''
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    if dt < now - timedelta(days=max_age_days) or dt > now + timedelta(minutes=5):
+        return ''
+    return dt.isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def _parse_rss_items(xml_bytes, now, max_age_days=COMMENT_MAX_AGE_DAYS):
+    """解析 RSS 2.0 / Atom，返回最多 MAX_THREADS 条命中财经主题词的条目。"""
+    if not xml_bytes:
+        return []
+    try:
+        root = ET.fromstring(xml_bytes)
+    except (ET.ParseError, ValueError, TypeError):
+        return None
+
+    def _local(el):
+        return el.tag.split('}')[-1] if '}' in el.tag else el.tag
+
+    def _find(el, tag):
+        """按本地名查找子元素，兼容带/不带默认命名空间的 RSS 与 Atom。"""
+        for child in el:
+            if _local(child) == tag:
+                return child
+        return None
+
+    def _findall(el, tag):
+        return [child for child in el if _local(child) == tag]
+
+    channel = _find(root, 'channel')
+    items = _findall(channel or root, 'item')
+    is_atom = False
+    if not items:
+        items = _findall(root, 'entry')
+        is_atom = True
+    if not items:
+        return []
+
+    entries = []
+    for item in items:
+        def _text(tag):
+            el = _find(item, tag)
+            if el is None or not el.text:
+                return ''
+            return el.text.strip()
+
+        if is_atom:
+            title = _text('title')
+            link_el = _find(item, 'link')
+            link = link_el.attrib.get('href', '') if link_el is not None else ''
+            summary_el = _find(item, 'summary')
+            summary = common.strip_noise(summary_el.text) if (summary_el is not None and summary_el.text) else ''
+            published = _text('published') or _text('updated')
+        else:
+            title = _text('title')
+            link = _text('link')
+            summary = common.strip_noise(_text('description'))
+            published = (_text('pubDate') or _text('dc:date') or _text('lastBuildDate') or '')
+        if not title or not link:
+            continue
+        text = common.strip_noise(f'{title} {summary}')
+        if common.count_topic_hits(text) <= 0:
+            continue
+        published_at = _parse_rss_date(published, now, max_age_days)
+        if not published_at:
+            continue
+        entries.append({
+            'title': title[:120],
+            'url': link,
+            'text': text[:common.MAX_SNIPPET],
+            'published_at': published_at,
+            'published_label': published_at or '发布时间未知',
+        })
+    entries.sort(key=lambda x: x['published_at'] or '', reverse=True)
+    return entries[:MAX_THREADS]
+
+
+def fetch_rss_feed(comm, session, timeout=10, now=None, max_age_days=COMMENT_MAX_AGE_DAYS,
+                   post_limiter=None):
+    """按 RSS 优先策略抓取单个源。返回与 collect_comments 一致的 {comments, attempt} 结构。
+
+    无 RSS 地址 → status 'no_rss'（调用方应回退到网页/APP 公开信息流）；
+    网络/解析失败 → 显式失败状态，不编造条目；
+    成功 → 返回命中财经主题词的 RSS 条目，strategy='rss_feed'。
+    """
+    key = comm.get('key')
+    rss_url = _rss_feed_url(comm)
+    attempt = {'strategy': 'rss_feed', 'matched_comments': 0}
+    if not rss_url:
+        attempt['status'] = 'no_rss'
+        return {'comments': [], 'attempt': dict(attempt)}
+
+    now = _now_utc(now)
+    post_limiter = post_limiter or PostInterval()
+    transport = session.config.get('transport') or sc._default_transport
+
+    def _do_fetch():
+        return transport('GET', rss_url, {}, timeout)
+
+    try:
+        status, reason, headers, body, final_url = post_limiter.call(_do_fetch)
+    except Exception as exc:  # 网络错误不阻断整体，回退到公开信息流
+        attempt['status'] = 'request_failed'
+        return {'comments': [], 'attempt': dict(attempt)}
+
+    if not body:
+        attempt['status'] = 'empty_response'
+        return {'comments': [], 'attempt': dict(attempt)}
+
+    entries = _parse_rss_items(body, now, max_age_days)
+    if entries is None:
+        attempt['status'] = 'invalid_response'
+        return {'comments': [], 'attempt': dict(attempt)}
+
+    comments = []
+    for index, entry in enumerate(entries):
+        comments.append({
+            'text': entry['text'],
+            'text_truncated': len(entry['text']) >= common.MAX_SNIPPET,
+            'post_title': entry['title'],
+            'url': entry['url'],
+            'published_at': entry['published_at'],
+            'published_label': entry['published_label'],
+            'http_status': status,
+            'response_bytes': len(body or b''),
+            'kind': 'thread_reply',
+            'strategy': 'rss_feed',
+            'metric': {'type': 'rss_item', 'value': 0,
+                       'label': 'RSS 订阅条目（非回复点赞）'},
+            'scope': 'RSS 订阅源最新条目，命中财经主题词方入库，不代表全站排行',
+            '_rank': 0, '_order': index,
+        })
+    comments, matched = _finish_candidates(comments)
+    attempt['matched_comments'] = matched
+    attempt['status'] = 'ok' if comments else 'no_comments'
+    return {'comments': comments, 'attempt': dict(attempt)}
