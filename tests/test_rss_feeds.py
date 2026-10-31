@@ -671,6 +671,15 @@ class TestBootstrapAndBuildSite(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path), '--check 是纯校验，绝不联网补抓')
 
 
+# 只有单一公开出口、且站点本身没有可替代的检索面（或已有其它原生落点）的源。
+# 列在这里是**有意**的，不是遗漏：新增单端点源时测试会强制你做一次判断。
+KNOWN_SINGLE_ENDPOINT = {
+    'CNBC',            # id 10000664 是官方固定 id，站点其它板块另有 id，不属失效
+    'IBD', 'FOOL', 'OILPRICE', 'COINTELEGRAPH', 'BITCOINMAG',
+    'PROJECT_SYNDICATE', 'CNINFO', 'OAKTREE',
+}
+
+
 class TestDeepSeekSearchFallback(unittest.TestCase):
     """DeepSeek Search API 检索兜底（只针对「路由坏死 / 站点端点消失」的源）。
 
@@ -822,6 +831,31 @@ class TestDeepSeekSearchFallback(unittest.TestCase):
         src['endpoints'] = ['rsshub:/dead/route']
         src.pop('query', None)
         return src
+
+    def test_every_source_that_can_realistically_die_has_a_fallback(self):
+        """2026-10-31 线上实测：FORBES_MKT 的原生 endpoints 只有一个 markets feed，
+        该路径已返回 404，而它**没有** deepseek_fallback —— 于是配置了 key 也永远
+        救不回来，05 节长期挂一个「未获取」。凡是「端点单一 + 站点大站」的源都该有兜底。
+        """
+        for c in rf.CATALOG:
+            if c.get('verified') == 'carrier':
+                continue                      # 本身就是检索载体，不需要再兜底
+            if c['key'] in KNOWN_SINGLE_ENDPOINT:
+                continue                      # 站点只此一个公开出口，已在下面单独点名
+            if len(c['endpoints']) == 1:
+                self.assertTrue(c.get('deepseek_fallback'),
+                                f'{c["key"]} 只有单端点 {c["endpoints"]}，端点失效时无路可退')
+
+    def test_fallback_queries_stay_broad_enough(self):
+        """检索式是 `site:<站点> <query> lang/x after:<日期>`：query 太长太窄时，
+        site: 约束下几乎必然 0 结果（DAILYFX / QuantStart 就栽在这里）。"""
+        for c in rf.CATALOG:
+            if not c.get('deepseek_fallback'):
+                continue
+            q = c.get('deepseek_query') or ''
+            self.assertTrue(q.strip(), f'{c["key"]} 标了兜底却没有检索词')
+            self.assertLessEqual(len(q.split()), 4,
+                                 f'{c["key"]} 的检索词 {q!r} 过长，site: 约束下容易 0 结果')
 
     def test_marked_sources_do_not_gain_a_gnews_endpoint(self):
         """兜底的检索词不能走 query 字段 —— 那是 Google News 的检索词。

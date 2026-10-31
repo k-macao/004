@@ -27,7 +27,7 @@ _全球央行动态、利率走向与跨国经济周期_
 | 7 | MarketWatch 宏观 | 英 | `https://feeds.content.dowjones.io/public/rss/mw_realtimeheadlines` | `https://feeds.content.dowjones.io/public/rss/mw_topstories` | `native` | 道琼斯官方 MarketWatch 实时头条 RSS。 |
 | 8 | 哈佛商业评论 | 英 | `https://feeds.hbr.org/harvardbusiness` | `rsshub:/hbr/topic/Leadership/From%20the%20Store` | `native` | HBR 官方订阅源；RSSHub /hbr/topic/:topic 已不再提供 Popular 流（路由说明）。 |
 | 9 | 纽约时报财金 | 英 | `https://rss.nytimes.com/services/xml/rss/nyt/Business.xml` | `rsshub:/nytimes/rss/Business` | `native` | NYT 官方 Business RSS（RSSHub /nytimes/rss/:cat 同源）。 |
-| 10 | 福布斯商业 | 英 | `https://www.forbes.com/business/feed/` | — | `native` | Forbes 官方 business 频道 RSS。 |
+| 10 | 福布斯商业 | 英 | `https://www.forbes.com/business/feed/` | — | `native` | Forbes 官方 business 频道 RSS（单端点，改版即失效 → DeepSeek 检索兜底）。 |
 
 ## 二、美股、科技创新与公司财报（10 源）
 
@@ -42,7 +42,7 @@ _美股大盘、明星科技股、创新逻辑与个股研报_
 | 15 | Seeking Alpha 美股选股 | 英 | `https://seekingalpha.com/market-news.rss` | `rsshub:/seekingalpha/TSM/news` | `native` | Seeking Alpha 官方 market-news RSS；RSSHub /seekingalpha/:symbol/:category 可按个股取。 |
 | 16 | Investor's Business Daily | 英 | `https://www.investors.com/feed/` | — | `native` | IBD 官方站点 RSS（CAN SLIM 与市场趋势分析栏目）。 |
 | 17 | 雅虎财经美股 | 英 | `https://finance.yahoo.com/news/rssindex` | `rsshub:/yahoo/finance/latest-news` | `native` | Yahoo Finance 官方新闻 RSS；RSSHub /yahoo/finance/:topic 可换主题。 |
-| 18 | 福布斯市场 | 英 | `https://www.forbes.com/markets/feed/` | — | `native` | Forbes 官方 markets 频道 RSS。 |
+| 18 | 福布斯市场 | 英 | `https://www.forbes.com/markets/feed/` | — | `native` | Forbes 官方 markets 频道 RSS（2026-10-31 起该路径返回 404，原生源失效时走 DeepSeek 检索兜底）。 |
 | 19 | Benzinga 美股新闻 | 英 | `https://www.benzinga.com/feed` | `https://www.benzinga.com/feed/rss` | `native` | Benzinga 官方新闻 RSS（盘前盘后异动）。 |
 | 20 | The Motley Fool（傻瓜投资） | 英 | `https://www.fool.com/feeds/index.aspx` | — | `needs_check` | Motley Fool 老式 RSS 出口（feeds/index.aspx）；失效时如实标未获取。 |
 
@@ -54,7 +54,7 @@ _国内政策、板块轮动、港股外资动向与公司公告_
 |---|---|---|---|---|---|---|
 | 21 | 华尔街见闻实时 | 简中 | `rsshub:/wallstreetcn/live/global/2` | `rsshub:/wallstreetcn/news/global` | `rsshub_doc` | RSSHub /wallstreetcn/live/:category/:score（score=2 只看重要）与 /news/:category。 |
 | 22 | 财联社电报 | 简中 | `rsshub:/cls/telegraph` | `rsshub:/cls/depth/1000` | `rsshub_doc` | RSSHub /cls/telegraph（另有 watch/announcement/red/hk_us 等分类）。 |
-| 23 | 雪球今日话题 | 简中 | `rsshub:/xueqiu/today` | `rsshub:/xueqiu/hots` | `rsshub_doc` | RSSHub /xueqiu/today（路由标记 antiCrawler，需实例可拿 Cookie；失败如实标未获取）。 |
+| 23 | 雪球今日话题 | 简中 | `rsshub:/xueqiu/today` | `rsshub:/xueqiu/hots`<br>`rsshub:/xueqiu/topic` | `rsshub_doc` | RSSHub /xueqiu/today（路由标记 antiCrawler，需实例可拿 Cookie；2026-10-31 实测 4 个公共实例全 403/超时 → DeepSeek 检索兜底）。 |
 | 24 | 新浪财经聚合 | 简中 | `rsshub:/sina/finance/rollnews` | `rsshub:/sina/finance/china` | `rsshub_doc` | RSSHub /sina/finance/rollnews/:lid（默认 2519 财经滚动）。 |
 | 25 | 财新网经济 | 简中 | `rsshub:/caixin/latest` | `rsshub:/caixin/economy/economy` | `rsshub_doc` | RSSHub /caixin/latest（另有 /caixin/:column/:category，column=economy 为经济板块）；付费内容只做更新提醒。 |
 | 26 | 东方财富研报 | 简中 | `rsshub:/eastmoney/report/strategyreport` | `rsshub:/eastmoney/report/macresearch` | `rsshub_doc` | RSSHub /eastmoney/report/:category（strategyreport 策略 / macresearch 宏观 / industry 行业 / stock 个股）。 |

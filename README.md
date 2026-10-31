@@ -301,6 +301,14 @@ CI 里用仓库变量 `vars.RSSHUB_BASE` / secret `RSSHUB_PROXY` 注入，可整
 - `DEEPSEEK_SEARCH=0`：即使配了 key 也关掉这条兜底。
 - `DEEPSEEK_MAX_PER_RUN`（默认 20）：每轮最多调用几次，防失控刷钱（按 20 次算约 $0.015/轮）。
 - `DEEPSEEK_MIN_SCORE`（默认 0，即不过滤）：低于该 `rerank_score` 的结果直接丢弃（官方口径 ≥1.5 为高质量）。
+- **兜底源清单（11 个，标了 `deepseek_fallback`）**：WSJ 经济 / WSJ 全美商业 / Seeking Alpha /
+  雪球 / 新浪财经 / Kitco / FXStreet / DailyFX / 汇通网 / QuantStart / **福布斯市场 + 福布斯商业**
+  （2026-10-31 补：两家 Forbes 都是单端点，markets 路径已 404，没有兜底就永远救不回来）。
+- **检索词要宽**：检索式是 `site:<站点> <query> lang/x after:<日期>`，`query` 超过 4 个词时
+  在 `site:` 约束下几乎必然 0 结果（DailyFX / QuantStart 就是这样「有兜底但救不回」）。
+  回归：`tests/test_rss_feeds.py::TestDeepSeekSearchFallback::test_fallback_queries_stay_broad_enough`
+  与 `::test_every_source_that_can_realistically_die_has_a_fallback`（单端点源必须显式给兜底，
+  否则要在 `KNOWN_SINGLE_ENDPOINT` 里写明理由）。
 - `RSS_CONCURRENCY`（默认 8）：49 源并发线程数。串行时一条慢源就能吃掉整轮预算 —— 实测 CI 里
   整步会正好撞上 `timeout 300` 被 SIGTERM 杀掉，随后构建期补抓只剩 90s，31 源连请求都没发出。
 - **CI 里 key 必须传到「补抓那一步」**：`rss_feeds.py` 那步失败时，真正的取数发生在
