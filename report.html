@@ -704,6 +704,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
     <a href="#market"><b>02</b>行情快照</a>
     <a href="#intel"><b>03</b>情报中心</a>
     <a href="#forecast"><b>04</b>战术预判</a>
+    <a href="#rss"><b>05</b>RSS 情报源</a>
     <a href="#verdict"><b>07</b>终局结论</a>
   </nav>
 
@@ -816,6 +817,23 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
     <h2 class="pub-heading" id="forecast">04 / AI 预测 · 未来函数 (AI Forecast · Next Session · 先存档后结算)</h2>
     <div id="aiForecast">
 <!-- FORECAST -->
+    </div>
+
+    <h2 class="pub-heading" id="rss">05 / 全球 49 大财经 RSS 情报源 (Global 49 Finance RSS Intel Feeds · 六大板块 · 逐源核验)</h2>
+    <div class="pub-meta" style="margin:0 0 8px;">
+      覆盖国际宏观、美股与科技、A 股港股大中华区、大宗商品外汇、加密货币 Web3 与顶级投资人专栏六大板块，
+      共 <strong>49 源</strong>：原生官方 RSS 优先，站点无公开订阅源时用 RSSHub 路由或 Google News 检索载体（如实标注，不冒充原生源）。
+      逐源显示当次抓取状态与条目发布日期；<strong>抓不到的源标「未获取」，不回填历史标题、不编造「今日重点」</strong>。
+    </div>
+    <div id="rssFeeds">
+<!-- RSSFEEDS -->
+<div class="pub-box">
+  <div class="pub-sub">◆ 49 大财经 RSS 情报源 — 今日未获取</div>
+  <p style="margin:0;">运行 <code>python3 rss_feeds.py</code> 抓取 49 源并执行 <code>python3 build_site.py</code> 后，
+    此处按六大板块渲染逐源状态与当次真实条目（每条自带发布日期）。抓不到的源如实标注「未获取」，
+    绝不回填历史标题或编造「今日重点」。</p>
+</div>
+<!-- /RSSFEEDS -->
     </div>
 
     <h2 class="pub-heading" id="verdict">07 / 核心结论 (Boss Verdict)</h2>

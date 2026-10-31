@@ -165,6 +165,21 @@ jobs:
           python3 sentiment_adapters.py --mode mock >/dev/null
           python3 -m unittest discover -s tests
 
+      - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
+        # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
+        # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
+        run: |
+          set +e
+          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ] || [ ! -s rssfeeds_data.json ]; then
+            echo "⚠️ RSS 情报源当次抓取失败：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+          fi
+          cat rss_summary.txt
+          { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+
       - name: 🏗️ 动态构建报告 (build_site.py → report.html · 行情+社区双注入)
         run: python3 build_site.py
 
@@ -255,6 +270,21 @@ jobs:
             python3 sentiment_factors.py --mock
           fi
           set -e
+      - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
+        # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
+        # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
+        run: |
+          set +e
+          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ] || [ ! -s rssfeeds_data.json ]; then
+            echo "⚠️ RSS 情报源当次抓取失败：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+          fi
+          cat rss_summary.txt
+          { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+
 
       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区双注入)
         run: python3 build_site.py
@@ -332,6 +362,21 @@ jobs:
             echo "⚠️ 舆情因子：GitHub 海外出口取不到境内数据域（聚宽/米筐等按 IP 拒绝）→ 降级离线回放 --mock，页面与推送显示降级说明"
             python3 sentiment_factors.py --mock
           fi
+      - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
+        # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
+        # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
+        run: |
+          set +e
+          timeout 300 python3 rss_feeds.py --json rssfeeds_data.json --days 14 --text > rss_summary.txt 2>&1
+          rc=$?
+          set -e
+          if [ $rc -ne 0 ] || [ ! -s rssfeeds_data.json ]; then
+            echo "⚠️ RSS 情报源当次抓取失败：05 节将显示「今日未获取」，不回填历史标题（构建与推送不因此中断）" | tee -a rss_summary.txt
+          fi
+          cat rss_summary.txt
+          { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+
           set -e
 
       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区+宏观快讯注入)

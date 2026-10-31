@@ -1,0 +1,790 @@
+{
+ "recorded_from": "rss_feeds.py 离线回放样本（构造报文，非真实抓包；--mock 与单元测试使用）",
+ "note": "日期字段由 _redate_for_demo() 改写为「今天往前第 n 天」，保证演示数据不会被时效过滤清空；超窗/无日期条目被拦截的行为由 tests/test_rss_feeds.py 直接对 filter_stale() 断言",
+ "sources": {
+  "ECONOMIST": [
+   {
+    "title": "Global growth slows as trade barriers bite — Sample Wire",
+    "url": "https://example.com/economist/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Central banks face a harder landing than markets price",
+    "url": "https://example.com/economist/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FT": [
+   {
+    "title": "IMF warns of widening global debt burden — Sample Wire",
+    "url": "https://example.com/ft/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Emerging markets brace for a stronger dollar cycle",
+    "url": "https://example.com/ft/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "WSJ_ECON": [
+   {
+    "title": "US job openings cool for a third month — Sample Wire",
+    "url": "https://example.com/wsj_econ/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Fed officials split on the pace of easing",
+    "url": "https://example.com/wsj_econ/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "REUTERS": [
+   {
+    "title": "Oil steadies as traders weigh supply risks — Sample Wire",
+    "url": "https://example.com/reuters/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Euro zone inflation edges closer to target",
+    "url": "https://example.com/reuters/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "BLOOMBERG": [
+   {
+    "title": "Treasury yields slip after soft data print — Sample Wire",
+    "url": "https://example.com/bloomberg/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Copper rallies on grid investment demand",
+    "url": "https://example.com/bloomberg/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "CNBC": [
+   {
+    "title": "Fed minutes show caution on further cuts — Sample Wire",
+    "url": "https://example.com/cnbc/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "US consumer confidence rebounds in October",
+    "url": "https://example.com/cnbc/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "MARKETWATCH": [
+   {
+    "title": "Stocks end higher as bond yields retreat — Sample Wire",
+    "url": "https://example.com/marketwatch/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Dollar index slips from two-month high",
+    "url": "https://example.com/marketwatch/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "HBR": [
+   {
+    "title": "Why pricing power is eroding in 2026 — Sample Wire",
+    "url": "https://example.com/hbr/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "The operating model behind resilient firms",
+    "url": "https://example.com/hbr/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "NYT": [
+   {
+    "title": "Global trade talks resume with modest goals — Sample Wire",
+    "url": "https://example.com/nyt/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Corporate bond issuance hits a record quarter",
+    "url": "https://example.com/nyt/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FORBES_BIZ": [
+   {
+    "title": "The family offices moving into private credit — Sample Wire",
+    "url": "https://example.com/forbes_biz/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Retail giants rethink their supply chains",
+    "url": "https://example.com/forbes_biz/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "WSJ_BIZ": [
+   {
+    "title": "Earnings season beats lowered expectations — Sample Wire",
+    "url": "https://example.com/wsj_biz/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Small caps lag as credit spreads widen",
+    "url": "https://example.com/wsj_biz/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "ARK": [
+   {
+    "title": "Research: autonomy economics in logistics — Sample Wire",
+    "url": "https://example.com/ark/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Innovation monitor: robotics cost curves",
+    "url": "https://example.com/ark/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "TECHCRUNCH": [
+   {
+    "title": "AI infrastructure startup raises Series C — Sample Wire",
+    "url": "https://example.com/techcrunch/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Venture funding shifts toward profitability",
+    "url": "https://example.com/techcrunch/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "BARRONS": [
+   {
+    "title": "估值重估：现金流比增速更重要 — 示例财经",
+    "url": "https://example.com/barrons/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "高股息组合在下行周期的防守价值",
+    "url": "https://example.com/barrons/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "SEEKINGALPHA": [
+   {
+    "title": "Semiconductor margins: the next leg — Sample Wire",
+    "url": "https://example.com/seekingalpha/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Why utilities look attractive at these yields",
+    "url": "https://example.com/seekingalpha/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "IBD": [
+   {
+    "title": "Market trend turns confirmed uptrend — Sample Wire",
+    "url": "https://example.com/ibd/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Leaderboard: breakouts holding above pivot",
+    "url": "https://example.com/ibd/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "YAHOO_FIN": [
+   {
+    "title": "Tech megacaps lead afternoon rally — Sample Wire",
+    "url": "https://example.com/yahoo_fin/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Energy shares jump with crude prices",
+    "url": "https://example.com/yahoo_fin/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FORBES_MKT": [
+   {
+    "title": "Traders rotate into value as rates peak — Sample Wire",
+    "url": "https://example.com/forbes_mkt/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Volatility funds see steady inflows",
+    "url": "https://example.com/forbes_mkt/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "BENZINGA": [
+   {
+    "title": "Premarket movers: chip names gap higher — Sample Wire",
+    "url": "https://example.com/benzinga/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "After-hours: cloud software guide lifted",
+    "url": "https://example.com/benzinga/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FOOL": [
+   {
+    "title": "Three dividend growers worth a decade — Sample Wire",
+    "url": "https://example.com/fool/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Why index funds still beat stock picking",
+    "url": "https://example.com/fool/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "WALLSTREETCN": [
+   {
+    "title": "美联储官员：降息需更多数据支持 — 示例财经",
+    "url": "https://example.com/wallstreetcn/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "南向资金今日净买入超百亿港元",
+    "url": "https://example.com/wallstreetcn/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "CLS": [
+   {
+    "title": "电报：央行开展逆回购操作 — 示例财经",
+    "url": "https://example.com/cls/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "多家券商上调恒指目标区间",
+    "url": "https://example.com/cls/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "XUEQIU": [
+   {
+    "title": "今日话题：港股估值修复还能走多远 — 示例财经",
+    "url": "https://example.com/xueqiu/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "大V观点：高股息与成长的再平衡",
+    "url": "https://example.com/xueqiu/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "SINA_FIN": [
+   {
+    "title": "财经滚动：国常会部署稳增长措施 — 示例财经",
+    "url": "https://example.com/sina_fin/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "A股成交额连续三日破万亿",
+    "url": "https://example.com/sina_fin/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "CAIXIN": [
+   {
+    "title": "地方债务化解进入新阶段 — 示例财经",
+    "url": "https://example.com/caixin/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "制造业投资回暖的结构性差异",
+    "url": "https://example.com/caixin/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "EASTMONEY_RPT": [
+   {
+    "title": "策略报告：四季度配置偏向大盘价值 — 示例财经",
+    "url": "https://example.com/eastmoney_rpt/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "宏观研究：出口韧性与内需修复",
+    "url": "https://example.com/eastmoney_rpt/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "EEO": [
+   {
+    "title": "经济观察：产业升级中的用工变化 — 示例财经",
+    "url": "https://example.com/eeo/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "调查：中小企业融资成本调查",
+    "url": "https://example.com/eeo/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "CNINFO": [
+   {
+    "title": "公告速递：多家公司披露三季报 — 示例财经",
+    "url": "https://example.com/cninfo/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "重大合同与回购事项汇总",
+    "url": "https://example.com/cninfo/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "CNSTOCK": [
+   {
+    "title": "证监会：持续提升上市公司质量 — 示例财经",
+    "url": "https://example.com/cnstock/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "上证报：资本市场改革再出发",
+    "url": "https://example.com/cnstock/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "AASTOCKS": [
+   {
+    "title": "港股异动：内银股集体走强 — 示例財經",
+    "url": "https://example.com/aastocks/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "资金流向：北水加仓科技与公用事业",
+    "url": "https://example.com/aastocks/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "KR36": [
+   {
+    "title": "新经济快讯：机器人公司完成新一轮融资 — 示例财经",
+    "url": "https://example.com/kr36/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "一级市场：消费品牌密集递表",
+    "url": "https://example.com/kr36/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "INVESTING": [
+   {
+    "title": "Gold holds gains as real yields fall — Sample Wire",
+    "url": "https://example.com/investing/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Brent crude climbs on inventory draw",
+    "url": "https://example.com/investing/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "KITCO": [
+   {
+    "title": "Gold settles near record as ETF demand grows — Sample Wire",
+    "url": "https://example.com/kitco/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Silver catches up with industrial buying",
+    "url": "https://example.com/kitco/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "OILPRICE": [
+   {
+    "title": "OPEC+ signals steady output into next quarter — Sample Wire",
+    "url": "https://example.com/oilprice/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Refining margins soften across Asia",
+    "url": "https://example.com/oilprice/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FXSTREET": [
+   {
+    "title": "EUR/USD tests resistance after PMI beat — Sample Wire",
+    "url": "https://example.com/fxstreet/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "USD/JPY sensitive to yield differentials",
+    "url": "https://example.com/fxstreet/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "DAILYFX": [
+   {
+    "title": "Dollar outlook hinges on payrolls — Sample Wire",
+    "url": "https://example.com/dailyfx/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Gold breakout needs volume confirmation",
+    "url": "https://example.com/dailyfx/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "JIN10": [
+   {
+    "title": "金十快讯：美债收益率短线走低 — 示例财经",
+    "url": "https://example.com/jin10/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "原油期货盘中扩大涨幅",
+    "url": "https://example.com/jin10/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FX678": [
+   {
+    "title": "汇通快讯：美元指数窄幅整理 — 示例财经",
+    "url": "https://example.com/fx678/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "人民币中间价小幅上调",
+    "url": "https://example.com/fx678/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FREIGHTOS": [
+   {
+    "title": "Container rates ease on transpacific route — Sample Wire",
+    "url": "https://example.com/freightos/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Freight index shows early peak-season lull",
+    "url": "https://example.com/freightos/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "COINDESK": [
+   {
+    "title": "Bitcoin ETFs log weekly inflows — Sample Wire",
+    "url": "https://example.com/coindesk/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Ethereum staking yields compress",
+    "url": "https://example.com/coindesk/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "COINTELEGRAPH": [
+   {
+    "title": "Regulators outline stablecoin rules — Sample Wire",
+    "url": "https://example.com/cointelegraph/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Layer2 activity hits new high",
+    "url": "https://example.com/cointelegraph/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "BLOCKBEATS": [
+   {
+    "title": "律动快讯：主流交易所现货成交量回升 — 示例财经",
+    "url": "https://example.com/blockbeats/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "链上数据：稳定币净流入加速",
+    "url": "https://example.com/blockbeats/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "FORESIGHT": [
+   {
+    "title": "Web3 投研：模块化公链的竞争格局 — 示例财经",
+    "url": "https://example.com/foresight/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "行业观察：RWA 代币化落地进展",
+    "url": "https://example.com/foresight/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "离线回放摘要（非实盘内容）：用于验证解析、时效过滤与两端渲染链路。",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "THEBLOCK": [
+   {
+    "title": "Institutional custody volumes climb — Sample Wire",
+    "url": "https://example.com/theblock/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Miner revenue steadies post-halving",
+    "url": "https://example.com/theblock/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "BITCOINMAG": [
+   {
+    "title": "Lightning capacity expands again — Sample Wire",
+    "url": "https://example.com/bitcoinmag/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Bitcoin treasury adoption spreads",
+    "url": "https://example.com/bitcoinmag/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "OAKTREE": [
+   {
+    "title": "Howard Marks: taking the temperature — Sample Wire",
+    "url": "https://example.com/oaktree/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Memo: the limits of forecasting",
+    "url": "https://example.com/oaktree/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "DAMODARAN": [
+   {
+    "title": "Data update: equity risk premiums — Sample Wire",
+    "url": "https://example.com/damodaran/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Valuing young companies without revenue",
+    "url": "https://example.com/damodaran/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "QUANTSTART": [
+   {
+    "title": "Backtesting pitfalls that inflate Sharpe — Sample Wire",
+    "url": "https://example.com/quantstart/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Building a regime-aware allocation model",
+    "url": "https://example.com/quantstart/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ],
+  "PROJECT_SYNDICATE": [
+   {
+    "title": "The new geography of trade — Sample Wire",
+    "url": "https://example.com/project_syndicate/1",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   },
+   {
+    "title": "Why fiscal space matters again",
+    "url": "https://example.com/project_syndicate/2",
+    "published_raw": "2026-10-30 08:00:00",
+    "summary": "Offline replay summary (not live content): used to verify parsing, staleness filtering and rendering.",
+    "publisher": "Sample Wire"
+   }
+  ]
+ }
+}

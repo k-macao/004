@@ -8,6 +8,9 @@ market_data.json
 community_data.json
 macro_data.json
 macro_summary.txt
+# 05 栏（49 大财经 RSS 情报源）构建产物：每次构建现抓，不入库
+rssfeeds_data.json
+rss_summary.txt
 
 # AI 预测层（04 栏）构建产物：预测存档，先落盘后结算，命中率回看的唯一数据源
 # 每次构建追加当次预测、结算已到期预测；跨运行持久化见 docs/forecast-ci-cache.patch
