@@ -823,6 +823,96 @@ class TestDeepSeekSearchFallback(unittest.TestCase):
         self.assertEqual(self.calls, [])
 
 
+class TestRssAsFifthDataSource(unittest.TestCase):
+    """49 源 RSS 作为「第 5 路数据源」并入 01/04 的覆盖度。
+
+    事故背景：原先前四路（行情/宏观/舆情/社区）齐全就报「数据覆盖 100%」，
+    哪怕 05 节 49 源里有一半抓不到 —— 页面一边写 100% 一边列十条「未获取」，
+    是典型的假高置信度。这里守住三件事：
+      ① 分母用目录全量与路数，不是「本次实际抓了几个」；
+      ② RSS 大面积未获取必须真的把覆盖度与置信度压下去；
+      ③ 哪一路拉低了覆盖度，必须在 data_gaps 里说清楚。
+    """
+
+    def _rss(self, ok=49, items=98):
+        data = rf.build(mock=True, quiet=True)
+        if ok < 49:
+            n = 0
+            for g in data['groups'].values():
+                for s in g['sources']:
+                    n += 1
+                    if n > ok:
+                        s['ok'] = False
+                        s['items_list'] = []
+                        s['items'] = 0
+            data['summary']['ok'] = ok
+            data['summary']['items'] = items
+        return data
+
+    def test_stats_denominator_is_the_catalog_not_what_we_fetched(self):
+        """只抓了 5 源、5 源全成功，覆盖率不能算成 100%。"""
+        data = rf.build(mock=True, quiet=True)
+        data['summary']['total'] = 5
+        data['summary']['ok'] = 5
+        st = rf.stats(data)
+        self.assertEqual(st['catalog_total'], 49, '分母必须是目录全量')
+        self.assertLess(st['ratio'], 0.2, '抓 5 个源成功不等于覆盖 100%')
+
+    def test_stats_breakdown_by_carrier(self):
+        st = rf.stats(rf.build(mock=True, quiet=True))
+        for key in ('native', 'rsshub', 'gnews', 'deepseek'):
+            self.assertIn(key, st)
+        self.assertEqual(st['ok'], 49)
+        self.assertEqual(st['items'], st['items'])
+
+    def test_missing_rss_counts_as_a_gap_not_as_coverage(self):
+        sig = rf.coverage_signal({})
+        self.assertFalse(sig['available'])
+        self.assertEqual(sig['ratio'], 0.0)
+        self.assertIn('未获取', sig['why'])
+
+    def test_rss_drops_coverage_and_confidence(self):
+        import panorama
+        full = panorama.scan(market=MARKET, rss=self._rss(49), now=NOW)
+        weak = panorama.scan(market=MARKET, rss=self._rss(12, 20), now=NOW)
+        self.assertGreater(full['coverage'], 0.0)
+        self.assertLess(weak['coverage'], full['coverage'], 'RSS 大面积未获取必须压覆盖度')
+        self.assertLessEqual(weak['verdict']['confidence'], full['verdict']['confidence'])
+        self.assertTrue(any('RSS' in g for g in weak['data_gaps']),
+                        '被 RSS 拉低的覆盖度必须在缺口里说清')
+
+    def test_forecast_uses_the_same_coverage_rule(self):
+        import forecast as fc
+        import panorama
+        full = fc.predict(market=MARKET, rss=self._rss(49), now=NOW)
+        weak = fc.predict(market=MARKET, rss=self._rss(12, 20), now=NOW)
+        self.assertLess(weak['coverage'], full['coverage'])
+        self.assertTrue(any('RSS' in g for g in weak['data_gaps']))
+        # 两端必须同一口径：同样的输入，01 与 04 的覆盖度一分不差
+        pano = panorama.scan(market=MARKET, rss=self._rss(12, 20), now=NOW)
+        self.assertEqual(pano['coverage'], weak['coverage'],
+                         '01 栏与 04 栏的覆盖度口径必须一致，不能各算一套')
+
+    def test_no_rss_costs_exactly_one_route(self):
+        import panorama
+        with_rss = panorama.scan(market=MARKET, rss=self._rss(49), now=NOW)['coverage']
+        without = panorama.scan(market=MARKET, now=NOW)['coverage']
+        self.assertAlmostEqual(with_rss - without, round(1.0 / panorama.COVERAGE_ROUTES, 2),
+                               places=2, msg='RSS 缺失只该扣它自己那一路的权重')
+
+    def test_web_section_shows_the_stats_panel(self):
+        html = rf.render_web(self._rss(12, 20))
+        self.assertIn('框架统计', html)
+        self.assertIn('第 5 路数据源', html)
+        self.assertIn('DeepSeek 检索兜底', html)
+        self.assertIn('RSSHub 通道', html)
+        self.assertIn('12/49', html)
+
+    def test_hud_line_reports_coverage_or_honest_fallback(self):
+        self.assertIn('12/49', rf.rss_status_line(self._rss(12, 20)))
+        self.assertIn('未获取', rf.rss_status_line({}))
+
+
 class TestSuiteStaysHermetic(unittest.TestCase):
     """单测不得靠真实出口抓 05 栏的源，也不得在仓库根留下产物。
 

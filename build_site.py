@@ -181,7 +181,7 @@ def quote_date_cn(q):
     return f'{int(m.group(1))} 月 {int(m.group(2))} 日'
 
 
-def build_tokens(data, now, community_data=None, sentiment_data=None):
+def build_tokens(data, now, community_data=None, sentiment_data=None, rss_data=None):
     quotes = (data or {}).get('quotes') or {}
     tokens = {}
     for k in QUOTE_KEYS:
@@ -207,6 +207,8 @@ def build_tokens(data, now, community_data=None, sentiment_data=None):
     tokens['{{QUANT_RULE}}'] = quant_pair.rule_note_web()
     tokens['{{FETCH_STATUS}}'] = _fetch_status(data)
     tokens['{{COMMUNITY_FETCH_STATUS}}'] = _community_fetch_status(community_data)
+    # 战情面板把 49 源 RSS 的当次可用率摊在最上层：它现在是 01/04 覆盖度的第 5 路。
+    tokens['{{RSS_STATUS}}'] = rss_mod.rss_status_line(rss_data)
     tokens.update(_community_tokens(community_data))
     tokens.update(_sentiment_tokens(sentiment_data, tokens['{{FETCH_DATE}}']))
     return tokens
@@ -743,14 +745,19 @@ def inject_vix(template, vix_html):
     return template
 
 
-def build_panorama_html(market_data, macro_data, sentiment_data, community_data, now=None):
-    """01 节「每日全球全景扫描」：四路当次数据 → 5 大推动力量 / 噪音清单 / 做多结论。
+def build_panorama_html(market_data, macro_data, sentiment_data, community_data,
+                        rss_data=None, now=None):
+    """01 节「每日全球全景扫描」：五路当次数据 → 5 大推动力量 / 噪音清单 / 做多结论。
 
     推理规则集中在 panorama.py（可单测、可回测），本函数只负责取数与渲染；
-    四路数据全缺时渲染为「今日未获取」，与 02 / 03B 节同一反陈旧口径。
+    数据全缺时渲染为「今日未获取」，与 02 / 03B 节同一反陈旧口径。
+
+    第 5 路是 49 源 RSS（05 节那份产物）：它不产出「力量」，只折算覆盖度 ——
+    05 节大面积未获取时，01 的覆盖度与置信度必须同步下调。
     """
     scan = panorama.scan(market=market_data, macro=macro_data,
-                         sentiment=sentiment_data, community=community_data, now=now)
+                         sentiment=sentiment_data, community=community_data,
+                         rss=rss_data, now=now)
     print(f'  🌍 已动态注入 01 节全景扫描：{len(scan["forces"])} 大力量 · '
           f'噪音 {len(scan["noise"])} 项 · 覆盖 {int(scan["coverage"] * 100)}% · '
           f'做多合成分 {scan["verdict"]["long_score"]:+.1f}（{scan["verdict"]["stance"]}）')
@@ -777,8 +784,8 @@ def inject_panorama(template, panorama_html):
 
 
 def build_forecast_html(market_data, macro_data, sentiment_data, community_data,
-                        now=None, history=True, history_path=None):
-    """04 节「AI 预测 · 未来函数」：四路当次数据 → 下一交易日逐标的预测 + 历史命中率回看。
+                        rss_data=None, now=None, history=True, history_path=None):
+    """04 节「AI 预测 · 未来函数」：五路当次数据 → 下一交易日逐标的预测 + 历史命中率回看。
 
     推理规则集中在 forecast.py（可单测、可回测），本函数只负责取数、存档与渲染。
 
@@ -792,7 +799,7 @@ def build_forecast_html(market_data, macro_data, sentiment_data, community_data,
     review = forecast_mod.review_from_history(path, market=market_data, now=now)
     data = forecast_mod.predict(market=market_data, macro=macro_data,
                                 sentiment=sentiment_data, community=community_data,
-                                now=now, review=review)
+                                rss=rss_data, now=now, review=review)
     if history:
         data['review'] = forecast_mod.review_from_history(
             path, market=market_data, now=now, persist=True, data=data)
@@ -1317,7 +1324,7 @@ def main():
               '可先运行 python3 rss_feeds.py --mock 生成，'
               '或用 --rss-fetch / RSSFEEDS_AUTO_FETCH=1 开启构建期补抓', file=sys.stderr)
 
-    tokens = build_tokens(data, now, community_data, sentiment_data)
+    tokens = build_tokens(data, now, community_data, sentiment_data, rss_data=rss_data)
 
     if community_data and community_data.get('communities'):
         community_html = build_community_html(community_data['communities'], market=data)
@@ -1330,12 +1337,12 @@ def main():
 
     template = inject_vix(template, build_vix_html(data))
     template = inject_panorama(template, build_panorama_html(
-        data, macro_data, sentiment_data, community_data, now=now))
+        data, macro_data, sentiment_data, community_data, rss_data=rss_data, now=now))
     template = inject_macro_list(template, build_macro_html(macro_data, now=now, market=data))
     template = inject_rss_feeds(template, rss_mod.render_web(rss_data))
     template = inject_sentiment(template, build_sentiment_html(sentiment_data, market=data))
     template = inject_forecast(template, build_forecast_html(
-        data, macro_data, sentiment_data, community_data, now=now,
+        data, macro_data, sentiment_data, community_data, rss_data=rss_data, now=now,
         history=not (args.check or args.forecast_no_history),
         history_path=args.forecast_history))
     template = inject_verdict(template, build_verdict_html(data, macro_data, community_data))

@@ -162,7 +162,11 @@ class TestPanoramaDegradation(unittest.TestCase):
         self.assertEqual(d['forces'], [])
         self.assertEqual(d['verdict']['can_long'], 'unknown')
         self.assertEqual(d['coverage'], 0.0)
-        self.assertEqual(len(d['data_gaps']), 4)
+        # 五路数据源：行情 / 宏观 / 舆情 / 社区 + RSS 49 源（第 5 路）。
+        # RSS 也必须记缺口 —— 否则「05 节没跑」时覆盖度反而虚高。
+        self.assertEqual(len(d['data_gaps']), panorama.COVERAGE_ROUTES)
+        self.assertTrue(any('RSS' in g for g in d['data_gaps']),
+                        'RSS 49 源缺产物必须记一条缺口')
         for html in (panorama.render_web(d), panorama.render_wechat(d)):
             self.assertIn('未获取', html)
             self.assertIn('不回填历史叙事', html)

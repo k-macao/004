@@ -1227,6 +1227,76 @@ def text_report(data):
 
 
 # ---------------------------------------------------------------------------
+# 框架级统计：RSS 49 源作为「第 5 路数据源」并入 01/04 的覆盖度
+# ---------------------------------------------------------------------------
+def stats(data):
+    """把 05 节产物压成一组框架级统计（战情面板 + 覆盖度都用同一份）。
+
+    「可用率」用 catalog_total 做分母：total 可能因为 --group 只抓了一部分而变小，
+    拿它当分母会算出「抓 1 个源成功 1 个 = 100% 覆盖」这种假高覆盖。
+    """
+    summ = (data or {}).get('summary') or {}
+    ok = int(summ.get('ok') or 0)
+    total = int(summ.get('total') or 0)
+    catalog_total = int(summ.get('catalog_total') or total or len(CATALOG))
+    denom = max(1, catalog_total)
+    by_kind = dict(summ.get('by_kind') or {})
+    ds = summ.get('deepseek') or {}
+    rh = summ.get('rsshub') or {}
+    win = (data or {}).get('window') or {}
+    return {
+        'ok': ok,
+        'total': total,
+        'catalog_total': catalog_total,
+        'failed': max(0, catalog_total - ok),
+        'items': int(summ.get('items') or 0),
+        'stale_dropped': int(summ.get('stale_dropped') or 0),
+        'undated_kept': int(summ.get('undated_kept') or 0),
+        'by_kind': by_kind,
+        'native': int(by_kind.get('native') or 0),
+        'rsshub': int(by_kind.get('rsshub') or 0),
+        'gnews': int(by_kind.get('gnews') or 0),
+        'deepseek': int(by_kind.get('deepseek') or 0),
+        'deepseek_enabled': bool(ds.get('enabled')),
+        'deepseek_rescued': int(ds.get('rescued') or 0),
+        'deepseek_calls_left': int(ds.get('calls_left') or 0),
+        'rsshub_instances': int(rh.get('instances') or 0),
+        'rsshub_tripped': bool(rh.get('tripped')),
+        'rsshub_rescued': int(rh.get('rescued') or 0),
+        'rsshub_proxy': bool(rh.get('proxy')),
+        'max_age_days': win.get('max_age_days'),
+        'since': win.get('since') or '',
+        'mode': (data or {}).get('mode') or '',
+        'generated_at': (data or {}).get('generated_at') or '',
+        # 覆盖率的分母是**目录全量**，不是本次实际抓取数：漏抓的源也必须算进分母，
+        # 否则「少抓几个源」反而能把覆盖率刷回 100%。
+        'ratio': round(ok / denom, 3),
+    }
+
+
+def coverage_signal(data):
+    """第 5 路数据源的覆盖信号，喂给 panorama / forecast 的覆盖度计算。
+
+    返回 {'available': bool, 'ratio': float, 'ok'/'total'/'items', 'why': str}。
+    available=False 表示「这一路根本没拿到产物」—— 与「拿到了但质量差」必须分开，
+    否则 05 节没跑起来的时候，覆盖度反而会因为它没记缺口而虚高。
+    """
+    if not isinstance(data, dict) or not data:
+        return {'available': False, 'ratio': 0.0, 'ok': 0, 'total': 0, 'items': 0,
+                'why': 'RSS 情报源（rssfeeds_data.json）未获取 —— 05 节的 49 源没有任何当次读数'}
+    avail = availability(data)
+    if not avail.get('ok'):
+        return {'available': False, 'ratio': 0.0, 'ok': 0, 'total': 0, 'items': 0,
+                'why': (f"RSS 情报源（rssfeeds_data.json）不可用（{avail.get('reason')}）"
+                        ' —— 05 节的 49 源没有任何当次读数')}
+    st = stats(data)
+    return {'available': True, 'ratio': st['ratio'], 'ok': st['ok'],
+            'total': st['catalog_total'], 'items': st['items'],
+            'why': (f"RSS 情报源 {st['ok']}/{st['catalog_total']} 源可用"
+                    f"（{int(st['ratio'] * 100)}%），{st['failed']} 源未获取")}
+
+
+# ---------------------------------------------------------------------------
 # 渲染 · 网页（05 节）
 # ---------------------------------------------------------------------------
 def _esc(t):
@@ -1262,6 +1332,66 @@ def build_unavailable_html(avail):
     )
 
 
+def render_stats_web(data):
+    """05 节的框架级统计面板：49 源作为「第 5 路数据源」并入覆盖度后，把账摊开。
+
+    只展示已发生的读数，不做任何估算；DeepSeek / RSSHub 兜底没启用时如实标「未启用」，
+    而不是省略 —— 省略会让读者以为这一路压根不存在。
+    """
+    st = stats(data)
+    pct = int(round(st['ratio'] * 100))
+    cells = [
+        ('可用源', f"{st['ok']}/{st['catalog_total']}", f'{pct}%'),
+        ('入库条目', f"{st['items']}", '条'),
+        ('拦截超窗', f"{st['stale_dropped']}", '条'),
+        ('无日期保留', f"{st['undated_kept']}", '条'),
+        ('原生 RSS', f"{st['native']}", '源'),
+        ('RSSHub 路由', f"{st['rsshub']}", '源'),
+        ('检索载体', f"{st['gnews']}", '源'),
+        ('DeepSeek 检索', f"{st['deepseek']}", '源'),
+    ]
+    cards = ''.join(
+        f'<div style="flex:1 1 92px;min-width:92px;border:1px solid var(--border);'
+        f'padding:6px 8px;background:#fff;">'
+        f'<div style="font-family:var(--mono);font-size:9.5px;color:var(--muted);'
+        f'letter-spacing:.04em;">{_esc(label)}</div>'
+        f'<div style="font-family:var(--mono);font-size:14px;font-weight:700;">{_esc(value)}'
+        f'<span style="font-size:9.5px;font-weight:400;color:var(--muted);margin-left:3px;">'
+        f'{_esc(unit)}</span></div></div>'
+        for label, value, unit in cells)
+
+    ds_note = ('已启用' if st['deepseek_enabled'] else '未启用（无 DEEPSEEK_API_KEY）')
+    ds_note += f" · 本轮救回 {st['deepseek_rescued']} 源"
+    if st['deepseek_enabled']:
+        ds_note += f" · 剩余额度 {st['deepseek_calls_left']}"
+    rh_note = ('已熔断（多实例被拦）' if st['rsshub_tripped'] else '正常')
+    rh_note += f" · 实例 {st['rsshub_instances']} 个 · 换实例救回 {st['rsshub_rescued']} 源"
+    if st['rsshub_proxy']:
+        rh_note += ' · 经代理出口'
+
+    return (
+        '<div style="margin:0 0 10px;">'
+        f'<div class="pub-meta" style="margin:0 0 5px;font-weight:700;">'
+        f'◆ 框架统计 · RSS 49 源已并入 01/04 的覆盖度（第 5 路数据源）</div>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:5px;">{cards}</div>'
+        f'<div class="pub-meta" style="margin:5px 0 0;">'
+        f'◆ DeepSeek 检索兜底 {_esc(ds_note)}</div>'
+        f'<div class="pub-meta" style="margin:2px 0 0;">'
+        f'◆ RSSHub 通道 {_esc(rh_note)}</div>'
+        '</div>')
+
+
+def rss_status_line(data):
+    """战情面板用的一行式统计（HUD 空间小，只放最关键的三项）。"""
+    if not isinstance(data, dict) or not data or not availability(data).get('ok'):
+        return 'RSS 49 源未获取 · 05 节走兜底'
+    st = stats(data)
+    extra = f" · DeepSeek 救回 {st['deepseek_rescued']} 源" if st['deepseek_rescued'] else ''
+    extra += f" · RSSHub 救回 {st['rsshub_rescued']} 源" if st['rsshub_rescued'] else ''
+    return (f"RSS {st['ok']}/{st['catalog_total']} 源（{int(st['ratio'] * 100)}%）"
+            f" · {st['items']} 条{extra}")
+
+
 def render_web(data):
     """网页 05 节：六大板块 × 49 源，逐源给状态 + 当次条目（日期 + 标题 + 摘要）。"""
     avail = availability(data)
@@ -1278,6 +1408,7 @@ def render_web(data):
     parts = ['<div class="pub-box">',
              '<div class="pub-sub">◆ 全球 49 大财经 RSS 情报源 · 六大板块 · 逐源核验状态</div>',
              f'<div class="pub-meta" style="margin:2px 0 10px;">{_esc(note)}</div>',
+             render_stats_web(data),
              '<div class="pub-meta" style="margin:0 0 10px;">'
              '口径：原生 RSS / RSSHub 路由（第三方公共实例，失败按目录顺序回退）/ '
              'Google News 检索载体（站点无公开订阅源时使用，如实标注，不冒充原生源）。'

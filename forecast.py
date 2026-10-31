@@ -67,6 +67,8 @@ except Exception:                                # pragma: no cover - 词库缺�
     nlp = None
 
 import quant_pair                                # σ / 标的名与配对交易共用同一份策略参数
+import rss_feeds as rss_mod                      # 第 5 路数据源：49 源 RSS 的可用率
+from panorama import COVERAGE_ROUTES, _coverage_of as panorama_coverage  # 覆盖度同一口径
 
 MINUS = '\u2212'
 DASH = '\u2014'
@@ -417,8 +419,13 @@ def forecast_symbol(key, quotes, carry_z, senti, macro_s, coverage):
 # ---------------------------------------------------------------------------
 # 主预测
 # ---------------------------------------------------------------------------
-def predict(market=None, macro=None, sentiment=None, community=None, now=None, review=None):
-    """四路当次数据 → 下一交易日预测。纯函数，无 IO，不联网。"""
+def predict(market=None, macro=None, sentiment=None, community=None, rss=None,
+            now=None, review=None):
+    """五路当次数据 → 下一交易日预测。纯函数，无 IO，不联网。
+
+    rss 是**第 5 路**（49 源 RSS 情报源的可用率）。它与 01 栏共用同一套覆盖度口径，
+    只是折算成置信度而不是结论 —— 05 节大面积未获取时，预测置信度必须同步下调。
+    """
     now = now or datetime.now(timezone.utc)
     market, macro = market or {}, macro or {}
     sentiment, community = sentiment or {}, community or {}
@@ -439,7 +446,14 @@ def predict(market=None, macro=None, sentiment=None, community=None, now=None, r
                        if (c or {}).get('verdict_class') in ('bull', 'bear', 'neutral', 'mixed'))
     if not valid_comm_n:
         gaps.append('社区研判（community_data.json）未获取 —— 多空家数无法统计')
-    coverage = round((4 - len(gaps)) / 4.0, 2)
+    pre_gaps = len(gaps)                     # 前四路的缺口数，RSS 由 rss_sig 单独表达
+    rss_sig = rss_mod.coverage_signal(rss)
+    if not rss_sig['available']:
+        gaps.append(rss_sig['why'])
+    coverage = panorama_coverage(pre_gaps, rss_sig)
+    if rss_sig['available'] and rss_sig['ratio'] < 0.999:
+        # 覆盖度被 RSS 拉低时必须说清是谁拉低的（与 01 栏同一口径）。
+        gaps.append(rss_sig['why'])
 
     # ---------- 基准日与目标日（未来函数的时序底线） ----------
     base_date = ''
@@ -983,15 +997,16 @@ def _load(path):
 
 
 def predict_from_files(root=REPO_ROOT, now=None, history=False):
-    """按仓库约定路径读四份 json（环境变量可覆盖，与建站/推送一致）→ 预测。"""
+    """按仓库约定路径读五份 json（环境变量可覆盖，与建站/推送一致）→ 预测。"""
     market = _load(os.environ.get('MARKET_DATA', os.path.join(root, 'market_data.json')))
     macro = _load(os.environ.get('MACRO_DATA', os.path.join(root, 'macro_data.json')))
     sentiment = _load(os.environ.get('SENTIMENT_DATA', os.path.join(root, 'sentiment_data.json')))
     community = _load(os.environ.get('COMMUNITY_DATA', os.path.join(root, 'community_data.json')))
+    rss = _load(os.environ.get('RSSFEEDS_DATA', os.path.join(root, 'rssfeeds_data.json')))
     # 先用当次行情结算历史预测（只会碰到目标日已到的旧预测），再算当次预测
     rev = review_from_history(default_history_path(root), market=market, now=now)
     data = predict(market=market, macro=macro, sentiment=sentiment, community=community,
-                   now=now, review=rev)
+                   rss=rss, now=now, review=rev)
     if history:
         data['review'] = review_from_history(default_history_path(root), market=market,
                                              now=now, persist=True, data=data)
