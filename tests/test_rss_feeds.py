@@ -473,5 +473,58 @@ class TestBootstrapAndBuildSite(unittest.TestCase):
         self.assertFalse(os.path.exists(self.path), '--check 是纯校验，绝不联网补抓')
 
 
+class TestSuiteStaysHermetic(unittest.TestCase):
+    """单测不得靠真实出口抓 05 栏的源，也不得在仓库根留下产物。
+
+    事故复盘（2026-10-31，CI run 41158677248 的「舆情层自检」红）：
+    有几个用例跑的是**不带 --rss 也不关 RSS 补抓**的 build_site.py /
+    wechat_push.py —— 沙箱没有出口时补抓必然失败，什么都不写，本地全绿；
+    CI 出口真实可用时补抓成功，直接在仓库根生成 rssfeeds_data.json，
+    再被按仓库根读取的用例看到（详见 test_sentiment 的 03B 切片修复）。
+
+    「跑完看有没有留下产物」在沙箱里恒为否（根本抓不到，什么都不会写），
+    所以这里改为**静态断言**：凡是拉起 build_site.py / wechat_push.py 子进程的
+    用例，必须显式把 05 栏补抓关掉（`--rss-no-fetch` 或 `--rss <path>`；
+    `--check` 是纯校验模式，本身不落盘，放行）。这样同类回归在本地就会红，
+    不必等 CI 的 61 秒里那批真实抓取把证据带出来。
+    """
+
+    TESTS_DIR = os.path.join(REPO_ROOT, 'tests')
+    CALLERS = ('build_site.py', 'wechat_push.py')
+
+    def _spawns(self, source):
+        """取出该文件里每个「拉起 build_site.py / wechat_push.py」的 argv 块。"""
+        blocks = []
+        for match in re.finditer(r'\[\s*sys\.executable[^\]]*\]', source, re.S):
+            text = match.group(0)
+            if any(name in text for name in self.CALLERS):
+                blocks.append(text)
+        return blocks
+
+    def test_subprocess_callers_disable_rss_fetch(self):
+        offenders = []
+        for name in sorted(os.listdir(self.TESTS_DIR)):
+            if not name.startswith('test_') or not name.endswith('.py'):
+                continue
+            with open(os.path.join(self.TESTS_DIR, name), encoding='utf-8') as f:
+                source = f.read()
+            for block in self._spawns(source):
+                if '--rss-no-fetch' in block or '--rss' in block or '--check' in block:
+                    continue
+                offenders.append('{}: {}'.format(name, ' '.join(block.split())[:160]))
+        self.assertEqual(
+            offenders, [],
+            '这些用例会以默认路径跑 build_site/wechat_push，CI 有出口时会把 '
+            'rssfeeds_data.json 写进仓库根 → 请补 --rss <临时路径> 或 --rss-no-fetch')
+
+    def test_inprocess_callers_disable_rss_fetch(self):
+        """直接调 main() 的用例（不走 subprocess）也必须显式关掉补抓。"""
+        for name in ('test_community_snapshot.py', 'test_wechat_push_mode.py'):
+            with open(os.path.join(self.TESTS_DIR, name), encoding='utf-8') as f:
+                source = f.read()
+            self.assertIn('RSSFEEDS_AUTO_FETCH', source,
+                          '{} 直接调用入口，必须显式 RSSFEEDS_AUTO_FETCH=0'.format(name))
+
+
 if __name__ == '__main__':
     unittest.main()
