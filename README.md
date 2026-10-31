@@ -344,8 +344,21 @@ python3 -m unittest tests.test_quant_pair
 4. `verified=needs_check` 的（ARK、Motley Fool、Kitco、QuantStart、Project Syndicate）地址来自公开资料，
    站点改版就可能失效 —— 失效就如实标「未获取」，不猜内容。
 
-RSSHub 是第三方公共服务：默认 `https://rsshub.app`，用 **`RSSHUB_BASE`**（逗号分隔多实例，按顺序回退）
-可换自建实例；每轮 RSSHub 请求数有上限（`RSSHUB_MAX_PER_RUN`，默认 20），避免被公共实例限流拖死构建。
+RSSHub 是第三方公共服务。**GitHub Actions 的出口 IP 会被 `rsshub.app` 前面的 Cloudflare 直接回 403** ——
+实测 run `41168249465` 里 13 条 RSSHub 路线集体「未获取」，而同一条路线在其它出口上是 200 且有最新条目，
+说明是**按 IP 拦边缘**，不是路由坏死。所以默认不再只挂官方实例：
+
+| 手段 | 配置 | 行为 |
+|---|---|---|
+| 多实例轮换 | `RSSHUB_BASE`（逗号分隔，默认 = 官方 + `rsshub.rss.tips` / `rsshub.isrss.com` / `rsshub.cups.moe`，均为探活过的社区镜像） | 403/429 视为边缘拦 IP → **自动换下一个实例**；换成功计 `summary.rsshub.rescued` |
+| 本轮熔断 | `RSSHUB_TRIP_AFTER`（默认 3） | 连续多个实例都被拦 → 本轮停止使用 RSSHub，按目录回退原生 RSS / 检索载体，**不让 403 风暴把构建拖死** |
+| 换出口 | `RSSHUB_PROXY`（或 `HTTPS_PROXY`） | 走指定出站代理（住宅/其它地区出口）再访问 RSSHub |
+| 请求上限 | `RSSHUB_MAX_PER_RUN`（默认 20） | 每轮 RSSHub 请求数上限，避免被公共实例限流拖死构建 |
+
+CI 里用仓库变量 `vars.RSSHUB_BASE` / secret `RSSHUB_PROXY` 注入，可整体覆盖默认链（例如换成自建实例）。
+
+**必须区分两类失败**：`403/429` 是边缘按 IP 拦截，换实例或换出口有意义；而 **`200` + RSSHub 错误页**
+（如 WSJ 上游 `401 Unauthorized`、雪球要浏览器）是**路由自身坏死**，换实例无效 —— 这类照旧如实标「未获取」。
 
 **口径（与 02 栏同一套反幻觉原则）**
 

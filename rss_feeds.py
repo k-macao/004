@@ -70,8 +70,24 @@ LIMIT_PER_SOURCE_DEFAULT = 3     # 每个源最多留 3 条，49 源同页才不
 SNAPSHOT_MAX_AGE_DAYS = 1        # 快照新鲜度上限，与 macro_data 同一口径
 
 # RSSHub 实例：第三方公共服务，可用环境变量覆盖（逗号分隔，按顺序回退）
-DEFAULT_RSSHUB_BASE = 'https://rsshub.app'
+#
+# 为什么默认挂一串而不是只用 rsshub.app：
+#   GitHub Actions 的出口 IP 段会被 rsshub.app 前面的 Cloudflare 直接回 403
+#   （实测 CI run 41168249465：13 条 rsshub.app 路线全 403，而同一路线在
+#   本机 / 独立出口上 200 且有最新条目 —— 说明是**按 IP 拦边缘**，不是路由坏死）。
+#   实测要注意区分两种失败：
+#     · 403 是 CF 拦 IP                → 换实例就能救（这里要解决的）
+#     · 200 + RSSHub 错误页（如 WSJ 上游 401、雪球要浏览器）→ 换实例救不了，属路由自身
+#   下面每个实例都是探活过 /test/cache 的，顺序＝优先级，并保留 rsshub.app 兜底。
+DEFAULT_RSSHUB_BASE = ','.join([
+    'https://rsshub.app',              # 官方（非机房 IP 出口最快）
+    'https://rsshub.rss.tips',         # 🇺🇸 AboutRSS，实测 /test/cache + /cls/telegraph 正常
+    'https://rsshub.isrss.com',        # 🇺🇸 isRSS，实测同上
+    'https://rsshub.cups.moe',         # 🇺🇸 FunnyCups，实测 /test/cache 正常
+])
 RSSHUB_MAX_PER_RUN = int(os.environ.get('RSSHUB_MAX_PER_RUN', '20') or 20)
+# 连续失败多少个不同实例后，本轮直接放弃 RSSHub（避免 49 源 × N 实例 的 403 风暴把构建拖死）
+RSSHUB_TRIP_AFTER = int(os.environ.get('RSSHUB_TRIP_AFTER', '3') or 3)
 
 # ---------------------------------------------------------------------------
 # 六大板块（与用户清单的分节一一对应）
@@ -438,7 +454,40 @@ def rsshub_bases():
     """RSSHub 实例列表（环境变量 RSSHUB_BASE 可逗号分隔多个，按顺序回退）。"""
     raw = os.environ.get('RSSHUB_BASE') or DEFAULT_RSSHUB_BASE
     bases = [b.strip().rstrip('/') for b in raw.split(',') if b.strip()]
-    return bases or [DEFAULT_RSSHUB_BASE]
+    return bases or ['https://rsshub.app']
+
+
+def rsshub_proxy():
+    """可选出站代理：RSSHUB_PROXY / HTTPS_PROXY / HTTP_PROXY（单个 URL）。
+
+    走代理是「换出口」的另一条路，适合能用住宅/其它地区出口的环境。
+    """
+    for key in ('RSSHUB_PROXY', 'HTTPS_PROXY', 'https_proxy', 'HTTP_PROXY', 'http_proxy'):
+        val = str(os.environ.get(key) or '').strip()
+        if val:
+            return val
+    return ''
+
+
+def _is_rsshub_url(url):
+    """该 URL 是不是某个 RSSHub 实例上的路由。"""
+    return any(url.startswith(base + '/') or url == base for base in rsshub_bases())
+
+
+def _instance_of(url):
+    """该 URL 属于哪个 RSSHub 实例（取最长前缀，避免子路径误判）。"""
+    match = ''
+    for base in rsshub_bases():
+        if (url == base or url.startswith(base + '/')) and len(base) > len(match):
+            match = base
+    return match
+
+
+def _is_edge_block(err):
+    """异常文本是否属于「边缘/CDN 按 IP 拦截」（403/429），换实例或换出口有意义。"""
+    text = str(err)
+    return ('403' in text or '429' in text
+            or 'Forbidden' in text or 'Too Many Requests' in text)
 
 
 def gnews_url(query, lang='en'):
@@ -466,19 +515,34 @@ def resolve_endpoints(src):
     return out
 
 
-def http_get(url, timeout=10):
-    """GET → (text, latency_ms)。失败抛异常，由调用方记进 sources[].error。"""
+def http_get(url, timeout=10, proxy=None):
+    """GET → (text, latency_ms)。失败抛异常，由调用方记进 sources[].error。
+
+    proxy: HTTP(S) 代理 URL；None 时回落到 rsshub_proxy() 的环境变量配置。
+           自己显式建 opener，避免走 urllib 的全局 ProxyHandler（受 *_PROXY 环境
+           变量隐式影响，测试里不好锁）。
+    """
     t0 = time.time()
     req = urllib.request.Request(url, headers={
         'User-Agent': UA,
         'Accept': 'application/rss+xml, application/atom+xml, application/xml, text/xml, */*',
         'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
     })
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
+    proxy_url = proxy if proxy is not None else rsshub_proxy()
+    handlers = []
+    if proxy_url:
+        handlers.append(urllib.request.ProxyHandler({'http': proxy_url, 'https': proxy_url}))
+    else:
+        handlers.append(urllib.request.ProxyHandler({}))   # 显式不走代理
+    opener = urllib.request.build_opener(*handlers)
+    with opener.open(req, timeout=timeout) as resp:
         raw = resp.read()
-    text = raw.decode(resp.headers.get('Content-Type', '').split('charset=')[-1].strip()
-                      if 'charset=' in (resp.headers.get('Content-Type') or '') else 'utf-8',
-                      errors='replace')
+    ctype = resp.headers.get('Content-Type') or ''
+    charset = ctype.split('charset=')[-1].strip().strip('"\'') if 'charset=' in ctype else 'utf-8'
+    try:
+        text = raw.decode(charset or 'utf-8', errors='replace')
+    except LookupError:
+        text = raw.decode('utf-8', errors='replace')
     return text, round((time.time() - t0) * 1000, 1)
 
 
@@ -660,7 +724,7 @@ def dedup_titles(items):
 # 抓取
 # ---------------------------------------------------------------------------
 def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_DEFAULT,
-                 rsshub_budget=None):
+                 rsshub_budget=None, rsshub_state=None, quiet=False):
     """单个源 → (items, meta)。全部端点失败抛异常，由调用方归类为 sources[].error。"""
     now = now or datetime.now(timezone.utc)
     meta = {'endpoint': '', 'kind': '', 'latency_ms': 0.0, 'attempts': []}
@@ -678,9 +742,12 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
 
     errors = []
     for url in resolve_endpoints(src):
-        is_rsshub = '/rsshub' in url or url.startswith(tuple(rsshub_bases()))
+        is_rsshub = _is_rsshub_url(url)
         if is_rsshub and rsshub_budget is not None and rsshub_budget[0] <= 0:
             errors.append(f'{url}: 本轮 RSSHub 请求数已达上限，跳过')
+            continue
+        if is_rsshub and rsshub_state is not None and rsshub_state.get('tripped'):
+            errors.append(f'{url}: 本轮 RSSHub 已熔断（多实例均被拦），跳过')
             continue
         try:
             text, ms = http_get(url, timeout)
@@ -692,9 +759,28 @@ def fetch_source(src, timeout=10, mock=False, now=None, limit=LIMIT_PER_SOURCE_D
             meta.update({'endpoint': url, 'kind': _kind_of(url, src),
                          'latency_ms': round((time.time() - t0) * 1000, 1)})
             meta['attempts'] = errors
+            # 记下「这次是靠换实例救回来的」，便于排查 IP 拦截。
+            # 注意不清空 failed_bases：那是本轮「出口被拦」的累计证据，清掉就再也
+            # 攒不到熔断阈值；单个源救回来 ≠ 出口重新可信。
+            if is_rsshub and errors and rsshub_state is not None:
+                rsshub_state['rescued'] = rsshub_state.get('rescued', 0) + 1
             return normalize(raw, src, now=now, limit=limit), meta
         except Exception as e:  # noqa: BLE001 — 端点失败继续试下一个，全部失败才抛
             errors.append(f'{url}: {type(e).__name__}: {e}'[:220])
+            # 边缘按 IP 拦截（403/429）才计入熔断：这是「这个出口不让 RSSHub 进」，
+            # 换实例/换出口可能有用。路由自身坏死（200 错误页、400/404/500）换实例
+            # 也没用，不计入 —— 否则 WSJ 上游 401 这类会把整条 RSSHub 通道误判死。
+            if is_rsshub and rsshub_state is not None and _is_edge_block(e):
+                inst = _instance_of(url)
+                blocked = rsshub_state.setdefault('failed_bases', [])
+                if inst and inst not in blocked:
+                    blocked.append(inst)
+                if len(blocked) >= rsshub_state.get('trip_after', 3):
+                    rsshub_state['tripped'] = True
+                    if not quiet:
+                        print(f'  ⚠️ RSSHub：已有 {len(blocked)} 个实例被边缘按 IP 拦截（403/429），'
+                              '本轮停止使用 RSSHub → 05 节按目录回退原生 RSS / 检索载体',
+                              file=sys.stderr)
     raise RuntimeError('; '.join(errors)[:400] or '无可用端点')
 
 
@@ -729,6 +815,9 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
     targets = [c for c in CATALOG if (not only or c['key'] in only)]
     groups = {k: {'label': label, 'desc': GROUP_DESCS[k], 'sources': []} for k, label, _d in GROUPS}
     total_kept = total_stale = total_undated = 0
+    # 本轮 RSSHub 通道状态：多实例轮换 + 连续被拦熔断（跨源共享，避免 403 风暴）
+    rsshub_state = {'failed_bases': [], 'tripped': False, 'rescued': 0,
+                    'trip_after': max(1, int(RSSHUB_TRIP_AFTER))}
 
     for src in targets:
         meta = {'id': src['id'], 'key': src['key'], 'name': src['name'], 'lang': src['lang'],
@@ -743,7 +832,8 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
             continue
         try:
             items, fmeta = fetch_source(src, timeout=timeout, mock=mock, now=now,
-                                        limit=limit, rsshub_budget=[rsshub_max] if not mock else None)
+                                        limit=limit, rsshub_budget=[rsshub_max] if not mock else None,
+                                        rsshub_state=rsshub_state, quiet=quiet)
             kept, dropped = filter_stale(items, max_age_days=max_age_days, now=now)
             kept = sort_items(dedup_titles(kept))
             total_stale += dropped['stale_dropped']
@@ -784,6 +874,10 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
             'stale_dropped': total_stale,
             'undated_kept': total_undated,
             'by_kind': kinds,
+            'rsshub': {'instances': len(rsshub_bases()),
+                       'tripped': bool(rsshub_state['tripped']),
+                       'rescued': int(rsshub_state.get('rescued', 0)),
+                       'proxy': bool(rsshub_proxy())},
             'per_group': {k: {'ok': sum(1 for s in v['sources'] if s['ok']),
                               'total': len(v['sources']),
                               'items': sum(len(s['items_list']) for s in v['sources'])}
@@ -793,8 +887,9 @@ def build(max_age_days=MAX_AGE_DAYS_DEFAULT, limit=LIMIT_PER_SOURCE_DEFAULT, tim
             f'由 rss_feeds.py 构建时抓取（目录 {len(CATALOG)} 源：原生 RSS / RSSHub 路由 / '
             f'Google News 检索载体），只保留 {max_age_days} 天内且发布日期可解析的条目',
             '单源失败只标「未获取」，不回填历史标题；无日期条目不当最新，渲染时明确标注',
-            'RSSHub 是第三方公共服务（默认 rsshub.app，可用 RSSHUB_BASE 换自建实例），'
-            '实例失败按目录顺序回退原生 RSS / 检索载体',
+            'RSSHub 是第三方公共服务：默认按 RSSHUB_BASE 的实例链轮换（官方 + 3 个探活镜像），'
+            '实例被边缘按 IP 拦截（403/429）时自动换下一个；连续多个实例被拦即本轮熔断，'
+            '按目录顺序回退原生 RSS / 检索载体，不会把构建拖死',
             '对外不展示失败堆栈；逐源原因只留在 sources[].error 供 CI 排查',
         ],
     }
@@ -936,6 +1031,12 @@ def text_report(data):
     lines.append(f'  源 {summ.get("ok", 0)}/{summ.get("total", 0)} 可用 · '
                  f'条目 {summ.get("items", 0)} 条 · 拦截超窗 {summ.get("stale_dropped", 0)} 条 · '
                  f'无日期保留 {summ.get("undated_kept", 0)} 条 · 按类型 {summ.get("by_kind") or {}}')
+    rh = summ.get('rsshub') or {}
+    if rh:
+        state = '已熔断（多实例被拦 → 只走原生/检索回退）' if rh.get('tripped') else '正常'
+        lines.append(f'  ◆ RSSHub 通道 {state} · 实例 {rh.get("instances", 0)} 个 · '
+                     f'换实例救回 {rh.get("rescued", 0)} 源'
+                     + (' · 经代理出口' if rh.get('proxy') else ''))
     for gkey, group in (data.get('groups') or {}).items():
         srcs = group.get('sources') or []
         ok = [s for s in srcs if s.get('ok')]
@@ -1258,7 +1359,14 @@ def render_catalog_md():
         '**核验状态**：`native` 站点官方公开 RSS · `rsshub_doc` RSSHub 官方路由表里有此路由（路径按路由源码核对）·',
         '`needs_check` 地址来自公开资料、站点改版可能失效 · `carrier` 站点无公开 RSS，用 Google News 检索载体（如实标注，不冒充原生源）。',
         '',
-        '**端点优先级**：按列表顺序回退；`rsshub:/xxx` 会按 `RSSHUB_BASE`（默认 `https://rsshub.app`，可逗号分隔多实例）展开。',
+        '**端点优先级**：按列表顺序回退；`rsshub:/xxx` 会按 `RSSHUB_BASE` 的实例链展开'
+        '（官方 `rsshub.app` + 3 个探活镜像，逗号分隔、按序回退）。',
+        '',
+        '**RSSHub 出口说明**：GitHub Actions 的出口 IP 会被 `rsshub.app` 前的 Cloudflare 直接回 403'
+        '（同一路线在其它出口是 200），因此默认挂多实例轮换：403/429 视为「边缘按 IP 拦截」→ 自动换下一个实例；'
+        '连续多个实例被拦则本轮熔断，05 节按目录回退原生 RSS / 检索载体，不会把构建拖死。'
+        '换出口的另一种方式是用 `RSSHUB_PROXY` 指定出站代理。'
+        '注意区分：403 可换实例救回；**200 + RSSHub 错误页**（上游 401、需要浏览器）属路由自身坏死，换实例无效。',
         '',
         f'合计 **{len(CATALOG)} 源**，六大板块：'
         + ' · '.join(f'{GROUP_LABELS[g]} {GROUP_EXPECTED[g]} 源' for g, _l, _d in GROUPS),
