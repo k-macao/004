@@ -377,17 +377,15 @@ class TestWechatSection(unittest.TestCase):
 
     def test_render_path_never_fetches_even_in_ci(self):
         """渲染路径（库函数）在任何环境下都不得联网抓 49 源。"""
-        with mock.patch.object(rf, 'http_get', side_effect=AssertionError('渲染路径不得联网')):
-            env = self._env(None)
-            saved = {k: os.environ.get(k) for k in env}
-            os.environ.update({**env, 'RSSFEEDS_AUTO_FETCH': '1', 'GITHUB_ACTIONS': 'true'})
-            try:
-                self.assertEqual(wp.load_rss_feeds(), {})
-                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                    html, _t, _tf = wp.build_single_wechat_html(now=NOW)
-            finally:
-                for k, v in saved.items():
-                    os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+        env = {**self._env(None), 'RSSFEEDS_AUTO_FETCH': '1', 'GITHUB_ACTIONS': 'true'}
+        # Restore GITHUB_ACTIONS too; leaving it set enables live bootstrap in
+        # unrelated tests that run later in the same process.
+        with (mock.patch.dict(os.environ, env),
+              mock.patch.object(rf, 'http_get', side_effect=AssertionError('渲染路径不得联网')) as fetch):
+            self.assertEqual(wp.load_rss_feeds(), {})
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                html, _t, _tf = wp.build_single_wechat_html(now=NOW)
+        fetch.assert_not_called()
         self.assertIn('今日未获取', _plain(html))
 
 

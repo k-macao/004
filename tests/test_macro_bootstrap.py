@@ -337,17 +337,23 @@ class TestBuildSiteEndToEnd(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.macro = os.path.join(self._tmp.name, 'macro_data.json')
+        self.rss = os.path.join(self._tmp.name, 'rssfeeds_data.json')
         self.out = os.path.join(self._tmp.name, 'out.html')
         self.missing = os.path.join(self._tmp.name, 'missing.json')
 
     def _run(self, *extra):
-        return subprocess.run(
+        # Only macro bootstrap is under test; RSS must stay offline even in CI.
+        result = subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, 'build_site.py'),
              '--template', os.path.join(REPO_ROOT, 'report.html'),
              '--out', self.out, '--data', self.missing, '--community', self.missing,
-             '--sentiment', self.missing, '--macro', self.macro, *extra],
+             '--sentiment', self.missing, '--macro', self.macro,
+             '--rss', self.rss, '--rss-no-fetch', *extra],
             capture_output=True, text=True, timeout=180,
-            env=dict(os.environ, MACRO_AUTO_FETCH='0'), cwd=self._tmp.name)
+            env=dict(os.environ, GITHUB_ACTIONS='true', MACRO_AUTO_FETCH='0', RSSFEEDS_AUTO_FETCH='1'),
+            cwd=self._tmp.name)
+        self.assertFalse(os.path.exists(self.rss), '宏观快讯测试不得触发 RSS 补抓')
+        return result
 
     def test_bootstrap_renders_real_items_into_section_02(self):
         p = self._run('--macro-mock', '--macro-fetch')

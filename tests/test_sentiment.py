@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT not in sys.path:
@@ -462,23 +463,23 @@ class TestSourceAnonymity(unittest.TestCase):
         with open(self.sent, encoding='utf-8') as f:
             return self.build_site.build_sentiment_html(json.load(f))
 
+    def _push_html(self):
+        with mock.patch.dict(os.environ, {'SENTIMENT_DATA': self.sent}), capture_stdout():
+            html, _ts, _ts_full = self.wechat.build_single_wechat_html()
+        return html
+
+    @staticmethod
+    def _sentiment_section(html):
+        # Check only 03B, ending at the next heading (04), not at 07: section
+        # 05 intentionally names RSS sources such as 金十 and eastmoney.
+        # Match heading text immediately after '>' so quoted section references
+        # elsewhere in community/news text do not select an unrelated slice.
+        i = html.index('>03B / 舆情')
+        j = html.index('>04 / AI 预测', i)
+        return html[i + 1:j]
+
     def _push(self):
-        old = os.environ.get('SENTIMENT_DATA')
-        os.environ['SENTIMENT_DATA'] = self.sent
-        try:
-            with capture_stdout():
-                html, _ts, _ts_full = self.wechat.build_single_wechat_html()
-        finally:
-            if old is None:
-                os.environ.pop('SENTIMENT_DATA', None)
-            else:
-                os.environ['SENTIMENT_DATA'] = old
-        # Community/news payloads are external text and may themselves contain
-        # strings such as "07 /" before section 03B. Find the 07 boundary only
-        # after the 03B heading so the test actually inspects the sentiment block.
-        i = html.index('03B /')
-        j = html.index('07 /', i + len('03B /'))
-        return html[i:j]
+        return self._sentiment_section(self._push_html())
 
     def test_web_03b_hides_every_source_trace(self):
         html = self._web()
@@ -488,6 +489,31 @@ class TestSourceAnonymity(unittest.TestCase):
 
     def test_push_03b_hides_every_source_trace(self):
         html = self._push()
+        for bad in self.BLACKLIST:
+            self.assertNotIn(bad, html, f'微信推送 03B 泄漏来源: {bad}')
+
+    def test_push_03b_scope_with_populated_rss_snapshot(self):
+        """CI 有 RSS 产物时，05 栏的公开来源名不属于 03B 脱敏检查范围。"""
+        with tempfile.TemporaryDirectory() as tmp:
+            rss_path = os.path.join(tmp, 'rssfeeds_data.json')
+            with open(rss_path, 'w', encoding='utf-8') as f:
+                json.dump(self.wechat.rss_mod.build(mock=True, quiet=True), f, ensure_ascii=False)
+            missing = os.path.join(tmp, 'missing.json')
+            env = {key: missing for key in ('MARKET_DATA', 'COMMUNITY_DATA',
+                                            'MACRO_DATA', 'FORECAST_HISTORY')}
+            env['RSSFEEDS_DATA'] = rss_path
+            with mock.patch.dict(os.environ, env):
+                full_html = self._push_html()
+        # The RSS block must actually render its sources, not be hidden or
+        # redacted just to make the sentiment anonymity assertion pass.
+        self.assertIn('05 / 全球 49 大财经 RSS 情报源', full_html)
+        self.assertIn('金十数据快讯', full_html)
+        html = self._sentiment_section(full_html)
+        self.assertIn('03B / 舆情', html)
+        self.assertIn('市场舆情因子读数', html)
+        self.assertIn('代表新闻', html)
+        self.assertNotIn('04 / AI 预测', html)
+        self.assertNotIn('05 / 全球', html)
         for bad in self.BLACKLIST:
             self.assertNotIn(bad, html, f'微信推送 03B 泄漏来源: {bad}')
 
