@@ -83,6 +83,7 @@ import macro_data as macro_data_mod                        # noqa: E402  02 节�
 import community_data as community_mod                     # noqa: E402  03 节 49 源严格真实口径与离线降级目录
 import quant_pair                                          # noqa: E402  每条内容后的 AI 量化配对
 import forecast as forecast_mod                            # noqa: E402  04 节「AI 预测 · 未来函数」推理引擎
+import rss_feeds as rss_mod                                # noqa: E402  05 节「49 大财经 RSS 情报源」目录/抓取/兜底
 
 try:
     # 单一事实源：是否对外展示「量化平台现成舆情/新闻因子接入评测（9 阶段实测）」区块
@@ -122,6 +123,12 @@ FORECAST_MARK = '<!-- FORECAST -->'
 FORECAST_BEGIN = '<!-- FORECAST:BEGIN -->'
 FORECAST_END = '<!-- FORECAST:END -->'
 FORECAST_CLOSE = '<!-- /FORECAST -->'
+
+# 05 节「全球 49 大财经 RSS 情报源」注入标记（与 MACROLIST / FORECAST 同一套幂等写法）
+RSS_MARK = '<!-- RSSFEEDS -->'
+RSS_BEGIN = '<!-- RSSFEEDS:BEGIN -->'
+RSS_END = '<!-- RSSFEEDS:END -->'
+RSS_CLOSE = '<!-- /RSSFEEDS -->'
 VERDICT_BEGIN = '<!-- VERDICT:BEGIN -->'
 VERDICT_END = '<!-- VERDICT:END -->'
 # 行情快照与 07 结论是模板静态块，构建时在标记处补上 AI 量化（重复构建只替换标记，不追加）；
@@ -679,6 +686,32 @@ def inject_macro_list(template, macro_html):
     return template
 
 
+def inject_rss_feeds(template, rss_html):
+    """把 05 节「49 大财经 RSS 情报源」注入模板占位处（与 MACROLIST 同一套幂等写法）。
+
+    主标记 `<!-- RSSFEEDS -->`；兼容 `<!-- RSSFEEDS:BEGIN/END -->` 成对标记；
+    注入时尾部留 `<!-- /RSSFEEDS -->` 哨兵，重复构建原地替换而非追加。
+    """
+    block = f'{RSS_MARK}\n{rss_html}\n{RSS_CLOSE}'
+    if RSS_BEGIN in template and RSS_END in template:
+        pattern = re.compile(re.escape(RSS_BEGIN) + r'.*?' + re.escape(RSS_END), re.S)
+        new_html, count = pattern.subn(lambda _m: block, template, count=1)
+        if count:
+            print('  📡 已动态注入 05 节 RSS 情报源（成对标记替换）')
+            return new_html
+    if RSS_MARK in template:
+        if RSS_CLOSE in template:
+            pattern = re.compile(re.escape(RSS_MARK) + r'.*?' + re.escape(RSS_CLOSE), re.S)
+            new_html, count = pattern.subn(lambda _m: block, template, count=1)
+            if count:
+                print('  📡 已动态注入 05 节 RSS 情报源（单标记替换）')
+                return new_html
+        print('  📡 已动态注入 05 节 RSS 情报源（单标记插入）')
+        return template.replace(RSS_MARK, block, 1)
+    print('  ⚠️ 未找到 RSSFEEDS 标记，跳过 RSS 情报源注入', file=sys.stderr)
+    return template
+
+
 def build_vix_html(market_data):
     """00 节「每日 VIX 恐慌指数」：只读当次行情，统一解释口径与缺失降级。"""
     data = vix_daily.analyze(market_data)
@@ -1139,6 +1172,20 @@ def main():
                     help='强制开启构建期自动补抓（本地默认不联网，CI 默认开）')
     ap.add_argument('--macro-mock', action='store_true',
                     help='构建期补抓走离线回放 tests/fixtures（联调用）')
+    ap.add_argument('--rss', default='rssfeeds_data.json',
+                    help='49 大财经 RSS 情报源 JSON 路径（rss_feeds.py 生成，05 节注入源）')
+    ap.add_argument('--rss-days', type=int, default=rss_mod.MAX_AGE_DAYS_DEFAULT,
+                    help='RSS 情报源时效窗口（天），构建期补抓时使用')
+    ap.add_argument('--rss-limit', type=int, default=rss_mod.LIMIT_PER_SOURCE_DEFAULT,
+                    help='RSS 情报源单源最多条数，构建期补抓时使用')
+    ap.add_argument('--rss-timeout', type=int, default=rss_mod.AUTO_FETCH_TIMEOUT,
+                    help='RSS 情报源构建期补抓的单请求超时秒数')
+    ap.add_argument('--rss-no-fetch', action='store_true',
+                    help='禁用构建期 RSS 情报源自动补抓（缺产物时 05 节显示「今日未获取」）')
+    ap.add_argument('--rss-fetch', action='store_true',
+                    help='强制开启构建期 RSS 情报源自动补抓（本地默认不联网，CI 默认开）')
+    ap.add_argument('--rss-mock', action='store_true',
+                    help='RSS 情报源补抓走离线回放 tests/fixtures（联调用）')
     ap.add_argument('--forecast-history', default=None,
                     help='AI 预测存档路径（默认 forecast_history.json；FORECAST_HISTORY 可覆盖）')
     ap.add_argument('--forecast-no-history', action='store_true',
@@ -1161,7 +1208,8 @@ def main():
             and MACROLIST_BEGIN not in template and VIX_MARK not in template
             and VIX_BEGIN not in template and PANORAMA_MARK not in template
             and PANORAMA_BEGIN not in template and FORECAST_MARK not in template
-            and FORECAST_BEGIN not in template):
+            and FORECAST_BEGIN not in template and RSS_MARK not in template
+            and RSS_BEGIN not in template):
         print(f'错误: {args.template} 中没有 {{占位符}}，疑似已构建过的产物。\n'
               f'仓库中的 report.html 应保持模板版本；恢复: git checkout -- report.html',
               file=sys.stderr)
@@ -1243,6 +1291,32 @@ def main():
         print(f'  🛟 宏观快讯判定为不可用（{macro_avail["reason"]}），已清空条目走兜底：'
               f'{macro_avail["detail"]}')
 
+    # 05 节 RSS 情报源产物：缺失 / 写坏 / 旧快照时就地补抓一次（与 02 节同一套构建期兜底）。
+    # 补抓只在 CLI 入口（main）里做，渲染函数保持纯读取；--check 永不联网。
+    rss_allow = False if (args.check or args.rss_no_fetch) else (
+        True if args.rss_fetch else None)
+    rss_res = rss_mod.ensure(
+        args.rss, max_age_days=args.rss_days, limit=args.rss_limit,
+        timeout=args.rss_timeout, mock=args.rss_mock, quiet=False, now=now,
+        allow_fetch=rss_allow)
+    rss_data = rss_res['data'] or {}
+    if not isinstance(rss_data, dict):
+        print(f'警告: {args.rss} 结构异常（{type(rss_data).__name__}），'
+              '05 节走「今日未获取」兜底', file=sys.stderr)
+        rss_data = {}
+    if rss_res['action'] == 'fetched':
+        print(f'  🔄 构建期补抓 RSS 情报源成功：{rss_res["items"]} 条入库 '
+              f'（{rss_res["elapsed_ms"]} ms）→ {args.rss}')
+    elif rss_res['action'] == 'refetch_unavailable':
+        print(f'  ⚠️ 构建期补抓 RSS 情报源：{rss_res["elapsed_ms"]} ms 后仍无可用条目'
+              f'（{rss_res["reason"]}）→ 05 节显示「今日未获取」，不回填历史标题')
+    elif rss_res['action'] == 'no_refetch':
+        print('  ℹ️ RSS 情报源当次已抓取过但窗口内 0 条，跳过重复补抓')
+    elif rss_res['action'] == 'disabled':
+        print('提示: 未找到 rssfeeds_data.json，05 节显示「今日未获取」；'
+              '可先运行 python3 rss_feeds.py --mock 生成，'
+              '或用 --rss-fetch / RSSFEEDS_AUTO_FETCH=1 开启构建期补抓', file=sys.stderr)
+
     tokens = build_tokens(data, now, community_data, sentiment_data)
 
     if community_data and community_data.get('communities'):
@@ -1258,6 +1332,7 @@ def main():
     template = inject_panorama(template, build_panorama_html(
         data, macro_data, sentiment_data, community_data, now=now))
     template = inject_macro_list(template, build_macro_html(macro_data, now=now, market=data))
+    template = inject_rss_feeds(template, rss_mod.render_web(rss_data))
     template = inject_sentiment(template, build_sentiment_html(sentiment_data, market=data))
     template = inject_forecast(template, build_forecast_html(
         data, macro_data, sentiment_data, community_data, now=now,
@@ -1299,6 +1374,14 @@ def main():
     print(f"   舆情状态: {tokens.get('{{SENT_SOURCE_STATUS}}')} · 温度计 {tokens.get('{{SENT_TEMP}}')}"
           f"（{tokens.get('{{SENT_LABEL}}')}）· {tokens.get('{{SENT_MODE}}')}")
     macro_summ = (macro_data or {}).get('summary') or {}
+    rss_summ = (rss_data or {}).get('summary') or {}
+    rss_avail = rss_mod.availability(rss_data, now=now)
+    if rss_avail['ok']:
+        rss_status = (f"可用 {rss_summ.get('ok')}/{rss_summ.get('total')} 源 · "
+                      f"入库 {rss_summ.get('items')} 条 · 类型 {rss_summ.get('by_kind') or {}}")
+    else:
+        rss_status = f"未获取（{rss_avail['reason']}）—— 05 节走兜底，不回填历史标题"
+    print(f"   RSS 情报源: {rss_status}")
     print(f"   宏观快讯: {_macro_status(macro_data)}"
           + (f" · 入库 {macro_summ.get('kept_items')} 条" if macro_data else ''))
     hidden_n = quant_pair.hidden_render_count()

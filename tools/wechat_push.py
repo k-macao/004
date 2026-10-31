@@ -68,6 +68,7 @@ import community_snapshot as community_snapshot_mod        # noqa: E402  四小�
 import quant_pair                                         # noqa: E402  每条内容后的 AI 量化配对
 import char_charts                                        # noqa: E402  推送字符配图（matplotlib 图种的字符版）
 import forecast as forecast_mod                           # noqa: E402  04 栏「AI 预测 · 未来函数」推理引擎
+import rss_feeds as rss_mod                               # noqa: E402  05 栏「49 大财经 RSS 情报源」目录/抓取/兜底
 
 try:
     # 单一事实源：是否对外展示「量化平台现成舆情/新闻因子接入评测（9 阶段实测）」区块
@@ -191,6 +192,70 @@ def load_macro_data():
                   f' → 02 栏走「今日未获取」兜底', file=sys.stderr)
         return {}
     return data
+
+
+def rss_feeds_path():
+    """05 栏 RSS 情报源产物路径（环境变量 RSSFEEDS_DATA 可覆盖）。"""
+    return os.environ.get('RSSFEEDS_DATA', os.path.join(REPO_ROOT, 'rssfeeds_data.json'))
+
+
+def bootstrap_rss_feeds(allow_fetch=None):
+    """**只在 CLI 入口调用**：产物缺失/写坏/旧快照时就地补抓一次（与 02 栏同一策略）。
+
+    与 bootstrap_macro_data 同样的理由：联网是入口的副作用，不能藏在渲染函数里，
+    否则 CI 里单元测试会真的联网抓 49 个源，降级断言就不确定了。
+    """
+    res = rss_mod.ensure(rss_feeds_path(), allow_fetch=allow_fetch)
+    if res['action'] == 'fetched':
+        print(f'  🔄 微信推送：构建期补抓 RSS 情报源 {res["items"]} 条 '
+              f'（{res["elapsed_ms"]} ms）→ {res["path"]}', file=sys.stderr)
+    elif res['action'] == 'refetch_unavailable':
+        print(f'  ⚠️ 微信推送：RSS 情报源补抓后仍无可用条目（{res["reason"]}）', file=sys.stderr)
+    return res
+
+
+def load_rss_feeds():
+    """读取 rssfeeds_data.json（05 栏 49 大财经 RSS 情报源）。**纯读取，绝不联网**。
+
+    缺失/写坏/旧快照一律返回 {}，05 栏渲染为「今日未获取」——
+    不回填历史标题、不编造「今日重点」（与 02 栏同一反陈旧口径）。
+    """
+    path = rss_feeds_path()
+    data = rss_mod.load_json(path)
+    avail = rss_mod.availability(data)
+    if not avail['ok']:
+        if avail['reason'] == 'no_file':
+            print('  ⚠️ 微信推送：未找到 rssfeeds_data.json → 05 栏降级为「今日未获取」',
+                  file=sys.stderr)
+        else:
+            print(f'  ⚠️ 微信推送：RSS 情报源不可用（{avail["reason"]}）'
+                  f' → 05 栏走「今日未获取」兜底', file=sys.stderr)
+        return {}
+    return data
+
+
+def fit_rss_block(html, rss_data):
+    """把 05 栏按剩余字符预算放进微信单页（详 → 简 → 名录；每一版都保留全部 49 源）。
+
+    目录是固定的 49 条，逐源一行本来就短；这里仍走预算收敛，避免 03/04 栏先吃掉预算时
+    把 05 栏挤到超线。任何一版都含 49 源与可用/未获取标记，只是详略不同。
+    """
+    if RSS_SLOT not in html:
+        return html
+    budget = CONTENT_SAFE_LIMIT - (len(html) - len(RSS_SLOT)) - RSS_MARGIN
+    for level, label in (('full', '完整版'), ('standard', '标准版'),
+                         ('roster', '名录版'), ('compact', '缩略版')):
+        block = wechat_box(rss_mod.render_wechat(rss_data, level=level)) if rss_data else \
+            wechat_box(rss_mod.render_wechat({}, level=level))
+        if len(block) <= budget:
+            if level != 'full':
+                print(f'  ✂️ 微信推送 05 栏：剩余预算 {budget} 字符，本次采用「{label}」'
+                      '（每一版都保留全部 49 源）')
+            return html.replace(RSS_SLOT, block, 1)
+    block = wechat_box(rss_mod.render_wechat(rss_data, level='compact'))
+    print('  ⚠️ 微信推送 05 栏：剩余预算不足以放下名录版，仍以「缩略版」发出 49 源',
+          file=sys.stderr)
+    return html.replace(RSS_SLOT, block, 1)
 
 
 def _esc_w(t):
@@ -368,6 +433,10 @@ COMMUNITY_MARGIN = 1500
 FORECAST_SLOT = '<!--FORECAST-SLOT-->'
 # 预算留白：给日期替换、内嵌脚本等后续步骤留出余量，别把安全线吃满
 FORECAST_MARGIN = 1200
+
+# 05 栏（49 大财经 RSS 情报源）在正文里的占位槽：正文先留槽，量完其余部分再决定详略。
+RSS_SLOT = '<!--RSS-SLOT-->'
+RSS_MARGIN = 1200
 # PushPlus 使用全内联样式，配色和网页报告共享电竞 HUD 色板。
 WECHAT_BG = '#060811'
 WECHAT_PANEL = '#10172a'
@@ -411,7 +480,7 @@ def forecast_block_candidates(fc_data, neon=WECHAT_NEON, green=WECHAT_GREEN, ink
     ]
 
 
-def fit_community_block(html, communities, fc_data=None, quotes=None):
+def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0):
     """把 49 源社区塞进微信单页的剩余预算里（与 04 栏同一套「按预算收敛」思路）。
 
     社区从 14 源扩到 49 源之后，逐条完整卡片会直接顶穿 100K 硬上限，
@@ -434,7 +503,9 @@ def fit_community_block(html, communities, fc_data=None, quotes=None):
             candidates = forecast_block_candidates(fc_data)
             # 优先给 04 栏留「完整版」，放不下再退到最小一版（一行摘要）
             full_fc = next((len(b) for lbl, b in candidates if lbl == '完整版'), 0)
-            reserves = [full_fc, min(len(b) for _lbl, b in candidates)]
+            # 05 栏（49 大财经 RSS 情报源）也要占预算：按「最简一版」预留，
+            # 否则 03 栏把预算吃满后 05 栏只能超线或被挤掉。
+            reserves = [full_fc + rss_min, min(len(b) for _lbl, b in candidates) + rss_min]
         except Exception:
             reserves = [0]
     levels = [('完整版', 'full'), ('标准版', 'standard'), ('精简版', 'compact_plus'),
@@ -455,7 +526,8 @@ def fit_community_block(html, communities, fc_data=None, quotes=None):
     return html.replace(COMMUNITY_SLOT, block, 1)
 
 
-def fit_forecast_block(html, fc_data, neon=WECHAT_NEON, green=WECHAT_GREEN, ink=WECHAT_INK):
+def fit_forecast_block(html, fc_data, neon=WECHAT_NEON, green=WECHAT_GREEN, ink=WECHAT_INK,
+                       rss_min=0):
     """把 04 栏塞进微信单页剩余的字符预算里。
 
     微信单页有 CONTENT_LIMIT 硬上限、CONTENT_SAFE_LIMIT 推送门禁，超了整条推送会被直接拦下。
@@ -470,7 +542,7 @@ def fit_forecast_block(html, fc_data, neon=WECHAT_NEON, green=WECHAT_GREEN, ink=
     """
     if FORECAST_SLOT not in html:
         return html
-    budget = CONTENT_SAFE_LIMIT - (len(html) - len(FORECAST_SLOT)) - FORECAST_MARGIN
+    budget = (CONTENT_SAFE_LIMIT - (len(html) - len(FORECAST_SLOT)) - FORECAST_MARGIN - rss_min)
     candidates = forecast_block_candidates(fc_data, neon=neon, green=green, ink=ink)
     for label, block in candidates:
         if len(block) <= budget:
@@ -515,6 +587,8 @@ def build_single_wechat_html(now=None):
     _sd = load_sentiment_data()
     # ---------- 动态宏观/财经快讯注入 (macro_data.json) — 02 栏唯一文案来源 ----------
     _xd = load_macro_data()
+    # ---------- 动态 RSS 情报源注入 (rssfeeds_data.json) — 05 栏唯一文案来源 ----------
+    _rss = load_rss_feeds()
     # 兜底保障（单一拦截点）：快讯不可用时把条目**就地清空**，而不是只在 02 栏渲染兜底文案。
     # 否则一份过期快照仍会从 07 栏结论、01 栏全景扫描的证据链里漏出去 —— 兜底必须是全栏一致的。
     _xd_avail = macro_data_mod.availability(_xd, now=now)
@@ -1030,6 +1104,9 @@ def build_single_wechat_html(now=None):
   {h('04 / AI 预测 · 未来函数 (AI Forecast · Next Session · 先存档后结算)')}
   {FORECAST_SLOT}
 
+  {h('05 / 全球 49 大财经 RSS 情报源 (Global 49 Finance RSS Intel Feeds · 六大板块 · 逐源核验)')}
+  {RSS_SLOT}
+
   {h('07 / 核心结论与资产配置提示 (Boss Verdict & Strategic Allocation)')}
   {box(verdict_block())}
   <div style="background:#151e33;border:1px solid #2b3855;border-left:3px solid {WECHAT_DANGER};border-radius:4px;padding:10px 14px;margin-top:10px;font-size:12px;color:#c1cce4;line-height:1.8;">
@@ -1047,8 +1124,11 @@ def build_single_wechat_html(now=None):
 </div>'''
     # 03 栏（49 源社区）与 04 栏按微信单页剩余字符预算各自选详略版本：
     # 先按「给 04 栏留出最小一版」的预算填充社区，再由 fit_forecast_block() 用剩下的预算选预测版本。
-    html = fit_community_block(html, communities, fc_data=_fc, quotes=_quotes)
-    html = fit_forecast_block(html, _fc)
+    _rss_min = len(wechat_box(rss_mod.render_wechat(_rss, level='compact')))
+    html = fit_community_block(html, communities, fc_data=_fc, quotes=_quotes,
+                               rss_min=_rss_min)
+    html = fit_forecast_block(html, _fc, rss_min=_rss_min)
+    html = fit_rss_block(html, _rss)
     _hidden_n = quant_pair.hidden_render_count()
     if _hidden_n:
         print(f'  🔒 行情不足：{_hidden_n} 处 AI 量化配对已整段隐藏（两腿涨跌幅不齐，'
@@ -1248,11 +1328,14 @@ def main():
                     help='严格校验: 多源校验出现 WARN 也阻断推送 (默认仅 FAIL 阻断)')
     ap.add_argument('--macro-no-fetch', action='store_true',
                     help='禁用构建期宏观快讯自动补抓（缺产物时 02 栏直接显示「今日未获取」）')
+    ap.add_argument('--rss-no-fetch', action='store_true',
+                    help='禁用构建期 RSS 情报源自动补抓（缺产物时 05 栏直接显示「今日未获取」）')
     args = ap.parse_args()
 
     # 构建期补抓只在 CLI 入口做（渲染函数保持纯读取，单测才不会被迫联网 —— 见
     # bootstrap_macro_data() 注释）。deploy/wechat/daily 三个 job 都从这里进来。
     bootstrap_macro_data(allow_fetch=False if args.macro_no_fetch else None)
+    bootstrap_rss_feeds(allow_fetch=False if args.rss_no_fetch else None)
 
     parts, ts, ts_full = build_articles(args.source)
     print(f'⏰ 时间核对: {ts_full} — 已按当前最新时间生成, 正文全部时间戳已刷新')
