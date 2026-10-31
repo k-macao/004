@@ -57,8 +57,13 @@ class WechatPushModeTests(unittest.TestCase):
         ]:
             with self.subTest(expected=expected, extra=extra), tempfile.TemporaryDirectory() as tmp:
                 output = Path(tmp) / 'wechat.json'
-                argv = ['wechat_push.py', '--emit', str(output), '--source', str(ROOT / 'report.html')] + extra
-                with patch.dict(os.environ, env, clear=True), patch.object(sys, 'argv', argv), \
+                argv = ['wechat_push.py', '--emit', str(output), '--source', str(ROOT / 'report.html'),
+                        '--rss-no-fetch'] + extra
+                # wp.main() 会顺手做 05 栏补抓；CI 有真实出口时这会联网并把
+                # rssfeeds_data.json 写进仓库根。本用例只关心推送群组模式。
+                with patch.dict(os.environ, dict(env, RSSFEEDS_AUTO_FETCH='0'), clear=True), \
+                        patch.object(wp, 'bootstrap_rss_feeds'), \
+                        patch.object(sys, 'argv', argv), \
                         patch.object(wp, 'bootstrap_macro_data'), \
                         patch.object(wp, 'build_articles', return_value=([('title', 'content')], 'now', 'now')), \
                         contextlib.redirect_stdout(io.StringIO()):
