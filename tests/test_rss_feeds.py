@@ -750,9 +750,37 @@ class TestDeepSeekSearchFallback(unittest.TestCase):
             self.assertFalse(rf.deepseek_enabled())
 
     # ---------- 端到端 ----------
+    def _dead_source(self, key='WSJ_ECON'):
+        """只留本地死实例，且**不带 query**（不追加 news.google.com）。
+
+        CI 有真出口：WSJ_ECON 的 query 会被 resolve_endpoints() 展开成一条真实的
+        Google News 检索地址，抓得到就是 kind='gnews'，DeepSeek 兜底根本不会触发
+        —— 本机没出口时那条端点必然失败、兜底才触发，于是「本地绿、CI 红」。
+        端到端用例要测的是「真实端点全挂之后」的行为，所以必须自己把端点锁死在
+        本地死实例上，不能借目录里可能真实可用的端点。
+        """
+        src = dict(rf.CATALOG_BY_KEY[key])
+        src['endpoints'] = ['rsshub:/dead/route']
+        src.pop('query', None)
+        return src
+
+    def test_marked_sources_do_not_gain_a_gnews_endpoint(self):
+        """兜底的检索词不能走 query 字段 —— 那是 Google News 的检索词。
+
+        query 会让 resolve_endpoints() 追加一条真实 news.google.com 地址；一旦它能
+        抓通，这个源就以 kind='gnews' 成功了，DeepSeek 兜底形同不存在（且标注失真）。
+        """
+        for c in rf.CATALOG:
+            if not c.get('deepseek_fallback'):
+                continue
+            self.assertNotIn('query', c, f'{c["key"]} 用 query 当兜底检索词会多出一条 Google News 端点')
+            self.assertTrue(c.get('deepseek_query'), f'{c["key"]} 缺 deepseek_query')
+            urls = rf.resolve_endpoints(c)
+            self.assertFalse(any('news.google.com' in u for u in urls),
+                             f'{c["key"]} 不应出现 Google News 端点')
     def test_fallback_rescues_source_when_all_endpoints_fail(self):
         base = self._serve()
-        src = dict(rf.CATALOG_BY_KEY['WSJ_ECON'])
+        src = self._dead_source()
         env = {'DEEPSEEK_API_KEY': 'sk-test', 'RSSHUB_BASE': f'{base}/down'}
         with mock.patch.dict(os.environ, env),                 mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
             st = {'failed_bases': [], 'tripped': False, 'rescued': 0,
@@ -767,7 +795,7 @@ class TestDeepSeekSearchFallback(unittest.TestCase):
 
     def test_no_key_keeps_the_honest_failure(self):
         base = self._serve()
-        src = dict(rf.CATALOG_BY_KEY['WSJ_ECON'])
+        src = self._dead_source()
         with mock.patch.dict(os.environ, {'RSSHUB_BASE': f'{base}/down'}, clear=False):
             os.environ.pop('DEEPSEEK_API_KEY', None)
             with self.assertRaises(RuntimeError):
@@ -776,7 +804,7 @@ class TestDeepSeekSearchFallback(unittest.TestCase):
 
     def test_budget_exhaustion_skips_the_call(self):
         base = self._serve()
-        src = dict(rf.CATALOG_BY_KEY['WSJ_ECON'])
+        src = self._dead_source()
         env = {'DEEPSEEK_API_KEY': 'sk-test', 'RSSHUB_BASE': f'{base}/down'}
         with mock.patch.dict(os.environ, env),                 mock.patch.object(rf, 'DEEPSEEK_SEARCH_URL', f'{base}/v1/tools/search'):
             with self.assertRaises(RuntimeError) as ctx:

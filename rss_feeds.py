@@ -144,7 +144,7 @@ CATALOG = [
      'verified': 'native',
      'note': '英国《金融时报》官方 RSS 首页源（含全球经济/市场要闻）；付费墙文章只给摘要。'},
     {'id': 3, 'key': 'WSJ_ECON', 'name': 'WSJ 经济板块', 'group': 'macro', 'lang': 'en',
-     'query': 'economy markets',
+     'deepseek_query': 'economy markets',
      'deepseek_fallback': True,
      'site': 'https://www.wsj.com/news/economy',
      'endpoints': [_rsshub('/wsj/en-us/economy'), _rsshub('/wsj/zh-cn/economy')],
@@ -192,7 +192,7 @@ CATALOG = [
 
     # ---------------- 二、美股、科技创新与公司财报（11-20） ----------------
     {'id': 11, 'key': 'WSJ_BIZ', 'name': 'WSJ 全美商业', 'group': 'us', 'lang': 'en',
-     'query': 'business companies',
+     'deepseek_query': 'business companies',
      'deepseek_fallback': True,
      'site': 'https://www.wsj.com/news/business',
      'endpoints': [_rsshub('/wsj/en-us/business'), _rsshub('/wsj/zh-cn/business')],
@@ -215,7 +215,7 @@ CATALOG = [
      'verified': 'rsshub_doc',
      'note': 'RSSHub /barronschina/:id（默认快讯栏目；原版 barrons.com 无公开 RSS）。'},
     {'id': 15, 'key': 'SEEKINGALPHA', 'name': 'Seeking Alpha 美股选股', 'group': 'us', 'lang': 'en',
-     'query': 'market news stocks',
+     'deepseek_query': 'market news stocks',
      'deepseek_fallback': True,
      'site': 'https://seekingalpha.com/market-news',
      'endpoints': ['https://seekingalpha.com/market-news.rss',
@@ -261,14 +261,14 @@ CATALOG = [
      'verified': 'rsshub_doc',
      'note': 'RSSHub /cls/telegraph（另有 watch/announcement/red/hk_us 等分类）。'},
     {'id': 23, 'key': 'XUEQIU', 'name': '雪球今日话题', 'group': 'cn', 'lang': 'zh-CN',
-     'query': '今日话题 港股 A股',
+     'deepseek_query': '今日话题 港股 A股',
      'deepseek_fallback': True,
      'site': 'https://xueqiu.com/today',
      'endpoints': [_rsshub('/xueqiu/today'), _rsshub('/xueqiu/hots')],
      'verified': 'rsshub_doc',
      'note': 'RSSHub /xueqiu/today（路由标记 antiCrawler，需实例可拿 Cookie；失败如实标未获取）。'},
     {'id': 24, 'key': 'SINA_FIN', 'name': '新浪财经聚合', 'group': 'cn', 'lang': 'zh-CN',
-     'query': '财经 滚动新闻',
+     'deepseek_query': '财经 滚动新闻',
      'deepseek_fallback': True,
      'site': 'https://finance.sina.com.cn/',
      'endpoints': [_rsshub('/sina/finance/rollnews'), _rsshub('/sina/finance/china')],
@@ -327,7 +327,7 @@ CATALOG = [
      'verified': 'native',
      'note': 'Investing.com 官方分类 RSS（news_25 经济指标；商品/外汇各有对应编号）。'},
     {'id': 33, 'key': 'KITCO', 'name': 'Kitco 黄金', 'group': 'cmdty', 'lang': 'en',
-     'query': 'gold silver news',
+     'deepseek_query': 'gold silver news',
      'deepseek_fallback': True,
      'site': 'https://www.kitco.com/news/',
      'endpoints': ['https://www.kitco.com/rss/KitcoNews.xml', 'https://www.kitco.com/rss/'],
@@ -339,14 +339,14 @@ CATALOG = [
      'verified': 'native',
      'note': 'Oilprice.com 官方主源（油价、OPEC 政策与地缘风险）。'},
     {'id': 35, 'key': 'FXSTREET', 'name': 'FXStreet 外汇', 'group': 'cmdty', 'lang': 'en',
-     'query': 'forex news analysis',
+     'deepseek_query': 'forex news analysis',
      'deepseek_fallback': True,
      'site': 'https://www.fxstreet.com/news',
      'endpoints': ['https://www.fxstreet.com/rss/news'],
      'verified': 'native',
      'note': 'FXStreet 官方新闻 RSS（主要货币对与技术分析）。'},
     {'id': 36, 'key': 'DAILYFX', 'name': 'DailyFX', 'group': 'cmdty', 'lang': 'en',
-     'query': 'forex market news',
+     'deepseek_query': 'forex market news',
      'deepseek_fallback': True,
      'site': 'https://www.dailyfx.com/',
      'endpoints': ['https://www.dailyfx.com/feeds/all'],
@@ -358,7 +358,7 @@ CATALOG = [
      'verified': 'rsshub_doc',
      'note': 'RSSHub /jin10/:important?（留空=全部快讯，传任意值只看重要）。'},
     {'id': 38, 'key': 'FX678', 'name': '汇通网', 'group': 'cmdty', 'lang': 'zh-CN',
-     'query': '快讯 外汇 商品',
+     'deepseek_query': '快讯 外汇 商品',
      'deepseek_fallback': True,
      'site': 'https://www.fx678.com/',
      'endpoints': [_rsshub('/fx678/kx')],
@@ -417,7 +417,7 @@ CATALOG = [
      'verified': 'native',
      'note': 'Blogspot 官方 Atom/RSS 出口（纽约大学估值教授博客）。'},
     {'id': 48, 'key': 'QUANTSTART', 'name': 'QuantStart（量化交易）', 'group': 'masters',
-     'query': 'quantitative trading algorithms',
+     'deepseek_query': 'quantitative trading algorithms',
      'deepseek_fallback': True,
      'lang': 'en', 'site': 'https://www.quantstart.com/',
      'endpoints': ['https://www.quantstart.com/feed/', 'https://www.quantstart.com/articles/feed/'],
@@ -573,7 +573,7 @@ def build_deepseek_query(src, now=None):
     parts = []
     if site:
         parts.append(f'site:{site}')
-    topic = str(src.get('query') or '').strip()
+    topic = str(src.get('deepseek_query') or '').strip()
     if topic:
         parts.append(topic)
     lang = str(src.get('lang') or '').lower()
