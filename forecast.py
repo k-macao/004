@@ -66,7 +66,6 @@ try:
 except Exception:                                # pragma: no cover - 词库缺失时宏观项降级为 0
     nlp = None
 
-import quant_pair                                # σ / 标的名与配对交易共用同一份策略参数
 import rss_feeds as rss_mod                      # 第 5 路数据源：49 源 RSS 的可用率
 from panorama import COVERAGE_ROUTES, _coverage_of as panorama_coverage  # 覆盖度同一口径
 
@@ -76,9 +75,21 @@ DASH = '\u2014'
 # ---------------------------------------------------------------------------
 # 模型参数（策略参数，不是任何一天的行情事实）
 # ---------------------------------------------------------------------------
-# 典型日波动 σ：直接复用配对交易的同一张表，避免两套口径漂移
-SIGMA = quant_pair.DAILY_SIGMA
-NAMES = quant_pair.NAMES
+# 典型日波动 σ（百分点）与标的中文名：本模块自有（原配对交易模块已删除）。
+# 这是**策略参数**（按资产类别给的波动量级），不是任何一天的行情事实。
+SIGMA = {
+    'HSI': 1.20, 'HSTECH': 1.80, 'HSCE': 1.30,
+    'SPX': 0.90, 'NDQ': 1.20, 'DJI': 0.80,
+    'GOLD': 0.90, 'WTI': 1.80, 'BRENT': 1.60,
+    'USDCNH': 0.25, 'USDCNY': 0.20,
+}
+
+NAMES = {
+    'HSI': '恒生指数', 'HSTECH': '恒生科技指数', 'HSCE': '恒生中国企业指数',
+    'SPX': '标普 500', 'NDQ': '纳斯达克', 'DJI': '道琼斯',
+    'GOLD': '现货黄金', 'WTI': 'WTI 原油', 'BRENT': '布伦特原油',
+    'USDCNH': '美元/离岸人民币', 'USDCNY': '美元/在岸人民币',
+}
 
 # 预测顺序：港股（本报告落点）→ 美股 → 商品 → 汇率
 ORDER = ['HSI', 'HSTECH', 'HSCE', 'SPX', 'NDQ', 'DJI', 'GOLD', 'WTI', 'BRENT', 'USDCNH', 'USDCNY']
@@ -489,11 +500,9 @@ def predict(market=None, macro=None, sentiment=None, community=None, rss=None,
 
     if not live_quotes:
         out['unavailable_reason'] = 'no_quotes'
-        out['ai_quant'] = quant_pair.recommend('AI 预测 行情未获取', quotes, hint='hk_tape')
         return out
     if not ok_seq:
         out['unavailable_reason'] = 'bad_sequence'
-        out['ai_quant'] = quant_pair.recommend('AI 预测 时序不成立', quotes, hint='hk_tape')
         return out
 
     carry_z, carry_meta = global_carry(quotes)
@@ -516,7 +525,6 @@ def predict(market=None, macro=None, sentiment=None, community=None, rss=None,
     out['available'] = bool(forecasts)
     if not forecasts:
         out['unavailable_reason'] = 'no_symbols'
-        out['ai_quant'] = quant_pair.recommend('AI 预测 行情未获取', quotes, hint='hk_tape')
         return out
 
     by_key = {f['key']: f for f in forecasts}
@@ -561,8 +569,6 @@ def predict(market=None, macro=None, sentiment=None, community=None, rss=None,
     }
 
     hl = out['headline']
-    out['ai_quant'] = quant_pair.recommend(
-        f"AI 预测 {hl['name']} {hl['dir_word']} {label}", quotes, hint='hk_tape')
     return out
 
 
@@ -781,8 +787,6 @@ def render_web(data):
             f'<div style="font-size:12px;line-height:1.8;">{_esc(_unavailable_line(data))}'
             '恢复命令：<code>python3 market_data.py &amp;&amp; python3 forecast.py</code>。</div>',
             _review_web(data.get('review') or empty_review()),
-            quant_pair.render_web(data.get('ai_quant'),
-                                  note='预测缺席时，配对推荐只使用当次行情；行情也不全时不给方向。'),
         ])
 
     st = data['stance']
@@ -837,9 +841,6 @@ def render_web(data):
         parts.append('<div class="pub-meta" style="margin-top:8px;">数据缺口：'
                      + _esc('；'.join(data['data_gaps'])) + '（缺口项一律按 0 处理，不回填旧预测）</div>')
     parts.append(f'<div class="pub-meta" style="margin-top:6px;">{_esc(data["rule"])}</div>')
-    parts.append(quant_pair.render_web(
-        data.get('ai_quant'),
-        note='配对推荐独立于上方预测；两腿行情不全时不给方向。'))
     return '\n'.join(parts)
 
 
@@ -884,8 +885,8 @@ def _wechat_table(data, green):
 def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff', compact=False):
     """04 栏微信版 HTML（全内联样式，口径与网页版完全一致）。
 
-    compact=True 时收敛为「倾向 + 逐标的表 + 回看一行」，砍掉驱动拆解 / 三路信号 /
-    配对块 —— 微信单页有 10 万字符硬上限，推送侧按剩余预算选版本（见 tools/wechat_push.py）。
+    compact=True 时收敛为「倾向 + 逐标的表 + 回看一行」，砍掉驱动拆解 / 三路信号 ——
+    微信单页有 10 万字符硬上限，推送侧按剩余预算选版本（见 tools/wechat_push.py）。
     完整拆解在网页 04 节，两版数字同源，不会出现口径漂移。
     """
     def sub(t):
@@ -905,8 +906,6 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff', compact=
         out.append(sub('◆ 今日未获取 —— 本栏不预测') + _esc(_unavailable_line(data)))
         if not compact:
             out.append(_review_wechat(data.get('review') or empty_review(), green))
-            out.append(quant_pair.render_wechat(
-                data.get('ai_quant'), note='预测缺席时，配对推荐只使用当次行情。'))
         out.append('</div>')
         return ''.join(out)
 
@@ -946,8 +945,6 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff', compact=
     if data['data_gaps']:
         out.append(meta('数据缺口：' + _esc('；'.join(data['data_gaps'])) + '（按 0 处理，不回填旧预测）'))
     out.append(meta(_esc(data['rule'])))
-    out.append(quant_pair.render_wechat(
-        data.get('ai_quant'), note='配对推荐独立于上方预测；两腿行情不全时不给方向。'))
     out.append('</div>')
     return ''.join(out)
 

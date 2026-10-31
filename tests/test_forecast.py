@@ -479,39 +479,6 @@ class TestForecastRendering(unittest.TestCase):
         self.assertLess(len(html), wp.CONTENT_SAFE_LIMIT,
                         '加了 04 栏之后仍须留在推送门禁之内，否则每日推送会被整条拦下')
 
-    def test_repeated_pair_rule_is_printed_once_not_per_block(self):
-        """腾预算的手段之一：配对口径整篇只印一次，不在 20 多个 AI 量化块里重复。"""
-        import quant_pair
-        # 本测试要数块，因此明确给当日行情：行情不足时配对段一律整段隐藏（另见 test_quant_pair）。
-        env = {'FORECAST_HISTORY': self.hist,
-               'MARKET_DATA': self._write('market_data.json', BULL)}
-        saved = {k: os.environ.get(k) for k in env}
-        os.environ.update(env)
-        try:
-            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-                html, _ts, _tsf = wp.build_single_wechat_html(now=NOW)
-        finally:
-            for k, v in saved.items():
-                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-        self.assertEqual(html.count(quant_pair.OUTLOOK_NOTE), 1,
-                         '配对口径在微信单页里应当只出现一次（文末），其余块共用同一口径')
-        self.assertEqual(html.count(quant_pair.RULE.split('|z|', 1)[0]), 1,
-                         '规则正文同样只在文末印一次')
-        self.assertGreaterEqual(html.count('AI 量化'), 14, '规则去重不得连带把 AI 量化块删掉')
-        # 网页版同一口径：卡片不逐块重复，整页由页脚 rule_note_web() 印一次
-        head = quant_pair.RULE.split('|z|', 1)[0]
-        rec = quant_pair.recommend('恒生科技 恒指',
-                                   {'HSTECH': {'pct': 1.4}, 'NDQ': {'pct': 0.2}})
-        self.assertNotIn(head, quant_pair.render_web(rec), '网页卡片不再逐块铺规则')
-        self.assertIn(head, quant_pair.rule_note_web(), '口径挪到页脚统一给一次')
-        self.assertIn(head, quant_pair.render_web(rec, show_rule=True))
-        self.assertNotIn(head, quant_pair.render_wechat(rec))
-        self.assertIn(head, quant_pair.render_wechat(rec, show_rule=True))
-        # 行情不足（两腿不齐）时整段隐藏，规则说明也不跟着漏出来
-        no_data = quant_pair.recommend('恒生科技 恒指', {'HSTECH': {'pct': 1.4}})
-        self.assertEqual(quant_pair.render_web(no_data), '')
-        self.assertEqual(quant_pair.render_wechat(no_data, show_rule=True), '')
-
     def test_trimming_left_room_for_a_real_forecast_block(self):
         """压缩既有栏目的目的：微信 04 栏要拿到逐标的预测，而不是退成一行摘要。"""
         # 本测试期待真实预测，因此明确提供当日行情；无行情生产路径仍须降级为「今日未获取」。

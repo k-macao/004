@@ -42,9 +42,6 @@ class TestChartGeometry(unittest.TestCase):
         self.assertNotIn('%', plain)
         for bad in STALE:
             self.assertNotIn(bad, html)
-        pair_html, pair_plain = char_charts.pairs_chart({})
-        self.assertIn('不编柱', pair_html)
-        self.assertNotIn('z=', pair_plain)
 
     def test_live_quotes_are_labeled_on_the_bar(self):
         html, plain = char_charts.quotes_chart({
@@ -111,8 +108,8 @@ class TestPushFigures(unittest.TestCase):
             self.assertNotIn(bad, html)
 
     def test_quote_figure_uses_the_push_snapshot(self):
-        # 配对图只画「两腿都在」的组合，且组合必须跨域（见 quant_pair.DOMAIN）：
-        # 因此快照里同时给出港股与美股两条腿，否则本图按「不编柱」处理。
+        # 快照里同时给出港股、美股与商品三类标的，覆盖多序列的字符柱。
+        # 配对交易（含配对 z 图）已下线，此处不再需要跨域两腿。
         payload = {'fetch_date': '2026-09-24', 'quotes': {
             'HSI': {'name': '恒生指数', 'pct': 1.2, 'as_of': '2026-09-24'},
             'HSTECH': {'name': '恒生科技指数', 'pct': -0.8, 'as_of': '2026-09-24'},
@@ -129,7 +126,7 @@ class TestPushFigures(unittest.TestCase):
         self.assertIn('+1.20%', html)
         self.assertIn('-0.80%', html)
         self.assertIn('diverging bar', html)
-        self.assertIn('z=', html)
+        self.assertNotIn('z=', html, '配对交易已下线，推送里不应再出现配对 z 分数')
         self.assertLess(len(html), 95000)
         for bad in STALE:
             self.assertNotIn(bad, html)

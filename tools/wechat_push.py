@@ -65,7 +65,6 @@ import panorama                                           # noqa: E402  01 栏�
 import macro_data as macro_data_mod                       # noqa: E402  02 栏快讯可用性判定（兜底口径单一事实源）
 import community_data as community_mod                    # noqa: E402  49 大社区兜底数据集（缺 community_data.json 时同构生成）
 import community_snapshot as community_snapshot_mod        # noqa: E402  四小时快照时效
-import quant_pair                                         # noqa: E402  每条内容后的 AI 量化配对
 import char_charts                                        # noqa: E402  推送字符配图（matplotlib 图种的字符版）
 import forecast as forecast_mod                           # noqa: E402  04 栏「AI 预测 · 未来函数」推理引擎
 import rss_feeds as rss_mod                               # noqa: E402  05 栏「49 大财经 RSS 情报源」目录/抓取/兜底
@@ -353,14 +352,6 @@ def community_card(c, level='full', quotes=None):
     signal = {'bull': WECHAT_CYAN, 'bear': WECHAT_DANGER,
               'neutral': WECHAT_VIOLET, 'mixed': WECHAT_NEON,
               'unavailable': '#7f8ea8'}.get(vclass, '#7f8ea8')
-    if is_avail:
-        rec = quant_pair.recommend(f'{raw_name} {ctype} {raw_quote} {raw_verdict}', quotes or {}, hint=c.get('key'))
-        ai_compact = quant_pair.render_wechat(rec, compact=True)
-    else:
-        rec = quant_pair.recommend(f'{raw_name} {ctype}', quotes or {}, hint=c.get('key'))
-        ai_compact = quant_pair.render_wechat(
-            rec, compact=True, note='社区热评未获取，配对仅依当次实时行情计算')
-
     chip = (f'<span style="background:{signal};color:#07101b;font-size:10px;font-weight:700;'
             f'padding:2px 6px;margin-left:4px;border-radius:2px">{label}</span>')
     head = (f'<div style="color:{WECHAT_TEXT};font-weight:700;font-size:13px">{icon} {no}. {name} '
@@ -371,9 +362,7 @@ def community_card(c, level='full', quotes=None):
                    'demo': '演示样本'}.get(c.get('content_kind'), '公开页摘录（未核验为评论）')
 
     if level == 'roster':
-        pair = (f'{rec.get("domain_pair", "")}｜{rec.get("pair_label", "")}｜{rec.get("stance", "")}')
-        pair_html = ('' if quant_pair.is_hidden(rec)
-                     else f' · <span style="color:#7d7d7d">跨域配对：{pair}</span>')
+        pair_html = ''
         clip_limit = 140 if is_avail else 36
         prefix = quote_label + '：' if is_avail else ''
         return (
@@ -413,7 +402,7 @@ def community_card(c, level='full', quotes=None):
 
     quant_html = quant_html_inline(quant) if level == 'full' else (
         quant_metrics_line(quant) if level in ('standard', 'compact_plus') else '')
-    ai_html = ai_compact if level in ('full', 'standard') else quant_pair.render_wechat_mini(rec)
+    ai_html = ''
     return (
         f'<div style="background:{WECHAT_PANEL};color:{WECHAT_TEXT_SOFT};border:1px solid {WECHAT_BORDER};'
         f'border-left:3px solid {signal};border-radius:4px;padding:12px 14px;margin:10px 0;font-size:12px">'
@@ -484,12 +473,12 @@ def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0)
     """把 49 源社区塞进微信单页的剩余预算里（与 04 栏同一套「按预算收敛」思路）。
 
     社区从 14 源扩到 49 源之后，逐条完整卡片会直接顶穿 100K 硬上限，
-    因此 03 栏按剩余预算逐级收敛（每一档都保留全部 49 源、都带跨域配对与抓取标记）：
+    因此 03 栏按剩余预算逐级收敛（每一档都保留全部 49 源、都带抓取标记）：
 
-        完整版（热评 + 研判 + 四行量化指标 + 完整 AI 量化）
-          → 标准版（热评 + 研判 + 一行量化指标 + 精简 AI 量化）
-            → 紧凑版（热评截断 + 精简 AI 量化）
-              → 名录版（一行一名：跨域配对 + 推荐 + 抓取标记）
+        完整版（热评 + 研判 + 四行量化指标）
+          → 标准版（热评 + 研判 + 一行量化指标）
+            → 紧凑版（热评截断 + 一行量化指标）
+              → 名录版（一行一名：标签 + 推荐 + 抓取标记）
 
     预算里先给 04 栏留出**最小可用**的一版（一行摘要 + 余量），否则 49 源会把预测栏挤没；
     真正发哪一版预测由随后的 fit_forecast_block() 按实际剩余预算决定。
@@ -517,12 +506,12 @@ def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0)
             if len(block) <= budget:
                 if level != 'full':
                     print(f'  ✂️ 微信推送 03 栏：{len(communities)} 源社区按剩余预算 '
-                          f'{budget} 字符采用「{label}」（每一版都含全部源与跨域配对，仅详略不同；'
+                          f'{budget} 字符采用「{label}」（每一版都含全部源，仅详略不同；'
                           f'04 栏预留 {reserve} 字符）')
                 return html.replace(COMMUNITY_SLOT, block, 1)
     block = community_section(communities, 'roster', quotes=quotes)
     print(f'  ⚠️ 微信推送 03 栏：预算不足以放下完整名录，仍以「名录版」发出 '
-          f'{len(communities)} 源（每源保留跨域配对与抓取标记）', file=sys.stderr)
+          f'{len(communities)} 源（每源保留抓取标记）', file=sys.stderr)
     return html.replace(COMMUNITY_SLOT, block, 1)
 
 
@@ -570,7 +559,6 @@ def build_single_wechat_html(now=None):
     now = now or datetime.now(timezone.utc)
     ts = now.strftime('%Y-%m-%d %H:%M UTC')
     ts_full = now.strftime('%Y-%m-%d %H:%M:%S UTC')
-    quant_pair.reset_hidden_render_count()      # 行情不足的隐藏处数：本次构建单独计数
 
     GR = WECHAT_CYAN
     NEON = WECHAT_NEON
@@ -762,10 +750,8 @@ def build_single_wechat_html(now=None):
             return box('<strong style="color:#edf2ff;">AI 多空总览统计</strong> 舆情因子节点待生成：'
                        '在境内出口执行 <strong>python3 sentiment_factors.py --live</strong>'
                        '（或 <strong>--mock</strong> 离线回放）后重建，'
-                       '即可注入「标的匹配 + 因子读数」（对外不显示数据来源）。'
-                       + quant_pair.render_wechat(quant_pair.recommend(
-                           '舆情因子未获取', _quotes, hint='sentiment'),
-                           note='因子节点未生成，配对只使用当次行情。')) + char_charts.sentiment_chart(_sd)[0]
+                       '即可注入「标的匹配 + 因子读数」（对外不显示数据来源）。') \
+                       + char_charts.sentiment_chart(_sd)[0]
         m = _sd.get('market') or {}
         mm = _sd.get('matches') or {}
         anon = not smatch.show_source()
@@ -792,9 +778,6 @@ def build_single_wechat_html(now=None):
               f"<br/><span style=\"color:#9aa6c3;font-size:10px;\">数据日期 {_sd.get('fetch_date', '—')} · "
               + smatch.status_line(_sd)
               + f" · {'离线回放（fixtures）' if _sd.get('mode') == 'mock' else '联网实测'}</span>"
-              + quant_pair.render_wechat(quant_pair.recommend(
-                  f"市场舆情 {m.get('label') or ''} 净情感 {m.get('net_senti')}",
-                  _quotes, hint='sentiment'))
               + '</div>')
 
         def row(icon, title, body):
@@ -804,29 +787,21 @@ def build_single_wechat_html(now=None):
 
         for t in (mm.get('targets') or [])[:8]:
             top = (t.get('top_titles') or [{}])[0]
-            rec = quant_pair.recommend(
-                f"{t.get('name', '')} {top.get('title') or ''}", _quotes, hint=t.get('key'))
             rows.append(row('🎯', f"{t.get('name', '')}　命中 {t.get('hits', 0)} 条",
                             f"净情感 {t.get('net_senti')}　负面 {t.get('neg_share')}%"
                             f"　风险 {t.get('risk_score')}　温度 {t.get('sent_temp')}·{t.get('label', '')}"
                             + (f"<br/><span style=\"color:#9aa6c3;font-size:10.5px;\">代表新闻："
-                               f"{clean(top.get('title'), 46)}</span>" if top.get('title') else '')
-                            + quant_pair.render_wechat(rec, compact=True)))
+                               f"{clean(top.get('title'), 46)}</span>" if top.get('title') else '')))
         for st in (_sd.get('stocks') or [])[:5]:
-            rec = quant_pair.recommend(
-                f"{st.get('name') or ''} {st.get('symbol') or ''}", _quotes, hint=st.get('symbol'))
             rows.append(row(st.get('symbol', ''),
                             f"{st.get('name') or st.get('symbol')}",
                             f"关注指数 {'—' if st.get('heat') is None else format(float(st['heat']), ',.0f')}"
                             f"　热度Z {st.get('heat_z')}　净情感 {st.get('net_senti')}"
-                            f"　新闻 {st.get('news_count')} 条　风险 {st.get('risk_score')}"
-                            + quant_pair.render_wechat(rec, compact=True)))
+                            f"　新闻 {st.get('news_count')} 条　风险 {st.get('risk_score')}"))
         for e in (m.get('events') or [])[:3]:
-            rec = quant_pair.recommend(e.get('title') or '', _quotes, hint='sentiment')
             rows.append(row('⚠️', '风险事件',
                             f"{clean(e.get('title'), 60)}　命中 {'、'.join(e.get('terms') or [])}"
-                            f"（{e.get('risk_score')} 分）"
-                            + quant_pair.render_wechat(rec, compact=True)))
+                            f"（{e.get('risk_score')} 分）"))
         ev = _sd.get('api_eval') or {}
         if ev.get('ranking') and not show_api_eval():
             # 按要求对外隐藏：微信推送不再展示平台接入评测（9 阶段实测）评分方框，
@@ -921,9 +896,7 @@ def build_single_wechat_html(now=None):
                        f'（{avail["reason"]}）</span>' if avail.get('detail') else '')
                     + '<br/><br/>' +
                     sub('◆ 港股市场 — 当次行情口径') + hsi_brief() + '<br/><br/>' + macro_live_quotes()
-                    + quant_pair.render_wechat(quant_pair.recommend(
-                        '宏观快讯未获取 港股行情', _quotes, hint='hk_tape'),
-                        note='快讯缺失，配对只使用当次行情；行情也不全时不给方向。')) + char_charts.quotes_chart(_quotes)[0] + char_charts.pairs_chart(_quotes)[0]
+                    + char_charts.quotes_chart(_quotes)[0])
 
         parts = []
         empty_labels = []
@@ -939,9 +912,7 @@ def build_single_wechat_html(now=None):
                 sn = (it.get('snippet') or '').strip()
                 rows.append('<br/>· <strong style="color:#4fe5ff;">[' + md_cn(it.get('published_date')) + ']</strong> '
                             + ttl
-                            + (('　<span style="color:#9aa6c3;font-size:10.5px;">' + sn[:68] + '</span>') if sn else '')
-                            + quant_pair.render_wechat(quant_pair.recommend(
-                                f'{label} {ttl} {sn}', _quotes, hint=ckey), compact=True))
+                            + (('　<span style="color:#9aa6c3;font-size:10.5px;">' + sn[:68] + '</span>') if sn else ''))
             parts.append(sub('◆ ' + label) + ''.join(rows) + '<br/><br/>')
 
         note = ('<span style="color:#9aa6c3;font-size:10px;">'
@@ -965,7 +936,7 @@ def build_single_wechat_html(now=None):
                     + '、'.join(empty_labels) + '（按时效留空，不回填旧文）</span>')
         return (sub('◆ 宏观快讯 — 每次构建现抓 · 发布日期见每条前缀') + note + '<br/><br/>'
                 + sub('◆ 港股市场 — 当次行情口径') + hsi_brief() + '<br/><br/>'
-                + ''.join(parts) + macro_live_quotes() + warn + char_charts.quotes_chart(_quotes)[0] + char_charts.pairs_chart(_quotes)[0] + char_charts.macro_counts_chart(_xd)[0])
+                + ''.join(parts) + macro_live_quotes() + warn + char_charts.quotes_chart(_quotes)[0] + char_charts.macro_counts_chart(_xd)[0])
 
     def verdict_block():
         """07 结论：逐条挂当次快讯/行情与真实社区抓取计数，不再写死历史事实或掺入未获取源。"""
@@ -988,9 +959,6 @@ def build_single_wechat_html(now=None):
             '<span style="color:#9aa6c3;font-size:10px;">结论逐条对应上方当次快讯、实时行情快照与实抓社区片段，'
             '历史点位/均线读数不写入模板；如需回看前几日版本，以 GitHub Pages 历史构建为准。</span>',
         ]
-        rows.append(quant_pair.render_wechat(quant_pair.recommend(
-            hsi_brief() + ' ' + macro_top('commodities') + ' ' + macro_top('fed'),
-            _quotes, hint='hk_tape')))
         return ''.join(rows)
 
     # ---------- 03 首段：多空统计与主线说明严格按当次实抓源推导（未获取源不掺入多空分母） ----------
@@ -1091,12 +1059,12 @@ def build_single_wechat_html(now=None):
   {h('02 / 全球经济与财经动态 (Global Macro & HK Battlefield · 快讯每次构建现抓)')}
   {box(macro_block())}
 
-  {h(f'03 / 社区论坛热评与公开摘录 ({len(communities)} 大平台 · 严格真实口径 · 含跨域配对)')}
+  {h(f'03 / 社区论坛热评与公开摘录 ({len(communities)} 大平台 · 严格真实口径)')}
   {box(
     '<strong style="color:#edf2ff;">盘面与抓取口径</strong>：' + community_thread_line + '<br/>' +
     f'<span style="color:#9aa6c3;font-size:10px;">社区抓取日期 {_community_fetch_date} · {community_fetch_status()} · {len(communities)} 源动态抓取已上线（仅展示真实公开摘录，失败源诚实标注未获取）</span><br/>'
     '<span style="color:#9aa6c3;font-size:10px;">指标口径：情感 = 实抓片段金融词库净值（零哈希伪随机）· 事件 = 片段关键词实配 · 相关性 = 核心词与财经主题词命中密度 · 新颖度 = 批内去重独立度（无首发时间链时不伪造首发/转载）；未获取源不生成指标。</span>'
-    + quant_pair.render_wechat(quant_pair.recommend(community_thread_line, _quotes, hint='hk_tape')) + fig_community)}
+    + fig_community)}
 
   {COMMUNITY_SLOT}
 
@@ -1120,7 +1088,6 @@ def build_single_wechat_html(now=None):
     <strong style="color:{NEON};font-size:13px;">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</strong><br/>
     全网境内外为你寻找蛛丝马迹 — 提供全景视野分析，由多模型协同推理决策。<br/>
     <span style="color:#9aa6c3;font-size:10px;">生成时间：{ts_full} · 社区读取四小时采集快照并重新分析（采集时间见 03 栏）· 宏观快讯时效：{macro_freshness_note} · 字符配图与正文使用同一份读取数据 · 100K 完整单页版</span><br/>
-    {quant_pair.rule_note_wechat()}
   </div>
 
 </div>'''
@@ -1131,10 +1098,6 @@ def build_single_wechat_html(now=None):
                                rss_min=_rss_min)
     html = fit_forecast_block(html, _fc, rss_min=_rss_min)
     html = fit_rss_block(html, _rss)
-    _hidden_n = quant_pair.hidden_render_count()
-    if _hidden_n:
-        print(f'  🔒 行情不足：{_hidden_n} 处 AI 量化配对已整段隐藏（两腿涨跌幅不齐，'
-              '不渲染「数据不足」，也不编方向）')
 
     # 严格真实口径：不再使用正则强行把正文中的旧日期替换为今天，保留真实抓取核验日期供门禁校验
     return html.strip(), ts, ts_full

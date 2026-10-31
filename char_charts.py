@@ -10,15 +10,13 @@ Figure 解剖：每张图有标题、轴刻度、柱端数值（bar_label）。�
   Axes.barh / ordered bar     类别比较，按数值从大到小
   diverging bar               有正负的比较，零线居中（画廊常见配图）
   bar stacked                 构成：一条柱按占比堆叠，配图例
-  axvline 阈值                决策线写在图注里（配对 |z|=1，做多 ±10 / +25）
+  axvline 阈值                决策线写在图注里（做多 ±10 / +25）
 
 柱身用方块字形系列 █ ▓ ▒ ░（实心→深→中→浅，按灰度区分序列），情绪序列用 ▁ ▃ ▄ █ 四档高度。
 缺数据只留「不编柱」，不补 0、不回填历史点位。纯标准库。
 """
 import html
 import unicodedata
-
-import quant_pair
 
 BAR_W = 16
 HALF = 8
@@ -277,34 +275,6 @@ def long_short_chart(verdict):
     return _rows_html(title, rows, note), _plain(title, rows, note)
 
 
-def pairs_chart(quotes):
-    """每条配对策略的 z。只画两腿涨跌幅都在的组合。"""
-    title = '配对 z diverging bar（|z|=1 为进场）'
-    raw = quotes or {}
-    if isinstance(raw, dict) and isinstance(raw.get('quotes'), dict):
-        raw = raw['quotes']
-    rows = []
-    zs = []
-    pending = []
-    for s in quant_pair.STRATEGIES:
-        rec = quant_pair.recommend('', raw, hint=s['id'])
-        if rec.get('z') is None:
-            continue
-        pending.append(rec)
-        zs.append(abs(rec['z']))
-    if not pending:
-        note = '两腿涨跌幅不齐时不计算 z，本图不编柱。'
-        return _rows_html(title, [], note), _plain(title, [], note)
-    limit = max(1.8, max(zs))
-    for rec in sorted(pending, key=lambda r: -abs(r['z'])):
-        rows.append((rec['strategy_name'].replace('配对', ''),
-                     diverging_bar(rec['z'], limit),
-                     f'z={_fmt(rec["z"])} {rec.get("stance") or ""}'.strip()))
-    note = (f'满刻度 ±{limit:.2f}。|z|<1 观望，|z|≥1 进场，|z|≥1.8 标准仓。'
-            'z 与正文里的 AI 量化同一公式，不另写口径。')
-    return _rows_html(title, rows, note), _plain(title, rows, note)
-
-
 def sentiment_chart(sd):
     """舆情温度柱、多空构成、标的净情感发散柱。不读取来源字段。"""
     title = '舆情因子 bar / stacked / diverging'
@@ -464,8 +434,6 @@ def _self_test():
     ok('开头多空轴保留零线与方向', '|' in plain_ls and '空头' in plain_ls and '多' in plain_ls and '-18.5' in plain_ls)
     html_ls, plain_ls = long_short_chart({})
     ok('开头缺合成分不编中性柱', '不把缺失数据画成中性 0' in plain_ls and FULL not in plain_ls)
-    html_p, plain_p = pairs_chart({})
-    ok('配对缺腿不编 z', '不编柱' in html_p and 'z=' not in plain_p)
     html_s, plain_s = sentiment_chart({})
     ok('舆情空图不写来源名', '不编柱' in html_s and '米筐' not in html_s and 'RQ_' not in html_s)
     html_f, plain_f = forecast_chart({})
