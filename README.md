@@ -378,6 +378,17 @@ CI 里用仓库变量 `vars.RSSHUB_BASE` / secret `RSSHUB_PROXY` 注入，可整
 - `DEEPSEEK_MAX_PER_RUN`（默认 20）：每轮最多调用几次，防失控刷钱（按 20 次算约 $0.015/轮）。
 - `DEEPSEEK_MIN_SCORE`（默认 0，即不过滤）：低于该 `rerank_score` 的结果直接丢弃（官方口径 ≥1.5 为高质量）。
 
+**两个检索词字段不能混用**（2026-10-31 事故）：
+
+- `query` 是**老的** `gnews` 检索词。`resolve_endpoints()` 见到它就会**追加一条真实的
+  `news.google.com` 端点**，这个源于是可能以 `kind="gnews"` 成功，DeepSeek 兜底根本不触发。
+- `deepseek_query` 才是 DeepSeek 兜底的主题词，**不产生任何端点**，只用来拼检索式。
+
+给标了 `deepseek_fallback` 的源写 `query` 会同时造成两件事：CI 有真出口时按 `gnews` 抓到东西
+（兜底形同不存在、页面标注失真），而单测在本机没出口时那条端点必然失败、兜底照常触发 ——
+就是「本地全绿、CI 红」。`TestDeepSeekSearchFallback.test_marked_sources_do_not_gain_a_gnews_endpoint`
+守住这条：标了兜底的源不得出现 `query`，也不得解析出 `news.google.com` 端点。
+
 **口径不变**：只在目录里标了 `deepseek_fallback` 的 **10 个坏死源**上启用；**不替代**已跑通的原生 RSS；
 检索回来的条目同样过 14 天时效窗口，`kind="deepseek"` 在页面上如实标注「DeepSeek 检索」，不冒充原生源。
 
