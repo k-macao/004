@@ -68,7 +68,9 @@ UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/126.0 Safari/537.36')
 
 MAX_AGE_DAYS_DEFAULT = 14        # 情报源里含专栏/研报，窗口比 02 快讯（7 天）宽一档
-LIMIT_PER_SOURCE_DEFAULT = 3     # 每个源最多留 3 条，49 源同页才不会把正文顶爆
+LIMIT_PER_SOURCE_DEFAULT = 10    # 每源最多留 10 条（49 源 × 10 = 上限 490 条）：
+#                                  # 05 节开头要按「每源 10 条」做 AI 解盘，正文逐条列全；
+#                                  # 微信 05 栏只取每源最新一条 + AI 人话，字符靠预算阶梯收敛。
 SNAPSHOT_MAX_AGE_DAYS = 1        # 快照新鲜度上限，与 macro_data 同一口径
 
 # RSSHub 实例：第三方公共服务，可用环境变量覆盖（逗号分隔，按顺序回退）
@@ -1266,6 +1268,15 @@ def text_report(data):
         lines.append(f'  ◆ RSSHub 通道 {state} · 实例 {rh.get("instances", 0)} 个 · '
                      f'换实例救回 {rh.get("rescued", 0)} 源'
                      + (' · 经代理出口' if rh.get('proxy') else ''))
+    an = analyze(data)
+    if an.get('available'):
+        lines.append(f'  🧠 AI 解盘（{an["engine"]} · 每源 {an["limit_per_source"]} 条）：'
+                     f'{an["headline"]}')
+        lines.append(f'     我的读法（{an["reading_label"]}）：{an["reading"]}')
+        for i, t in enumerate(an['themes'], 1):
+            lines.append(f'     主线 {i}｜{t["label"]}：{t["count"]} 条 / {len(t["sources"])} 源')
+    else:
+        lines.append(f'  🧠 AI 解盘：无可读条目，不生成解读（{an.get("reason")}）')
     for gkey, group in (data.get('groups') or {}).items():
         srcs = group.get('sources') or []
         ok = [s for s in srcs if s.get('ok')]
@@ -1370,6 +1381,587 @@ KIND_BADGE = {'native': '原生 RSS', 'rsshub': 'RSSHub', 'gnews': '检索载体
               'deepseek': 'DeepSeek 检索', 'fixture': '离线回放', '': '未获取'}
 
 
+# ---------------------------------------------------------------------------
+# AI 解盘层（「开头」的 AI 分析）
+# ---------------------------------------------------------------------------
+# 口径（与 05 节正文同一套反幻觉原则）：
+#   1. **只读当次抓到的标题 / 摘要**，不调用外部大模型、不联网、不补事实；
+#      「AI」在这里指本地规则引擎（词典归类 + 计数 + 固定句式），不是凭空生成；
+#   2. 所有数字都是**算出来的**（源数、条数、命中数），没有估算、没有编造；
+#   3. 只做「归类 + 说人话 + 盯什么」，**不给目标价、不荐股、不预测点位**；
+#   4. 抓不到就明说「不给解读」—— 不用旧标题、不硬凑观点。
+# 句式变化用「源编号 + 条数」取模，纯确定性，不用随机数（便于回归测试）。
+ANALYSIS_ENGINE = 'local-rules-v1'
+ANALYST_NAME = '章鱼哥'
+ANALYST_TAG = '投研大 V · 说人话版'
+ANALYSIS_MAX_THEMES = 3
+ANALYSIS_EVIDENCE_PER_THEME = 2
+
+ANALYSIS_ENGINE_NOTE = (
+    '引擎：本地规则引擎（离线）· 只读当次抓到的标题与摘要 → 归类 / 数情绪 / 写成人话；'
+    '不调用外部大模型、不新增任何事实、不给目标价、不荐股、不预测点位。'
+)
+
+ANALYSIS_DISCLAIMER = (
+    '以上是对当次标题措辞的归类与解读，不是投资建议；行情与点位判断请看 04 栏的模型输出'
+    '及其历史结算记录。缺口（未获取的源）已在正文逐源标注，不拿沉默当利好。'
+)
+
+# 12 条主线的词典（中英混排：中文按子串匹配，英文按词边界匹配，避免 ai 命中 said 这类误伤）
+THEMES = [
+    {
+        'key': 'rates', 'label': '利率与央行',
+        'short': '利率一动，所有估值都得重算。',
+        'playbook': ('利率是所有估值的分母。央行松口，分母变小的故事才讲得下去；'
+                     '央行嘴硬，再好的公司也得先扛折现。'),
+        'watch': '10 年期美债收益率往哪边走，以及下一次议息会的措辞有没有换词。',
+        'zh': ['美联储', '联储', '降息', '加息', '利率', '央行', '国债收益率', '收益率曲线',
+               '缩表', '议息', '点阵图', '流动性', '降准', '逆回购', '公开市场操作', '货币政策'],
+        'en': ['fed', 'fomc', 'rate cut', 'rate hike', 'rate path', 'interest rate',
+               'treasury yield', 'treasury yields', 'central bank', 'ecb', 'boj', 'boe',
+               'monetary policy', 'dot plot', 'balance sheet', 'liquidity'],
+    },
+    {
+        'key': 'inflation', 'label': '通胀与物价',
+        'short': '通胀不下来，降息就只能停在嘴上。',
+        'playbook': ('通胀是利率的妈。通胀不下来，降息就是嘴上说说；通胀真回落，'
+                     '利率才有松动的空间。'),
+        'watch': '核心 CPI 的环比，不看同比的整数关口 —— 同比有基数效应，环比才是当下的力。',
+        'zh': ['通胀', '物价', '核心通胀', '通胀预期', '通缩', '平减指数'],
+        'en': ['inflation', 'cpi', 'ppi', 'core inflation', 'inflation expectations',
+               'disinflation', 'deflation', 'consumer price', 'producer price'],
+    },
+    {
+        'key': 'growth', 'label': '增长与就业',
+        'short': '增长决定盈利，就业决定央行敢不敢动。',
+        'playbook': ('数据太强，利率不松；数据太弱，盈利打折。市场最怕的是'
+                     '「又弱又不降息」这种组合。'),
+        'watch': '非农和失业率的组合，以及初请失业金有没有连续抬升。',
+        'zh': ['非农', '就业', '失业率', '衰退', '软着陆', '硬着陆', '经济增长', '消费',
+               '零售销售', '制造业', '景气指数', '初请'],
+        'en': ['gdp', 'jobs report', 'payrolls', 'nonfarm', 'unemployment', 'recession',
+               'soft landing', 'hard landing', 'economic growth', 'retail sales', 'pmi',
+               'jobless claims', 'consumer confidence'],
+    },
+    {
+        'key': 'ai', 'label': 'AI 与算力',
+        'short': 'AI 的钱是资本开支的钱，capex 一停估值先杀一轮。',
+        'playbook': ('AI 这条线的钱不是概念钱，是资本开支钱。云厂商还在往上加 capex，'
+                     '算力链就有单；capex 一停，估值先杀一轮。'),
+        'watch': '云厂商的 capex 指引和 GPU 交期，而不是发布会上的 PPT。',
+        'zh': ['人工智能', '大模型', '算力', '芯片', '半导体', '英伟达', '台积电', '数据中心',
+               '服务器', '推理', '训练', '光模块', '存储'],
+        'en': ['ai', 'artificial intelligence', 'gpu', 'nvidia', 'tsmc', 'amd', 'chip',
+               'chips', 'semiconductor', 'datacenter', 'data center', 'capex',
+               'openai', 'anthropic', 'llm'],
+    },
+    {
+        'key': 'china', 'label': '中国政策与港股',
+        'short': '港股 A 股吃的是政策预期差，光喊话只能算反弹。',
+        'playbook': ('港股和 A 股吃的是政策预期差。有增量资金（南向 / 北向）+ 有落地政策，'
+                     '才叫行情；只有喊话，那叫反弹。'),
+        'watch': '南向资金净买入和成交额能不能连着放大 —— 一天的流入不算数。',
+        'zh': ['政策', '财政', '国常会', '证监会', '发改委', '港股', '恒指', '恒生', '南向',
+               '北向', '上证', '深成', '创业板', '科创板', '人民币', '特别国债', '地产',
+               '中央经济工作会议', '十五五'],
+        'en': ['hang seng', 'southbound', 'northbound', 'china policy', 'pboc',
+               'stimulus', 'a-share', 'a shares', 'hong kong stocks'],
+    },
+    {
+        'key': 'energy', 'label': '原油与能源',
+        'short': '油价抬 → 通胀预期抬 → 降息更难，这条链比油本身重要。',
+        'playbook': ('油价是通胀的上游。OPEC 减产，油价抬，通胀预期跟着抬，降息更难。'
+                     '这条链子比油价本身重要。'),
+        'watch': 'OPEC+ 的实际产量执行率和美国商业原油库存，不看喊话。',
+        'zh': ['原油', '油价', '布伦特', '石油', '天然气', '能源', '炼油', '减产', '页岩油'],
+        'en': ['oil', 'crude', 'brent', 'wti', 'opec', 'natural gas', 'energy', 'refinery',
+               'shale'],
+    },
+    {
+        'key': 'gold', 'label': '黄金与贵金属',
+        'short': '黄金吃的是实际利率下行 + 央行买盘 + 避险三股力。',
+        'playbook': ('黄金现在的定价是「实际利率 + 央行买盘 + 避险」三件事的合力。'
+                     '实际利率下行它涨得顺，地缘一紧它涨得急。'),
+        'watch': '实际利率（名义利率减通胀预期）和央行购金数据 —— 金店牌价不算信号。',
+        'zh': ['黄金', '金价', '白银', '贵金属', '央行购金', '金矿'],
+        'en': ['gold', 'silver', 'bullion', 'precious metal', 'precious metals'],
+    },
+    {
+        'key': 'fx', 'label': '美元与汇率',
+        'short': '美元是锚，它一走强，非美资产先挨打。',
+        'playbook': ('美元是全球风险资产的定价锚。美元走强，新兴市场先难受；'
+                     '美元走弱，非美资产才有流动性溢价。'),
+        'watch': '美元指数和离岸人民币是不是同向 —— 背离的时候别急着下结论。',
+        'zh': ['美元', '美指', '汇率', '日元', '欧元', '英镑', '离岸人民币', '在岸人民币',
+               '中间价', '外汇'],
+        'en': ['dollar', 'dxy', 'yen', 'euro', 'pound', 'fx', 'forex', 'currency',
+               'offshore yuan', 'yuan'],
+    },
+    {
+        'key': 'crypto', 'label': '加密与 Web3',
+        'short': '加密跟着美元流动性和监管口径走，两个都松才有弹性。',
+        'playbook': ('加密现在跟着两件事走：美元流动性和监管口径。流动性宽 + 监管松，'
+                     '它弹性最大；两件里有意见分歧，它就来回抽。'),
+        'watch': '现货 ETF 的净流入和稳定币总市值 —— 这两个比 K 线诚实。',
+        'zh': ['比特币', '以太坊', '加密', '稳定币', '区块链', '链上', '挖矿', '币安',
+               '数字资产', '代币'],
+        'en': ['bitcoin', 'btc', 'ethereum', 'eth', 'crypto', 'stablecoin', 'blockchain',
+               'defi', 'web3', 'token', 'binance', 'etf flows'],
+    },
+    {
+        'key': 'earnings', 'label': '财报与并购',
+        'short': '看下一季指引，不看这一季 EPS。',
+        'playbook': ('财报季看的不是这一季赚多少，是管理层对下一季的指引。'
+                     '指引上调才叫拐点，单季超预期经常只是会计口径的事。'),
+        'watch': '指引（guidance）和毛利率 —— 别只盯 EPS 那个数字。',
+        'zh': ['财报', '业绩', '营收', '净利', '指引', '超预期', '不及预期', '上调', '下调',
+               '并购', '收购', '私有化', '上市', '回购', '分红', '毛利率'],
+        'en': ['earnings', 'revenue', 'guidance', 'profit', 'merger', 'acquisition',
+               'buyback', 'ipo', 'dividend', 'gross margin', 'quarterly results'],
+    },
+    {
+        'key': 'risk', 'label': '监管、地缘与风险',
+        'short': '这类消息不可定价，先看会不会扩散。',
+        'playbook': ('这类消息的特点是不可定价。别急着算影响，先看它会不会扩散 —— '
+                     '一个点上的事是波动，一条线上的事才是趋势。'),
+        'watch': '有没有连锁反应（同类公司 / 同类国家被点名）；单条新闻先当噪音。',
+        'zh': ['关税', '制裁', '出口管制', '监管', '反垄断', '诉讼', '罚款', '地缘',
+               '冲突', '战争', '罢工', '违约', '债务上限', '停摆', '退市'],
+        'en': ['tariff', 'tariffs', 'sanction', 'sanctions', 'export control', 'regulation',
+               'antitrust', 'lawsuit', 'geopolitical', 'conflict', 'war', 'strike',
+               'default', 'shutdown'],
+    },
+    {
+        'key': 'flows', 'label': '资金与估值',
+        'short': '估值高不是卖出理由，资金开始撤才是。',
+        'playbook': ('资金面的规律是：情绪的顶部往往出现在「人人都在讲逻辑」的时候。'
+                     '估值高不是卖出理由，资金开始撤才是。'),
+        'watch': '成交额和资金流的方向是否一致 —— 价格新高但资金流出，要留个心眼。',
+        'zh': ['资金', '净流入', '净流出', '净买入', '净卖出', '估值', '泡沫', '拥挤',
+               '仓位', '抛售', '成交额', '换手', '新低', '新高'],
+        'en': ['inflows', 'outflows', 'valuation', 'bubble', 'selloff', 'correction',
+               'record high', 'record low', 'positioning', 'flows'],
+    },
+]
+THEME_BY_KEY = {t['key']: t for t in THEMES}
+THEME_LABEL = {t['key']: t['label'] for t in THEMES}
+
+# 标题情绪词典：只数「措辞」，不当作市场观点（正文里明确写「标题情绪」）
+TONE_WARM = [
+    '上涨', '大涨', '暴涨', '反弹', '新高', '超预期', '上调', '净流入', '回暖', '复苏',
+    '突破', '看多', '增持', '提振', '走强', '创新高', '利好', '扩产', '加码',
+    'surge', 'rally', 'rallies', 'jump', 'jumps', 'gain', 'gains', 'beat', 'beats',
+    'upgrade', 'record high', 'bullish', 'inflows', 'rebound', 'soar', 'soars', 'strong',
+]
+TONE_COLD = [
+    '下跌', '大跌', '暴跌', '新低', '不及预期', '下调', '净流出', '抛售', '崩盘', '衰退',
+    '裁员', '违约', '亏损', '走弱', '警告', '爆仓', '利空', '萎缩', '滑落', '风险',
+    'plunge', 'plunges', 'slump', 'slumps', 'fall', 'falls', 'drop', 'drops', 'miss',
+    'misses', 'downgrade', 'record low', 'bearish', 'outflows', 'selloff', 'crash',
+    'recession', 'layoffs', 'tumble', 'tumbles', 'weak',
+]
+
+
+def _tok_pattern(tok):
+    """英文词按词边界匹配（防止 ai 命中 said）；中文词按子串匹配（返回 None）。"""
+    low = str(tok or '').lower().strip()
+    if not low:
+        return None
+    if re.search(r'[a-z]', low):
+        parts = [re.escape(p) for p in re.split(r'[\s\-]+', low) if p]
+        if not parts:
+            return None
+        return re.compile(r'(?<![a-z0-9])' + r'[\s\-]+'.join(parts) + r'(?![a-z0-9])')
+    return None
+
+
+def _compile_lexicon(words):
+    out = []
+    for w in words:
+        out.append((str(w).lower(), _tok_pattern(w)))
+    return out
+
+
+_THEME_MATCHERS = []
+for _th in THEMES:
+    _THEME_MATCHERS.append((_th['key'],
+                            _compile_lexicon((_th.get('zh') or []) + (_th.get('en') or []))))
+_TONE_WARM_MATCHERS = _compile_lexicon(TONE_WARM)
+_TONE_COLD_MATCHERS = _compile_lexicon(TONE_COLD)
+
+
+def _hits(text, matchers):
+    """命中了多少个**不同**词条（同一词条重复出现只算一次）。"""
+    n = 0
+    for word, pat in matchers:
+        if pat is not None:
+            if pat.search(text):
+                n += 1
+        elif word and word in text:
+            n += 1
+    return n
+
+
+def _item_text(it):
+    return f"{it.get('title') or ''} {it.get('snippet') or ''}".lower()
+
+
+def _item_themes(it):
+    text = _item_text(it)
+    return [key for key, matchers in _THEME_MATCHERS if _hits(text, matchers)]
+
+
+def _item_tone(it):
+    """单条标题的措辞倾向：暖 / 冷 / 中性（不代表涨跌预测）。"""
+    text = _item_text(it)
+    warm = _hits(text, _TONE_WARM_MATCHERS)
+    cold = _hits(text, _TONE_COLD_MATCHERS)
+    if warm > cold:
+        return 'warm'
+    if cold > warm:
+        return 'cold'
+    return 'neutral'
+
+
+def _tone_word(warm, cold):
+    if warm >= max(2, cold * 2):
+        return '偏暖'
+    if cold >= max(2, warm * 2):
+        return '偏冷'
+    return '多空拉锯'
+
+
+def _md_short(text, n):
+    t = re.sub(r'\s+', ' ', str(text or '')).strip()
+    return t[:n] + ('…' if len(t) > n else '')
+
+
+def _theme_stats(items):
+    """条目 → 主线计数 + 证据（每条主线最多留 N 条，优先不同源、按新旧顺序）。"""
+    stats = {}
+    for it in items:
+        for key in _item_themes(it):
+            stats.setdefault(key, {'key': key, 'label': THEME_LABEL.get(key, key),
+                                   'count': 0, 'sources': [], '_cand': []})
+            row = stats[key]
+            row['count'] += 1
+            src = it.get('source') or ''
+            if src and src not in row['sources']:
+                row['sources'].append(src)
+            row['_cand'].append({
+                'title': _md_short(it.get('title'), 64),
+                'source': it.get('source_name') or it.get('publisher') or src,
+                'source_key': src,
+                'date': it.get('published_date'),
+            })
+    for row in stats.values():
+        # 先保证证据来自不同源（同一家说三遍不算三个证据），再保证标题不重复
+        # （通讯社通稿会被多家转载，同一条标题出现两次说明不了两件事）
+        picked, used_src, used_title = [], set(), set()
+
+        def _key(t):
+            return re.sub(r'\s+', '', str(t or '')).rstrip('…')[:40]
+
+        for cand in row['_cand']:
+            if len(picked) >= ANALYSIS_EVIDENCE_PER_THEME:
+                break
+            if cand['source_key'] in used_src or _key(cand['title']) in used_title:
+                continue
+            used_src.add(cand['source_key'])
+            used_title.add(_key(cand['title']))
+            picked.append(cand)
+        for cand in row['_cand']:
+            if len(picked) >= ANALYSIS_EVIDENCE_PER_THEME:
+                break
+            if cand in picked or _key(cand['title']) in used_title:
+                continue
+            used_title.add(_key(cand['title']))
+            picked.append(cand)
+        row['evidence'] = picked
+        row.pop('_cand', None)
+    ordered = sorted(stats.values(), key=lambda r: (-r['count'], r['key']))
+    return ordered
+
+
+def analyze_source(src):
+    """单源解读：把这一源当次最多 10 条标题读成一句人话。"""
+    items = [it for it in (src.get('items_list') or []) if isinstance(it, dict)]
+    out = {'key': src.get('key') or '', 'id': src.get('id') or 0,
+           'name': src.get('name') or '', 'ok': bool(src.get('ok')),
+           'items': len(items), 'themes': [], 'tone': {'warm': 0, 'cold': 0, 'neutral': 0},
+           'take': ''}
+    if not src.get('ok'):
+        out['take'] = '当次未获取 —— 不解读、不猜、不回填历史标题。'
+        return out
+    if not items:
+        out['take'] = '抓到了，但时效窗口内 0 条 —— 没有可读内容，不硬编解读。'
+        return out
+
+    for it in items:
+        out['tone'][_item_tone(it)] += 1
+    themes = _theme_stats(items)
+    out['themes'] = [{'key': r['key'], 'label': r['label'], 'count': r['count']}
+                     for r in themes[:3]]
+    warm, cold = out['tone']['warm'], out['tone']['cold']
+    tone_word = _tone_word(warm, cold)
+    top = themes[0] if themes else None
+    second = themes[1] if len(themes) > 1 and themes[1]['count'] >= 2 else None
+    second_txt = f"、{second['count']} 条在讲「{second['label']}」" if second else ''
+    undated = sum(1 for it in items if not it.get('published_date'))
+    undated_txt = (f"（其中 {undated} 条没标日期，我没当它们是新的）" if undated else '')
+    variant = (int(src.get('id') or 0) + len(items)) % 3
+
+    if not top:
+        take = (f"{len(items)} 条读完，没有明显的主线词，属于「各说各话」的一天；"
+                f"标题情绪{tone_word}（暖 {warm} / 冷 {cold}）。我的读法："
+                '这种源适合当背景板，别拿它单独立论。' + undated_txt)
+    else:
+        short = THEME_BY_KEY.get(top['key'], {}).get('short') or ''
+        if variant == 0:
+            take = (f"{len(items)} 条里 {top['count']} 条在讲「{top['label']}」{second_txt}；"
+                    f"标题情绪{tone_word}（暖 {warm} / 冷 {cold}）。说白了：{short}")
+        elif variant == 1:
+            take = (f"这家今天摆出 {len(items)} 条，{top['count']} 条压在「{top['label']}」上"
+                    f"{second_txt}，情绪{tone_word}（暖 {warm} / 冷 {cold}）—— 一句话：{short}")
+        else:
+            take = (f"读完 {len(items)} 条：主线「{top['label']}」占 {top['count']} 条"
+                    f"{second_txt}，情绪{tone_word}（暖 {warm} / 冷 {cold}）。"
+                    f"我的土话版：{short}")
+        take += undated_txt
+    out['take'] = take
+    return out
+
+
+def _reading_rule(ok, catalog_total, items, warm, cold, themes):
+    """给「我的读法」挑一条规则：只看断点，不编观点。"""
+    ratio = ok / max(1, catalog_total)
+    if ratio < 0.5:
+        return ('先别找方向',
+                f'今天只有 {ok}/{catalog_total} 个源跑通，缺口会系统性地切掉反方意见；'
+                '这种日子我做减法不做加法 —— 先把没抓到的补上，再谈结论。')
+    if not themes:
+        return ('只看不说话',
+                '一条主线都没聚起来，说明今天的信息是碎的；碎信息最适合记账，不适合下注。')
+    top = themes[0]
+    share = top['count'] / max(1, items)
+    if share >= 0.35:
+        return ('一条线太挤',
+                f'注意力被「{top["label"]}」吸走了（{top["count"]}/{items} 条）。'
+                '一条线太挤的时候，机会往往在没人看的第二条线上 —— 但也别为了逆向而逆向。')
+    if warm >= max(3, cold * 2):
+        return ('偏暖是抱团不是普涨',
+                f'暖 {warm} / 冷 {cold}，暖的那侧大多挂在同一条主线上，这是抱团不是普涨。'
+                '没上车的别追，上了车的把止盈线先画好。')
+    if cold >= max(3, warm * 2):
+        return ('先分清情绪和事实',
+                f'冷 {cold} / 暖 {warm}，偏冷的一侧集中在「{top["label"]}」。'
+                '先看它有没有数字支撑：只有形容词的，先当波动。')
+    return ('拼纪律不拼观点',
+            f'暖 {warm} / 冷 {cold}，多空各说各话、主线也不集中。'
+            '这种盘面拼的是仓位纪律，不是谁的嗓门大。')
+
+
+def analyze(data):
+    """05 节开头的「AI 解盘」：全局结论 + 三条主线 + 逐源人话。
+
+    纯函数：输入同一份 data，输出永远一致（无随机数、无联网、无时间依赖）。
+    """
+    data = data if isinstance(data, dict) else {}
+    st = stats(data)
+    groups = data.get('groups') or {}
+    sources = [s for g in groups.values() for s in (g.get('sources') or [])]
+    # 复制一份再挂上「源名」：证据里显示的是 49 源里的哪一个，而不是聚合器的 publisher
+    all_items = []
+    for s in sources:
+        if not s.get('ok'):
+            continue
+        for it in (s.get('items_list') or []):
+            if isinstance(it, dict):
+                all_items.append({**it, 'source_name': s.get('name') or ''})
+    out = {
+        'available': False, 'reason': 'no_readings', 'engine': ANALYSIS_ENGINE,
+        'analyst': ANALYST_NAME, 'tag': ANALYST_TAG,
+        'ok': st['ok'], 'catalog_total': st['catalog_total'], 'items': len(all_items),
+        'limit_per_source': int(data.get('limit_per_source') or LIMIT_PER_SOURCE_DEFAULT),
+        'headline': '', 'reading_label': '', 'reading': '', 'themes': [],
+        'tone': {'warm': 0, 'cold': 0, 'neutral': 0}, 'tone_word': '—',
+        'undated': st['undated_kept'], 'stale_dropped': st['stale_dropped'],
+        'per_source': {}, 'actions': [], 'mode': data.get('mode') or '',
+        'generated_at': data.get('generated_at') or '',
+        'engine_note': ANALYSIS_ENGINE_NOTE, 'disclaimer': ANALYSIS_DISCLAIMER,
+    }
+    if not sources or not all_items:
+        out['reason'] = 'no_items' if data else 'no_file'
+        return out
+
+    # 逐源解读（含未获取源：给「不解读」而不是留空）
+    for s in sources:
+        out['per_source'][s.get('key') or str(s.get('id'))] = analyze_source(s)
+
+    for it in all_items:
+        out['tone'][_item_tone(it)] += 1
+    warm, cold, neutral = out['tone']['warm'], out['tone']['cold'], out['tone']['neutral']
+    out['tone_word'] = _tone_word(warm, cold)
+    themes = _theme_stats(all_items)[:ANALYSIS_MAX_THEMES]
+    out['themes'] = themes
+
+    ok, total, n = st['ok'], st['catalog_total'], len(all_items)
+    labels = '、'.join(f"「{t['label']}」" for t in themes) or '（无明显主线）'
+    coverage = f'{total} 个源全部跑通' if ok >= total else f'{total} 个源里跑通 {ok} 个'
+    out['headline'] = (f"{coverage}、拿到 {n} 条当次条目；"
+                       f"标题情绪 暖 {warm} / 冷 {cold} / 中性 {neutral}；"
+                       f"注意力最挤的是{labels}。")
+    out['reading_label'], out['reading'] = _reading_rule(ok, total, n, warm, cold, themes)
+
+    # 研究动作（明确不是买卖建议）：三条都挂在当次读数上
+    top = themes[0] if themes else None
+    failed = max(0, total - ok)
+    watch = THEME_BY_KEY.get(top['key'], {}).get('watch') if top else '哪条线的数据先更新。'
+    if cold and warm:
+        contra = (f"找反方：{cold} 条标题偏冷、{warm} 条偏暖 —— 偏冷那侧有几条带了数字？"
+                  '没数字的先当情绪。')
+    elif warm:
+        contra = (f'找反方：{warm} 条偏暖、一条偏冷都没有 —— 一边倒的时候更该回源里找反证，'
+                  '别让取样偏差替你做决定。')
+    elif cold:
+        contra = (f'找反方：{cold} 条偏冷、一条偏暖都没有 —— 恐慌同样会取样偏差，'
+                  '回源里找有没有被忽略的好消息。')
+    else:
+        contra = ('找反方：今天标题几乎没有情绪词 —— 平静比波动更需要警惕，'
+                  '说明风险还没被定价。')
+    gap = (f'缺口记账：{total} 个源全部跑通，缺口为零 —— 但仍然只有 {n} 条，'
+           '样本量本身就是结论的边界。' if failed == 0 else
+           f'缺口记账：{failed}/{total} 个源当次未获取 —— 它们的沉默不算利好，'
+           '别把「没看到」当成「没有」。')
+    out['actions'] = [f"把主线当假设：{watch}", contra, gap]
+    out['available'] = True
+    out['reason'] = 'ok'
+    return out
+
+
+def analysis_text(data):
+    """CLI / CI Step Summary 用的人读版 AI 解盘（纯文本）。"""
+    an = analyze(data)
+    if not an.get('available'):
+        return ('🧠 AI 解盘：当次没有可读条目，不生成解读'
+                f"（{an.get('reason')}）—— 不回填历史标题。")
+    lines = [f"🧠 AI 解盘（{an['engine']} · {an['tag']}）· {an['generated_at']}",
+             f"  {an['headline']}",
+             f"  我的读法（{an['reading_label']}）：{an['reading']}"]
+    for i, t in enumerate(an['themes'], 1):
+        lines.append(f"  主线 {i}｜{t['label']}：{t['count']} 条 / {len(t['sources'])} 源 · "
+                     + (THEME_BY_KEY.get(t['key'], {}).get('short') or ''))
+        for ev in t['evidence'][:2]:
+            lines.append(f"      · [{ev.get('date') or '日期未标注'}] "
+                         f"{(ev.get('source') or '')}：{ev.get('title')}")
+    for i, a in enumerate(an['actions'], 1):
+        lines.append(f"  动作 {i}：{a}")
+    lines.append('  ⚠️ ' + ANALYSIS_DISCLAIMER)
+    return '\n'.join(lines)
+
+
+def render_analysis_web(an):
+    """网页 05 节开头：AI 解盘面板（结论 → 读法 → 三条主线 → 研究动作）。"""
+    if not an.get('available'):
+        return ''
+    tone = an['tone']
+    total_tone = max(1, tone['warm'] + tone['cold'] + tone['neutral'])
+    seg = [('warm', tone['warm'], 'var(--cyan)'), ('neutral', tone['neutral'], 'var(--violet)'),
+           ('cold', tone['cold'], 'var(--danger)')]
+    bar = ''.join(
+        f'<div style="flex:{max(0.001, n / total_tone):.4f} 1 0;height:6px;'
+        f'background:{color};" title="{lab} {n} 条"></div>'
+        for lab, n, color in seg)
+    cards = []
+    for i, t in enumerate(an['themes'], 1):
+        th = THEME_BY_KEY.get(t['key'], {})
+        ev = ''.join(
+            f'<li><strong style="color:var(--cyan);">[{_esc(_md_cn(e.get("date")))}]</strong> '
+            f'{_esc(e.get("title"))}'
+            f'<span style="color:var(--muted);font-size:10.5px;"> · {_esc(e.get("source") or "")}'
+            '</span></li>'
+            for e in t.get('evidence') or [])
+        cards.append(
+            '<article class="pub-card" data-verdict="neutral" style="margin:0 0 8px;">'
+            '<div class="pub-card-head" style="margin-bottom:5px;">'
+            f'<span class="pub-name">主线 {i} · {_esc(t["label"])}</span>'
+            f'<span class="pub-chip">{t["count"]} 条 · {len(t["sources"])} 源</span></div>'
+            f'<p class="pub-quote" style="font-size:12px;margin:0 0 4px;">'
+            f'<strong>说白了：</strong>{_esc(th.get("playbook") or "")}</p>'
+            f'<div class="pub-meta" style="margin:0 0 4px;">我盯什么：'
+            f'{_esc(th.get("watch") or "")}</div>'
+            + (f'<ul class="pixel-list" style="margin:2px 0 0;font-size:11px;">{ev}</ul>'
+               if ev else '')
+            + '</article>')
+    actions = ''.join(f'<li>{_esc(a)}</li>' for a in an['actions'])
+    mode_note = ('　·　离线回放样本（非实盘，仅验证链路）' if an.get('mode') == 'mock' else '')
+    return (
+        '<div class="pub-box" style="margin:0 0 16px;border-left:3px solid var(--cyan);">'
+        f'<div class="pub-sub">◆ AI 解盘 · 开头先说结论（{_esc(an["tag"])} · '
+        f'{an["catalog_total"]} 源 × 每源 {an["limit_per_source"]} 条）</div>'
+        f'<div class="pub-meta" style="margin:2px 0 10px;">{_esc(an["engine_note"])}'
+        f'{_esc(mode_note)}</div>'
+        f'<p class="pub-quote" style="margin:0 0 6px;font-size:13.5px;font-weight:700;">'
+        f'一句话：{_esc(an["headline"])}</p>'
+        f'<p class="pub-quote" style="margin:0 0 10px;font-size:12.5px;">'
+        f'<strong>{_esc(an["reading_label"])}：</strong>{_esc(an["reading"])}</p>'
+        f'<div style="display:flex;gap:2px;margin:0 0 4px;">{bar}</div>'
+        f'<div class="pub-meta" style="margin:0 0 12px;">标题情绪秤（只数措辞，不代表涨跌）：'
+        f'暖 {tone["warm"]} · 中性 {tone["neutral"]} · 冷 {tone["cold"]}'
+        f'　|　无日期条目 {an["undated"]} 条（未当最新）· 拦截超窗 {an["stale_dropped"]} 条</div>'
+        + ''.join(cards)
+        + f'<div class="pub-meta" style="margin:4px 0 0;font-weight:700;">研究动作'
+          '（不是买卖建议，是把新闻变成可核查的问题）：</div>'
+          f'<ul class="pixel-list" style="margin:2px 0 8px;font-size:11.5px;">{actions}</ul>'
+        f'<div class="pub-meta" style="margin:0;">⚠️ {_esc(an["disclaimer"])}</div>'
+        '</div>')
+
+
+def render_analysis_wechat(an, level='standard', cyan='#4fe5ff', text='#edf2ff',
+                           muted='#9aa6c3', danger='#ff6b7d'):
+    """微信 05 栏开头的 AI 解盘（按预算档收放；任何一档都保留结论与免责声明）。"""
+    if not an.get('available'):
+        return ''
+    compact = level in ('roster', 'compact')
+    tone = an['tone']
+    head = (f'<div style="color:{cyan};font-weight:700;font-size:12.5px;margin:0 0 3px;">'
+            f'◆ AI 解盘 · {_esc(an["tag"])}　{an["catalog_total"]} 源 × 每源 '
+            f'{an["limit_per_source"]} 条</div>')
+    body = (f'<div style="color:{text};font-size:11px;line-height:1.8;">'
+            f'<strong>一句话：</strong>{_esc(an["headline"])}</div>')
+    if compact:
+        body += (f'<div style="color:{muted};font-size:10px;line-height:1.7;">'
+                 f'{_esc(an["reading_label"])}：'
+                 f'{_esc(_md_short(an["reading"], 90))}　'
+                 '（AI 解读为规则引擎，不是投资建议）</div>')
+        return head + body
+    body += (f'<div style="color:{text};font-size:11px;line-height:1.8;">'
+             f'<strong style="color:{cyan};">{_esc(an["reading_label"])}：</strong>'
+             f'{_esc(an["reading"])}</div>')
+    body += (f'<div style="color:{muted};font-size:10px;line-height:1.7;">标题情绪：暖 '
+             f'{tone["warm"]} · 中性 {tone["neutral"]} · 冷 '
+             f'<span style="color:{danger};">{tone["cold"]}</span>（只数措辞，不代表涨跌）</div>')
+    for i, t in enumerate(an['themes'], 1):
+        th = THEME_BY_KEY.get(t['key'], {})
+        body += (f'<div style="color:{text};font-size:10.5px;line-height:1.75;">'
+                 f'{i}. <strong>{_esc(t["label"])}</strong>（{t["count"]} 条 / '
+                 f'{len(t["sources"])} 源）· 说白了：{_esc(th.get("short") or "")}</div>')
+        if level == 'full' and t.get('evidence'):
+            ev = t['evidence'][0]
+            body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.6;">　证据 '
+                     f'[{_esc(_md_cn(ev.get("date")))}] '
+                     f'{_esc(_md_short(ev.get("title"), 34))}</div>')
+    if level == 'full':
+        for a in an['actions']:
+            body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.65;">'
+                     f'　· {_esc(a)}</div>')
+    body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.65;">'
+             f'　规则引擎离线生成，只读当次标题/摘要，不调用外部大模型；'
+             f'不给目标价、不荐股，不是投资建议。</div>')
+    return head + body
+
+
+
 def build_unavailable_html(avail):
     """05 节兜底：只说明「这次没有」，绝不回填历史标题。"""
     reason = avail.get('reason') or 'no_file'
@@ -1457,12 +2049,15 @@ def render_web(data):
 
     summ = data.get('summary') or {}
     win = data.get('window') or {}
-    note = (f'49 源 · 当次可用 {summ.get("ok", 0)}/{summ.get("total", 0)} · '
+    an = analyze(data)
+    note = (f'49 源 · 每源最多 {data.get("limit_per_source") or LIMIT_PER_SOURCE_DEFAULT} 条 · '
+            f'当次可用 {summ.get("ok", 0)}/{summ.get("total", 0)} · '
             f'入库 {summ.get("items", 0)} 条 · 时效窗口 {win.get("max_age_days", "—")} 天'
             f'（{win.get("since") or "—"} 起）· 已拦截超窗 {summ.get("stale_dropped", 0)} 条'
             f' · 抓取于 {data.get("generated_at") or "—"}'
             + (' · 离线回放样本（非实盘）' if data.get('mode') == 'mock' else ''))
     parts = ['<div class="pub-box">',
+             render_analysis_web(an),
              '<div class="pub-sub">◆ 全球 49 大财经 RSS 情报源 · 六大板块 · 逐源核验状态</div>',
              f'<div class="pub-meta" style="margin:2px 0 10px;">{_esc(note)}</div>',
              render_stats_web(data),
@@ -1495,7 +2090,14 @@ def render_web(data):
                             '当次抓取成功，但时效窗口内没有可核验条目（不回填旧标题）。</p>')
                 else:
                     lis = []
-                    for it in items:
+                    take = (an.get('per_source') or {}).get(s.get('key') or '', {}).get('take')
+                    ai_line = (
+                        '<div class="pub-quote" style="margin:6px 0 2px;font-size:11.5px;'
+                        'line-height:1.75;border-left:2px solid var(--violet);'
+                        'padding-left:8px;">'
+                        '<strong style="color:var(--violet);">🤖 人话</strong> '
+                        f'{_esc(take)}</div>' if take else '')
+                    for idx, it in enumerate(items):
                         date = it.get('published_date')
                         date_html = (f'<strong style="color:var(--cyan);">[{_esc(_md_cn(date))}]</strong>'
                                      if date else
@@ -1504,13 +2106,16 @@ def render_web(data):
                         url = it.get('url') or ''
                         title_html = (f'<a href="{_esc(url)}" target="_blank" '
                                       f'rel="noopener noreferrer">{title}</a>') if url.startswith('http') else title
+                        # 每源只给最新一条配摘要：10 条全带摘要会把 05 节顶到 200KB+，
+                        # 其余 9 条只留标题，扫读更快（正文标题本身就是信息）。
                         snip = (f' <span style="color:var(--muted);font-size:11px;">'
                                 f'{_esc((it.get("snippet") or "")[:70])}</span>'
-                                if it.get('snippet') else '')
+                                if idx == 0 and it.get('snippet') else '')
                         pub = (f' <span style="color:var(--muted);font-size:10.5px;">'
                                f'· {_esc(it.get("publisher"))}</span>' if it.get('publisher') else '')
                         lis.append(f'    <li>{date_html} {title_html}{pub}{snip}</li>')
-                    body = '<ul class="pixel-list" style="margin:4px 0 0;">\n' + '\n'.join(lis) + '\n  </ul>'
+                    body = (ai_line + '<ul class="pixel-list" style="margin:4px 0 0;">\n'
+                            + '\n'.join(lis) + '\n  </ul>')
                 meta = (f'<div class="pub-meta">当次实抓 · 端点 {_esc((s.get("endpoint") or "")[:90])}'
                         f' · {float(s.get("latency_ms") or 0):.0f} ms · {_esc(s.get("note") or "")}</div>')
             else:
@@ -1549,6 +2154,7 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
     无日期条目写「日期未标注」，绝不冒充最新。
     """
     avail = availability(data)
+    an = analyze(data) if avail['ok'] else {'available': False}
     head = (f'<div style="color:{cyan};font-weight:700;font-size:13px;margin-bottom:4px;">'
             '◆ 全球 49 大财经 RSS 情报源 · 六大板块</div>')
     if not avail['ok']:
@@ -1559,7 +2165,8 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
     summ = data.get('summary') or {}
     win = data.get('window') or {}
     note = (f'<div style="color:{muted};font-size:10px;line-height:1.7;">'
-            f'49 源 · 可用 {summ.get("ok", 0)}/{summ.get("total", 0)} · 入库 '
+            f'49 源 · 每源最多 {data.get("limit_per_source") or LIMIT_PER_SOURCE_DEFAULT} 条 · '
+            f'可用 {summ.get("ok", 0)}/{summ.get("total", 0)} · 入库 '
             f'{summ.get("items", 0)} 条 · 窗口 {win.get("max_age_days", "—")} 天 · '
             f'抓取于 {_esc(data.get("generated_at") or "—")}'
             + (' · 离线回放样本' if data.get('mode') == 'mock' else '')
@@ -1569,6 +2176,8 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
     rows = [head if not compact else
             f'<div style="color:{cyan};font-weight:700;font-size:12px;margin-bottom:3px;">'
             '◆ 49 大财经 RSS 情报源（缩略版）</div>',
+            render_analysis_wechat(an, level=level, cyan=cyan, text=text, muted=muted,
+                                   danger=danger),
             note]
     for gkey, group in (data.get('groups') or {}).items():
         srcs = group.get('sources') or []
@@ -1614,9 +2223,11 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
                          f'{_esc((top.get("snippet") or "")[:56])}</span>'
                          if top.get('snippet') else '')
                 if len(items) > 1:
+                    shown = items[1:3]
                     extra += (f'<br/><span style="color:{muted};font-size:9.5px;">　另 '
-                              f'{len(items) - 1} 条：'
-                              + ' / '.join(_esc((i.get('title') or '')[:22]) for i in items[1:3])
+                              f'{len(items) - 1} 条，如：'
+                              + ' / '.join(_esc((i.get('title') or '')[:22]) for i in shown)
+                              + (' …' if len(items) - 1 > len(shown) else '')
                               + '</span>')
             rows.append(f'<div style="color:{text};font-size:10.5px;line-height:1.7;">'
                         f'{s.get("id")}. {name} '
@@ -1624,6 +2235,11 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
                         f'{_esc((top.get("title") or "")[:40])}'
                         f'<span style="color:{muted};font-size:9.5px;"> · '
                         f'{_esc(KIND_BADGE.get(s.get("kind") or "", "未获取"))}</span>{extra}</div>')
+            if level == 'full':
+                take = (an.get('per_source') or {}).get(s.get('key') or '', {}).get('take')
+                if take:
+                    rows.append(f'<div style="color:{muted};font-size:9.5px;line-height:1.6;">'
+                                f'　🤖 人话：{_esc(take)}</div>')
     return '\n'.join(rows)
 
 
@@ -1685,6 +2301,29 @@ def self_test():
            'summary': {'ok': 1, 'total': 1}}
     if availability(old, now=now)['reason'] != 'stale_snapshot':
         problems.append('availability(stale_snapshot) 判定异常')
+    # AI 解盘：只读当次条目、确定性、逐源都有「人话」、缺产物不给解读
+    mock = build(mock=True, quiet=True)
+    an = analyze(mock)
+    if not an.get('available'):
+        problems.append('AI 解盘：有读数却没产出解读')
+    else:
+        if str(an['items']) not in an['headline']:
+            problems.append('AI 解盘：结论里的条数与实际不符')
+        if len(an.get('per_source') or {}) != len(CATALOG):
+            problems.append('AI 解盘：没有覆盖全部 49 源（含未获取源）')
+        if not all((v.get('take') or '') for v in an['per_source'].values()):
+            problems.append('AI 解盘：存在没有解读的源')
+        if analyze(mock)['headline'] != an['headline']:
+            problems.append('AI 解盘：两次分析结果不一致（非确定性）')
+        web = render_web(mock)
+        if 'AI 解盘' not in web:
+            problems.append('网页 05 节：开头缺 AI 解盘面板')
+        elif web.index('AI 解盘') > web.index('框架统计'):
+            problems.append('网页 05 节：AI 解盘不在开头（应排在框架统计之前）')
+        if '一句话' not in render_wechat(mock, level='compact'):
+            problems.append('微信 05 栏：缩略版丢了 AI 结论')
+    if analyze({}).get('available'):
+        problems.append('AI 解盘：没有读数却给出了结论')
     if problems:
         print('❌ 自检未通过：')
         for p in problems:
@@ -1692,7 +2331,8 @@ def self_test():
         return 1
     print(f'✅ 自检通过：目录 {len(CATALOG)} 源 / {len(GROUPS)} 板块 '
           f'（{", ".join(f"{k}:{v}" for k, v in GROUP_EXPECTED.items())}）· '
-          f'解析 3 种报文 · 时效与无日期垫底 · 05 节兜底 · 可用性四态')
+          f'解析 3 种报文 · 时效与无日期垫底 · 05 节兜底 · 可用性四态 · '
+          f'AI 解盘（每源 {LIMIT_PER_SOURCE_DEFAULT} 条 / 确定性 / 开头位）')
     return 0
 
 
@@ -1732,6 +2372,20 @@ def render_catalog_md():
         f'合计 **{len(CATALOG)} 源**，六大板块：'
         + ' · '.join(f'{GROUP_LABELS[g]} {GROUP_EXPECTED[g]} 源' for g, _l, _d in GROUPS),
         '',
+        f'## 05 节开头的「AI 解盘」（每源最多 {LIMIT_PER_SOURCE_DEFAULT} 条）',
+        '',
+        f'- **位置**：网页 05 节最上方、微信 05 栏开头 —— 先给结论，再往下才是 49 源明细。',
+        f'- **引擎**：本地规则引擎（`ANALYSIS_ENGINE = {ANALYSIS_ENGINE}`），'
+        '只读当次抓到的标题与摘要做归类、计数、写成人话；**不调用外部大模型**。',
+        '- **产出**：一句话结论（源数 / 条数 / 情绪计数）· 我的读法 · 三条主线'
+        '（含不同源的证据 + 「说白了」+ 「我盯什么」）· 标题情绪秤 · 研究动作 · 逐源人话。',
+        '- **不做**：不新增任何事实、不给目标价、不荐股、不预测点位；'
+        '抓不到的源只标「未获取」，不给解读，也不回填历史标题。',
+        '- **缺数据**：整节显示「今日未获取」，AI 解盘同样不生成（不硬凑观点）。',
+        '',
+        '> 「投研大 V」在这里是**口径与人设**（第一人称、说人话、给研究动作），'
+        '不是身份声明，也不构成投资建议。',
+        '',
     ]
     for gkey, label, desc in GROUPS:
         lines += [f'## {label}（{GROUP_EXPECTED[gkey]} 源）', '', f'_{desc}_', '',
@@ -1755,7 +2409,8 @@ def render_catalog_md():
               'python3 rss_feeds.py --catalog           # 终端打印目录',
               'python3 rss_feeds.py --catalog-md docs/rss-49-feeds.md   # 重新生成本文件',
               'python3 rss_feeds.py --only CLS,JIN10 --text             # 联调：只抓指定源',
-              'python3 rss_feeds.py --self-test          # 目录/解析/时效/兜底自检（不联网）',
+              'python3 rss_feeds.py --analysis          # 打印 05 节开头的 AI 解盘（不联网）',
+              'python3 rss_feeds.py --self-test          # 目录/解析/时效/兜底/AI 解盘自检（不联网）',
               '```', '']
     return '\n'.join(lines)
 
@@ -1775,6 +2430,8 @@ def main():
     ap.add_argument('--mock', action='store_true', help='离线回放 tests/fixtures（本地/CI 联调）')
     ap.add_argument('--offline', action='store_true', help='断网兜底：读取已有 JSON，仅刷新时间戳')
     ap.add_argument('--text', action='store_true', help='打印人读摘要')
+    ap.add_argument('--analysis', action='store_true',
+                    help='打印 05 节开头的 AI 解盘全文（规则引擎 · 不联网）')
     ap.add_argument('--catalog', action='store_true', help='只打印 49 源目录（不联网）')
     ap.add_argument('--catalog-md', metavar='PATH',
                     help='把目录写成 Markdown（docs/rss-49-feeds.md 的生成器，不联网）')
@@ -1837,6 +2494,8 @@ def main():
                   '不回填历史标题（这是预期降级行为）', file=sys.stderr)
     if args.text:
         print(text_report(data))
+    if args.analysis:
+        print(analysis_text(data))
 
 
 if __name__ == '__main__':

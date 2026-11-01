@@ -13,7 +13,7 @@ python3 market_data.py               # ① 动态抓取行情 → market_data.js
 python3 verify_quotes.py --json verify_report.json --text   # ①′ 全来源交叉校验 (FAIL=2 阻断推送；网页阶段仅公开报告不阻断)
 python3 community_snapshot.py        # ② 到期采集49社区 → community_data.json；四小时内复用，多方案采样、失败标记未获取
 python3 macro_data.py                # ②′ 动态抓取宏观/财经快讯 → macro_data.json (网页 02 节 + 微信 02 栏正文；只保留 7 天内、发布日期可解析的条目)
-python3 rss_feeds.py                 # ②″ 抓取 49 大财经 RSS 情报源 → rssfeeds_data.json (网页 05 节 + 微信 05 栏；只保留 14 天内条目)
+python3 rss_feeds.py                 # ②″ 抓取 49 大财经 RSS 情报源 → rssfeeds_data.json (每源最多 10 条；网页 05 节 + 微信 05 栏；只保留 14 天内条目)
 python3 build_site.py                # ③ 动态建站 → report.html (注入行情+社区+宏观快讯+RSS 情报源+日期/时间戳，49源动态注入；
                                      #    同时现算 04 栏 AI 预测(下一交易日) 并把预测写进 forecast_history.json —— 先存档后结算)
 python3 tools/wechat_push.py --embed # ④ 内嵌最新推送负载进 report.html
@@ -241,6 +241,29 @@ python3 -m unittest tests.test_forecast   # 32 项回归
 新增栏目的数据层是 **`rss_feeds.py`**（唯一事实源）：目录 49 条、抓取、解析、时效过滤、可用性判定与
 网页 / 微信两端渲染全在这里，避免两套口径漂移。网页 05 节对应模板占位区 `<!-- RSSFEEDS -->`
 （哨兵 `<!-- /RSSFEEDS -->` 保证重复构建幂等），微信推送 05 栏由 `fit_rss_block()` 按剩余预算选详略。
+
+### 开头的「AI 解盘」：49 源 × 每源 10 条，说人话（投研大 V 口径）
+
+用户口径：**开头先给 AI 分析**，按**每源 10 条**资讯解读，**说人话**，角色定位是**投研大 V**。
+
+- **位置**：网页 05 节最上方（`render_analysis_web()`）、微信 05 栏开头（`render_analysis_wechat()`）；
+  再往下才是 49 源明细 —— 第一眼看到的是结论，不是标题墙。
+- **每源 10 条**：`LIMIT_PER_SOURCE_DEFAULT = 10`（49 × 10 = 上限 490 条）。网页逐条列全（最新一条配摘要，
+  其余 9 条只留标题，避免 05 节被顶到 200KB+）；微信每源只列最新一条 + 一句人话，字符门禁仍由
+  `fit_rss_block()` 的四档预算（完整→标准→名录→缩略）收敛，**一源不删**。
+- **产出六件**：① 一句话结论（源数 / 条数 / 情绪计数）② 「我的读法」（按断点选规则，不编观点）
+  ③ 三条主线（「说白了」+「我盯什么」+ 来自**不同源、不重复标题**的两条证据）
+  ④ 标题情绪秤 ⑤ 研究动作三条（把新闻变成可核查的问题）⑥ **逐源「🤖 人话」**（这一源这 10 条在讲什么、
+  情绪偏哪边、一句话总结）。
+- **「AI」是什么**：`ANALYSIS_ENGINE = local-rules-v1` —— 本地规则引擎（12 条主线 × 中英词典 → 归类 / 计数 →
+  固定句式），**离线、不调用外部大模型、不联网**。它只做「重排事实 + 换成人话」，不能凭空生成观点；
+  句式轮换按「源编号 + 条数」取模，**同一份产物两次解读一字不差**（可回归、可复现）。
+- **红线**：只读当次 `items_list` 的 title / snippet；数字全部算出来（源数、条数、命中数）；
+  不给目标价、不荐股、不预测点位；缺产物 / 窗口内 0 条 / 旧快照 → **不生成解读**（不硬凑、不回填）；
+  网页与微信两端都固定带免责声明。
+- **验收**：`tests/test_rss_feeds.py::TestAiAnalysis` 锁死「每源 10 条 / 确定性 / 证据只引用真实条目 /
+  证据来自不同源 / 开头位 / 各档不丢结论 / 缺数据不硬编 / 不出现买卖字样」；
+  `python3 rss_feeds.py --analysis` 直接打印全文，`--self-test` 把「开头位」也纳入自检。
 
 **六大板块与源数（与清单一一对应）**
 
@@ -634,9 +657,9 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `macro_data.availability()` | **02 栏兜底口径的单一事实源**：判定本次到底有没有可用快讯，返回 `reason` ∈ `no_file`（文件读不到）/ `bad_type`（产物写坏被截断）/ `no_items`（窗口内 0 条，公开源全挂或全部超窗）/ `stale_snapshot`（读到前几天构建的旧快照，超过 `SNAPSHOT_MAX_AGE_DAYS=1`）。网页与微信两端共用，避免两套渲染各写一套口径而漂移 |
 | `tests/test_macro_data.py` | 快讯层测试（16 项，零联网）：RSS/JSONP 解析、跨源去重、分类路由（IMF+关税 必须落宏观而非大宗）、超窗与无日期拦截、`--mock` 输出契约 |
 | `tests/test_wechat_push_macro.py` | 宏观快讯渲染回归（推送 02 栏 + 网页 02 节，9 项）：必须渲染当次快讯且每条带日期；**四种不可用形态都要落到同一段「今日未获取」兜底文案**；过期快照不得从 01 / 07 栏漏出；网页 `MACROLIST` 注入幂等；正文/注入区禁止再出现 628.69 亿、8 月 12 日、25,440.17 等写死历史内容 |
-| `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（**并发 8 路**、超时、逐端点回退、RSSHub 实例可换、每轮请求上限、`--budget` 软墙钟）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--budget` / `--text` / `--self-test` |
+| `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（**并发 8 路**、超时、逐端点回退、RSSHub 实例可换、每轮请求上限、`--budget` 软墙钟）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、**开头 AI 解盘层**（`analyze()` / `analysis_text()` / `render_analysis_web()` / `render_analysis_wechat()`：每源 10 条 → 一句话结论 + 三条主线 + 逐源人话，本地规则引擎 `local-rules-v1`，不调外部大模型）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--budget` / `--text` / `--analysis` / `--limit` / `--self-test` |
 | `docs/rss-49-feeds.md` | **49 源目录与端点核对表**（`python3 rss_feeds.py --catalog-md docs/rss-49-feeds.md` 生成，禁止手改）：六大板块逐源列语种 / 主端点 / 回退端点 / 核验状态 / 口径说明；`tests/test_rss_feeds.py` 断言文档与 `CATALOG` 不漂移 |
-| `tests/test_rss_feeds.py` | **05 栏回归（32 项，零联网）**：目录就是那份 49 源清单（10-10-11-8-6-4、编号 1..49、无裸域名、必备源齐全）、三种报文解析与端点回退、超窗丢弃 + 无日期永不冒充最新、四种不可用形态统一兜底（缺产物/写坏/0 条/旧快照，且**不得出现任何历史标题**）、网页 `RSSFEEDS` 注入幂等且不串进 02 节、微信 05 栏预算降级（完整→标准→名录→缩略）**一源不删**且整页仍在 95,000 门禁内、渲染路径绝不联网、`build_site.py` 端到端补抓落盘 |
+| `tests/test_rss_feeds.py` | **05 栏回归（79 项，零联网）**：目录就是那份 49 源清单（10-10-11-8-6-4、编号 1..49、无裸域名、必备源齐全）、三种报文解析与端点回退、超窗丢弃 + 无日期永不冒充最新、四种不可用形态统一兜底（缺产物/写坏/0 条/旧快照，且**不得出现任何历史标题**）、网页 `RSSFEEDS` 注入幂等且不串进 02 节、微信 05 栏预算降级（完整→标准→名录→缩略）**一源不删**且整页仍在 95,000 门禁内、渲染路径绝不联网、`build_site.py` 端到端补抓落盘、**开头 AI 解盘**（每源 10 条 / 确定性 / 证据只用真实条目且不同源 / 各档不丢结论 / 缺数据不硬编 / 无买卖字样） |
 | `community_data.py` | **社区数据层**：49 源经多方案评论采样与 Scrapling 公开页回退生成记录；失败标为未获取；`reanalyze_snapshot()` 根据已存文本重算，`offline_dataset()` 提供 49 源未获取兜底。 |
 | `community_snapshot.py` | **四小时采集快照**：到期采集、原子落盘，失败也限频；页面和推送共用快照，运行期文件不入库。 |
 | `sentiment_sources.py` | **接口注册表**：11 个量化平台/公开源舆情·新闻因子的能力口径（端点、字段、时效、历史、额度、成本、局限）+ 因子定义 + 9 个评测阶段与 6 维评分权重；`python3 sentiment_sources.py` 打印清单与凭据/依赖状态 |
