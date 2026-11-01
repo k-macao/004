@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """49 大财经 RSS 情报源（05 节）回归测试 —— 零联网。
 
-锁死四件事：
+锁死五件事：
   1. **目录就是用户那份 49 源清单**：49 条 / 6 大板块 / 编号 1..49 / key 唯一，
      板块源数与清单一致（10-10-11-8-6-4），每个源都有可用端点或检索载体；
   2. **反幻觉口径**：超窗条目入库前丢弃、无日期条目永远垫底、缺产物时网页 05 节
@@ -10,7 +10,9 @@
   3. **两端同源**：网页 05 节与微信 05 栏读同一份 rssfeeds_data.json，
      `MACROLIST` / `RSSFEEDS` 注入幂等（重复构建不追加）；
   4. **渲染路径绝不联网**：补抓只在 CLI 入口（bootstrap_rss_feeds / build_site main），
-     单测里 GITHUB_ACTIONS=true 也不得触发抓取。
+     单测里 GITHUB_ACTIONS=true 也不得触发抓取；
+  5. **开头的 AI 解盘只读当次像素**：每源最多 10 条、解读只用当次标题/摘要、
+     数字全部算出来、缺数据不给解读（不补事实、不荐股、不给目标价）。
 """
 import contextlib
 import html as html_mod
@@ -1023,6 +1025,177 @@ class TestSuiteStaysHermetic(unittest.TestCase):
                 source = f.read()
             self.assertIn('RSSFEEDS_AUTO_FETCH', source,
                           '{} 直接调用入口，必须显式 RSSFEEDS_AUTO_FETCH=0'.format(name))
+
+
+class TestAiAnalysis(unittest.TestCase):
+    """05 节开头的「AI 解盘」——每源 10 条、只说人话、绝不补事实。
+
+    背景（用户口径）：49 大财经 RSS 情报源，**开头加 AI 分析**，
+    按**每源 10 条**资讯做「人话解读」，语气按**投研大 V** 的角色定位。
+    这里的 AI 指本地规则引擎（离线词典归类 + 计数 + 固定句式）：
+      · 只吃当次抓到的 title / snippet，不联网、不调外部大模型；
+      · 所有数字都是算出来的（源数 / 条数 / 命中数），没有估算；
+      · 明确不给目标价、不荐股、不预测点位，缺数据就明说「不给解读」。
+    """
+
+    def setUp(self):
+        self.data = _mock_data()
+        self.an = rf.analyze(self.data)
+
+    # ---------- 数据契约 ----------
+    def test_per_source_limit_is_ten(self):
+        self.assertEqual(rf.LIMIT_PER_SOURCE_DEFAULT, 10,
+                         '用户要求「每源 10 条」，默认上限必须是 10')
+        self.assertEqual(self.data['limit_per_source'], 10)
+        counts = [len(s['items_list']) for g in self.data['groups'].values()
+                  for s in g['sources']]
+        self.assertTrue(counts)
+        self.assertLessEqual(max(counts), 10)
+        self.assertEqual(max(counts), 10, '离线回放样本应按每源 10 条构造')
+        # normalize 也遵守上限：给 20 条原始数据只能留 10 条
+        src = {'key': 'X', 'id': 1, 'name': 'x', 'lang': 'en'}
+        raw = [{'title': f'title {i}', 'url': f'https://e.com/{i}',
+                'published_raw': '2026-10-30 08:00:00'} for i in range(20)]
+        self.assertEqual(len(rf.normalize(raw, src, now=NOW)), 10)
+
+    def test_analysis_is_deterministic_and_covers_every_source(self):
+        again = rf.analyze(json.loads(json.dumps(self.data)))
+        self.assertEqual(again['headline'], self.an['headline'])
+        self.assertEqual(again['themes'], self.an['themes'])
+        self.assertEqual(again['actions'], self.an['actions'])
+        self.assertEqual(len(self.an['per_source']), len(rf.CATALOG),
+                         '未获取的源也要有「不解读」占位，否则读者以为这一源不存在')
+        self.assertTrue(all(v['take'] for v in self.an['per_source'].values()))
+
+    def test_headline_numbers_come_from_the_payload(self):
+        st = rf.stats(self.data)
+        self.assertIn(str(st['items']), self.an['headline'])
+        self.assertIn(str(st['catalog_total']), self.an['headline'])
+        tone = self.an['tone']
+        self.assertEqual(tone['warm'] + tone['cold'] + tone['neutral'], st['items'],
+                         '情绪计数必须覆盖全部入库条目，不能只数一部分')
+        self.assertIn(f"暖 {tone['warm']}", self.an['headline'])
+
+    def test_analysis_cites_only_real_items_and_never_mutates_the_payload(self):
+        titles = {it['title'] for g in self.data['groups'].values()
+                  for s in g['sources'] for it in s['items_list']}
+        cited = [e['title'] for t in self.an['themes'] for e in t['evidence']]
+        for c in cited:
+            self.assertTrue(any(t.startswith(c.rstrip('…')) for t in titles),
+                            f'证据必须是当次真实条目：{c}')
+        for t in self.an['themes']:
+            titles_in_theme = [e['title'] for e in t['evidence']]
+            self.assertEqual(len(titles_in_theme), len(set(titles_in_theme)),
+                             '同一条主线里不该拿同一条标题凑两次证据')
+        for g in self.data['groups'].values():
+            for s in g['sources']:
+                for it in s['items_list']:
+                    self.assertNotIn('source_name', it, 'analyze 不得污染原始产物')
+
+    def test_evidence_prefers_distinct_sources(self):
+        for t in self.an['themes']:
+            keys = [e['source_key'] for e in t['evidence']]
+            self.assertEqual(len(keys), len(set(keys)),
+                             f'同一家说两遍不算两个证据：{t["label"]}')
+
+    def test_plain_language_take_reads_ten_items(self):
+        src = next(s for g in self.data['groups'].values() for s in g['sources']
+                   if len(s['items_list']) == 10)
+        take = self.an['per_source'][src['key']]['take']
+        self.assertIn('10 条', take, '逐源解读应交代读了多少条')
+        self.assertTrue(any(w in take for w in ('说白了', '一句话', '土话版', '我的读法')),
+                        f'要说人话：{take}')
+        self.assertNotIn('买入', take)
+        self.assertNotIn('卖出', take)
+
+    def test_unavailable_source_gets_an_honest_take(self):
+        payload = _unavailable_payload()
+        an = rf.analyze(payload)
+        self.assertFalse(an['available'])
+        self.assertEqual(an['reason'], 'no_items')
+        self.assertEqual(an['headline'], '')
+        self.assertEqual(an['per_source'], {}, '没有读数就不给逐源解读')
+        self.assertFalse(rf.analyze({})['available'])
+        self.assertEqual(rf.analyze({})['reason'], 'no_file')
+
+    # ---------- 网页 ----------
+    def test_web_puts_analysis_at_the_top_of_section_05(self):
+        html = html_mod.unescape(rf.render_web(self.data))
+        self.assertIn('AI 解盘', html)
+        self.assertLess(html.index('AI 解盘'), html.index('框架统计'),
+                        'AI 解盘必须排在框架统计之前')
+        first_source = min(html.index(c['name']) for c in rf.CATALOG)
+        self.assertLess(html.index('AI 解盘'), first_source,
+                        'AI 解盘必须排在 49 源明细之前（「开头」）')
+        self.assertIn(self.an['headline'], html, '网页结论应与 analyze() 一致')
+        self.assertIn('说白了：', html)
+        self.assertIn('我盯什么：', html)
+        self.assertIn('不是投资建议', html)
+        self.assertIn('每源最多 10 条', html)
+
+    def test_web_renders_ten_items_per_source_with_a_take(self):
+        html = html_mod.unescape(rf.render_web(self.data))
+        src = next(s for g in self.data['groups'].values() for s in g['sources']
+                   if len(s['items_list']) == 10)
+        for it in src['items_list']:
+            self.assertIn(it['title'], html, '每源 10 条要逐条列出')
+        self.assertIn(self.an['per_source'][src['key']]['take'], html,
+                      '每个有内容的源都应有「🤖 人话」一行')
+        self.assertGreaterEqual(html.count('🤖 人话'), 49)
+
+    def test_web_analysis_is_absent_when_there_is_no_reading(self):
+        for payload in ({}, _unavailable_payload(), _stale_payload()):
+            html = rf.render_web(payload)
+            self.assertNotIn('AI 解盘', html, '缺读数/旧快照不得生成解读')
+            self.assertNotIn('一句话：', html)
+            for c in rf.CATALOG:
+                self.assertNotIn(c['name'], html)
+
+    def test_analysis_never_mentions_buy_or_sell_recommendations(self):
+        text = rf.analysis_text(self.data)
+        for bad in ('建议买入', '建议卖出', '目标价 ', '加仓', '减仓', '满仓'):
+            self.assertNotIn(bad, text)
+
+    # ---------- 微信 ----------
+    def test_wechat_keeps_the_digest_in_every_budget_level(self):
+        for level in ('full', 'standard', 'roster', 'compact'):
+            block = html_mod.unescape(rf.render_wechat(self.data, level=level))
+            self.assertIn('AI 解盘', block, f'{level} 档丢了开头的 AI 解盘')
+            self.assertIn('一句话', block, f'{level} 档丢了结论')
+            self.assertIn('不是投资建议', block, f'{level} 档丢了免责声明')
+            for c in rf.CATALOG:
+                self.assertIn(c['name'], block, f'{level} 档不能删源')
+
+    def test_wechat_full_level_shows_per_source_takes(self):
+        block = html_mod.unescape(rf.render_wechat(self.data, level='full'))
+        self.assertGreaterEqual(block.count('🤖 人话'), 49)
+        self.assertNotIn('🤖 人话', rf.render_wechat(self.data, level='compact'),
+                         '缩略档只保结论，逐源人话让位给字符预算')
+
+    def test_wechat_digest_degrades_honestly(self):
+        block = html_mod.unescape(rf.render_wechat({}, level='compact'))
+        self.assertIn('今日未获取', block)
+        self.assertNotIn('AI 解盘', block, '没有读数时不得硬凑解读')
+        self.assertNotIn('一句话', block)
+        for c in rf.CATALOG:
+            self.assertNotIn(c['name'], block)
+
+    def test_cli_prints_the_analysis(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = os.path.join(tmp, 'rss.json')
+            p = subprocess.run(
+                [sys.executable, os.path.join(REPO_ROOT, 'rss_feeds.py'),
+                 '--mock', '--quiet', '--analysis', '--json', out],
+                capture_output=True, text=True, timeout=120, cwd=tmp)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn('AI 解盘', p.stdout)
+            self.assertIn('我的读法', p.stdout)
+            self.assertIn('每源 10 条', rf.text_report(json.load(open(out, encoding='utf-8'))))
+
+    def test_self_test_covers_the_analysis_layer(self):
+        with contextlib.redirect_stdout(io.StringIO()) as buf:
+            self.assertEqual(rf.self_test(), 0)
+        self.assertIn('AI 解盘', buf.getvalue())
 
 
 if __name__ == '__main__':
