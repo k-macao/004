@@ -711,6 +711,7 @@ def build_panorama_html(market_data, macro_data, sentiment_data, community_data,
     print(f'  🌍 已动态注入 01 节全景扫描：{len(scan["forces"])} 大力量 · '
           f'噪音 {len(scan["noise"])} 项 · 覆盖 {int(scan["coverage"] * 100)}% · '
           f'做多合成分 {scan["verdict"]["long_score"]:+.1f}（{scan["verdict"]["stance"]}）')
+    panorama.add_expert_analysis(scan)
     return panorama.render_web(scan)
 
 

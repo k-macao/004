@@ -996,6 +996,7 @@ def build_single_wechat_html(now=None):
     # 第 5 路是 49 源 RSS（05 栏同一份产物）：与网页 01 节共用同一套覆盖度口径。
     _scan = panorama.scan(market=_md, macro=_xd, sentiment=_sd, community=_cd,
                           rss=_rss, now=now)
+    panorama.add_expert_analysis(_scan)
     panorama_block = panorama.render_wechat(_scan, neon=NEON, green=GR, ink=INK)
     print(f'  🌍 微信推送 01 栏：全景扫描输出 {len(_scan["forces"])} 大力量 · '
           f'噪音 {len(_scan["noise"])} 项 · 覆盖 {int(_scan["coverage"] * 100)}% · '

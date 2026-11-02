@@ -21,6 +21,7 @@ import re
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from datetime import datetime, timezone
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -108,6 +109,29 @@ class TestPanoramaRules(unittest.TestCase):
         bear_hk = next(f for f in bear['forces'] if f['key'] == 'hk_tape')
         self.assertNotEqual(panorama._force_summary(bull_hk), panorama._force_summary(bear_hk))
         self.assertNotIn(bull_hk['impact'], panorama.render_web(bull))
+
+    def test_expert_analysis_and_fallback(self):
+        data = panorama.scan(market=BULL, now=NOW)
+        key = data['forces'][0]['key']
+        response = {'choices': [{'message': {'content': json.dumps({key: '基于当次数据，风险仍需观察 <风险>'}, ensure_ascii=False)}}]}
+        stream = io.BytesIO(json.dumps(response, ensure_ascii=False).encode())
+        with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'test-key'}), \
+                mock.patch.object(panorama.urllib.request, 'urlopen', return_value=stream) as call:
+            panorama.add_expert_analysis(data)
+        request = call.call_args.args[0]
+        payload = json.loads(request.data)
+        self.assertEqual(payload['model'], 'deepseek-chat')
+        self.assertIn(key, payload['messages'][1]['content'])
+        self.assertIn('基于当次数据', panorama.render_web(data))
+        self.assertIn('&lt;风险&gt;', panorama.render_wechat(data))
+        self.assertIn('AI 解读未生成', panorama._force_summary(data['forces'][1]))
+
+        fresh = panorama.scan(market=BULL, now=NOW)
+        with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'test-key'}), \
+                mock.patch.object(panorama.urllib.request, 'urlopen', side_effect=OSError('failed')), \
+                contextlib.redirect_stderr(io.StringIO()):
+            panorama.add_expert_analysis(fresh)
+        self.assertIn('AI 解读未生成', panorama._force_summary(fresh['forces'][0]))
 
     def test_direction_follows_the_data_not_a_template(self):
         bull = panorama.scan(market=BULL, now=NOW)['verdict']
