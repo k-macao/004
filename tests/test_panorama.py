@@ -91,6 +91,24 @@ class TestPanoramaRules(unittest.TestCase):
                          '重点关注面必须逐面给结论')
         self.assertIn('can_long', d['verdict'])
 
+    def test_displayed_summary_uses_current_extracted_information(self):
+        bull = panorama.scan(market=BULL, now=NOW)
+        bear = panorama.scan(market=BEAR, now=NOW)
+        for data in (bull, bear):
+            web = panorama.render_web(data)
+            wechat = panorama.render_wechat(data)
+            for force in data['forces']:
+                summary = panorama._force_summary(force)
+                self.assertIn(force['read'].strip().rstrip('；。'), summary)
+                self.assertIn('规则判断：' + force['tier'], summary)
+                self.assertIn('提取信息：', summary)
+                self.assertIn(panorama._esc(summary), web)
+                self.assertIn(panorama._esc(summary), wechat)
+        bull_hk = next(f for f in bull['forces'] if f['key'] == 'hk_tape')
+        bear_hk = next(f for f in bear['forces'] if f['key'] == 'hk_tape')
+        self.assertNotEqual(panorama._force_summary(bull_hk), panorama._force_summary(bear_hk))
+        self.assertNotIn(bull_hk['impact'], panorama.render_web(bull))
+
     def test_direction_follows_the_data_not_a_template(self):
         bull = panorama.scan(market=BULL, now=NOW)['verdict']
         bear = panorama.scan(market=BEAR, now=NOW)['verdict']
@@ -268,7 +286,7 @@ class TestPanoramaRendering(unittest.TestCase):
         page = bs.inject_panorama(tpl, html)
         block = _section_01(page, bs.PANORAMA_MARK, bs.PANORAMA_CLOSE)
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', block))
-        for need in ('推动股价的 5 大力量', '哪些是噪音', '如何利好利空', '是否可以做多',
+        for need in ('推动股价的 5 大力量', '哪些是噪音', 'AI 总结解读', '是否可以做多',
                      '宏观事件', '板块轮动', '情绪变化'):
             self.assertIn(need, plain, f'网页 01 节缺少栏目要素: {need}')
         for bad in FORBIDDEN:
@@ -293,7 +311,7 @@ class TestPanoramaRendering(unittest.TestCase):
 
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html))
         self.assertIn('每日全球全景扫描', plain)
-        for need in ('推动股价的 5 大力量', '哪些是噪音', '如何利好利空', '是否可以做多',
+        for need in ('推动股价的 5 大力量', '哪些是噪音', 'AI 总结解读', '是否可以做多',
                      '宏观事件', '板块轮动', '情绪变化'):
             self.assertIn(need, plain, f'微信 01 栏缺少栏目要素: {need}')
         for bad in OLD_COLUMN:
