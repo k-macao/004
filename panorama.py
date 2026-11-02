@@ -702,6 +702,22 @@ def _ev_line(e):
     return _esc(d + e.get('text', '') + tail)
 
 
+def _force_summary(force):
+    """汇总本次读数和已提取的证据，不引入未核实的市场叙事。"""
+    read = (force.get('read') or '').strip().rstrip('；。')
+    evidence = [e for e in force.get('evidence', []) if e.get('text')]
+    # 优先展示新闻标题；没有新闻时使用行情或其他可核验读数。
+    news = [e for e in evidence if e.get('kind') == 'news']
+    selected = (news or evidence)[:2]
+    facts = '；'.join((f"{md_cn(e['date'])} " if e.get('date') else '') + e['text']
+                     for e in selected)
+    pieces = [read] if read else []
+    if facts:
+        pieces.append('提取信息：' + facts)
+    pieces.append(f"规则判断：{force['tier']}，方向{force['dir_word']}（{force['score']} 分）")
+    return '；'.join(pieces) + '。'
+
+
 HEAD_NOTE = ('口径：力量分 = 45% 幅度 + 30% 印证度 + 25% 时效；'
              '≥55 重点 / 35~55 次要 / <35 或未过噪音阈值均计噪音。')
 
@@ -730,7 +746,7 @@ def render_web(data):
             f'<p class="pub-quote"><strong>归类：</strong>{_esc(f["category"])}　'
             f'<strong>当次读数：</strong>{_esc(f["read"])}</p>'
             + (f'<ul class="pixel-list" style="margin:8px 0 0;">{evs}</ul>' if evs else '')
-            + f'<div class="pub-verdict"><strong style="color:#000;">▶ 如何利好利空：</strong>{_esc(f["impact"])}</div>'
+            + f'<div class="pub-verdict"><strong style="color:#000;">▶ AI 总结解读：</strong>{_esc(_force_summary(f))}</div>'
             + '</div>')
 
     parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化</div>')
@@ -808,7 +824,7 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
             f'{_esc(f["tier"])} · {_esc(f["dir_word"])} · {f["score"]} 分</strong>'
             f'<br/><strong>归类：</strong>{_esc(f["category"])}　<strong>当次读数：</strong>{_esc(f["read"])}'
             + evs
-            + f'<br/><strong style="color:{green};">如何利好利空：</strong>{_esc(f["impact"])}'
+            + f'<br/><strong style="color:{green};">AI 总结解读：</strong>{_esc(_force_summary(f))}'
             + '</div>')
 
     out.append('<br/>' + sub('◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化'))
