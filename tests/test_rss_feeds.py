@@ -1042,6 +1042,87 @@ class TestAiAnalysis(unittest.TestCase):
         self.data = _mock_data()
         self.an = rf.analyze(self.data)
 
+    def test_opportunities_are_conditional_and_rendered(self):
+        self.assertEqual(set(rf.OPPORTUNITY_FRAMEWORK), set(rf.THEME_BY_KEY))
+        self.assertTrue(self.an['themes'])
+        for theme in self.an['themes']:
+            for _, field in rf.RESEARCH_SECTIONS:
+                self.assertTrue(theme[field])
+            self.assertIn('不能判断', theme['pricing'])
+            self.assertIn('待验证', theme['status'])
+        outputs = [rf.analysis_text(self.data), rf.render_analysis_web(self.an),
+                   rf.render_analysis_wechat(self.an, 'standard'),
+                   rf.render_analysis_wechat(self.an, 'full')]
+        for output in outputs:
+            for label, _ in rf.RESEARCH_SECTIONS:
+                self.assertIn(label, output)
+        self.assertNotIn('风险还没被定价', rf.analysis_text(self.data))
+
+    def _model_response(self, data):
+        rows = rf._analysis_input(data)
+        themes = []
+        for t in rf.analyze(data)['themes']:
+            refs = [r['id'] for r in rows if t['key'] in r['themes']][:2]
+            themes.append({'key': t['key'], 'evidence_ids': refs,
+                           'logic': '需求变化可能传导至利润，需核实。',
+                           'opportunity': '若订单兑现，可研究相关行业。',
+                           'validation': '跟踪订单与财报。', 'risk': '若订单下滑，假设失效。'})
+        return {'choices': [{'finish_reason': 'stop', 'message': {
+            'content': json.dumps({'themes': themes}, ensure_ascii=False)}}]}
+
+    def test_deepseek_success_persists_and_renders_without_network(self):
+        data = {**self.data, 'mode': 'live'}
+        response = self._model_response(data)
+        with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'test-only', 'DEEPSEEK_ANALYSIS': '1'}), \
+             mock.patch.object(rf, '_http_post_json', return_value=response) as post:
+            data['investment_analysis'] = rf.generate_investment_analysis(data)
+            self.assertEqual(data['investment_analysis']['status'], 'ok')
+            self.assertEqual(post.call_count, 1)
+        with mock.patch.object(rf, '_http_post_json', side_effect=AssertionError('render network')):
+            an = rf.analyze(json.loads(json.dumps(data)))
+            self.assertEqual(an['engine'], 'deepseek-chat')
+            for output in [rf.render_analysis_web(an), rf.analysis_text(data)] + [
+                    rf.render_analysis_wechat(an, level) for level in ('full', 'standard', 'roster', 'compact')]:
+                self.assertIn('DeepSeek', output)
+                self.assertNotIn('test-only', output)
+            self.assertIn('不能判断', an['themes'][0]['pricing'])
+        data['groups'] = {}
+        self.assertFalse(rf.analyze(data)['available'])
+
+    def test_deepseek_failures_are_safe_and_use_local_rules(self):
+        data = {**self.data, 'mode': 'live'}
+        for response in ({}, {'choices': [{'finish_reason': 'length'}]},
+                         {'choices': [{'finish_reason': 'stop', 'message': {'content': '{}'}}]}):
+            with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'secret', 'DEEPSEEK_ANALYSIS': '1'}), \
+                 mock.patch.object(rf, '_http_post_json', return_value=response):
+                data['investment_analysis'] = rf.generate_investment_analysis(data)
+            self.assertEqual(data['investment_analysis']['status'], 'fallback')
+            self.assertEqual(rf.analyze(data)['engine'], rf.ANALYSIS_ENGINE)
+            self.assertIn('本地规则回退', rf.analysis_text(data))
+        with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'secret'}), \
+             mock.patch.object(rf, '_http_post_json', side_effect=TimeoutError('secret')):
+            record = rf.generate_investment_analysis(data)
+            self.assertNotIn('secret', json.dumps(record))
+
+    def test_deepseek_rejects_invalid_evidence_and_stale_cache(self):
+        data = {**self.data, 'mode': 'live'}
+        rows = rf._analysis_input(data)
+        payload = json.loads(self._model_response(data)['choices'][0]['message']['content'])
+        keys = [t['key'] for t in payload['themes']]
+        payload['themes'][0]['evidence_ids'] = ['NONEXISTENT']
+        with self.assertRaises(ValueError):
+            rf._validate_model_analysis(payload, rows, keys)
+        data['investment_analysis'] = {'status': 'ok', 'fingerprint': 'old', 'themes': []}
+        self.assertIn('资讯已变化', rf.analyze(data)['engine_note'])
+
+    def test_deepseek_mock_disabled_and_missing_key_never_call(self):
+        with mock.patch.object(rf, '_http_post_json', side_effect=AssertionError('network')):
+            self.assertEqual(rf.generate_investment_analysis(self.data)['reason'], 'no_live_evidence')
+            with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': '', 'DEEPSEEK_ANALYSIS': '1'}):
+                self.assertEqual(rf.generate_investment_analysis({**self.data, 'mode': 'live'})['reason'], 'no_key')
+            with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'test', 'DEEPSEEK_ANALYSIS': '0'}):
+                self.assertEqual(rf.generate_investment_analysis({**self.data, 'mode': 'live'})['reason'], 'disabled')
+
     # ---------- 数据契约 ----------
     def test_per_source_limit_is_ten(self):
         self.assertEqual(rf.LIMIT_PER_SOURCE_DEFAULT, 10,
