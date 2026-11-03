@@ -242,9 +242,9 @@ python3 -m unittest tests.test_forecast   # 32 项回归
 网页 / 微信两端渲染全在这里，避免两套口径漂移。网页 05 节对应模板占位区 `<!-- RSSFEEDS -->`
 （哨兵 `<!-- /RSSFEEDS -->` 保证重复构建幂等），微信推送 05 栏由 `fit_rss_block()` 按剩余预算选详略。
 
-### 开头的「AI 解盘」：49 源 × 每源 10 条，说人话（投研大 V 口径）
+### 开头的「AI 解盘」：从资讯看机会，用人话讲透投资逻辑
 
-用户口径：**开头先给 AI 分析**，按**每源 10 条**资讯解读，**说人话**，角色定位是**投研大 V**。
+基于 RSS 每源最多 10 条当次资讯，以本地规则框架输出：**事实 → 分析逻辑 → 潜在机会（待验证）→ 是否已定价 → 验证信号 → 风险与反例**。机会为条件式研究线索，不代表已确认受益；没有实时行情和估值，不断言利好尚未定价。
 
 - **位置**：网页 05 节最上方（`render_analysis_web()`）、微信 05 栏开头（`render_analysis_wechat()`）；
   再往下才是 49 源明细 —— 第一眼看到的是结论，不是标题墙。
@@ -255,9 +255,12 @@ python3 -m unittest tests.test_forecast   # 32 项回归
   ③ 三条主线（「说白了」+「我盯什么」+ 来自**不同源、不重复标题**的两条证据）
   ④ 标题情绪秤 ⑤ 研究动作三条（把新闻变成可核查的问题）⑥ **逐源「🤖 人话」**（这一源这 10 条在讲什么、
   情绪偏哪边、一句话总结）。
-- **「AI」是什么**：`ANALYSIS_ENGINE = local-rules-v1` —— 本地规则引擎（12 条主线 × 中英词典 → 归类 / 计数 →
-  固定句式），**离线、不调用外部大模型、不联网**。它只做「重排事实 + 换成人话」，不能凭空生成观点；
-  句式轮换按「源编号 + 条数」取模，**同一份产物两次解读一字不差**（可回归、可复现）。
+- **「AI」是什么**：实盘抓取后使用 `DEEPSEEK_API_KEY` 调用 DeepSeek Chat API，一次生成三条主线的条件式机会、传导逻辑、验证与反例，并保存到 `rssfeeds_data.json`。本地统计覆盖全部资讯；模型使用每主线最多 12 条去重证据样本，不宣称逐条深读全部 RSS。模型引用必须匹配本次证据 ID，来源/日期由程序回填；结构校验不能保证观点正确，仍需人工复核。失败、无密钥、关闭或缓存与资讯不匹配时，回退 `local-rules-v2` 并标注原因。渲染不会重复调用 API。
+  - 默认模型 `deepseek-chat`；可用 `DEEPSEEK_ANALYSIS_MODEL` 调整。
+  - `DEEPSEEK_ANALYSIS=0` 关闭分析调用（与资讯检索开关独立）。
+  - `DEEPSEEK_ANALYSIS_TIMEOUT` 默认 45 秒，最大 90 秒；每轮最多调用一次，不重试。
+  - mock / offline 不调用大模型。密钥仅从环境变量读取，不保存进 JSON 或前端。
+
 - **红线**：只读当次 `items_list` 的 title / snippet；数字全部算出来（源数、条数、命中数）；
   不给目标价、不荐股、不预测点位；缺产物 / 窗口内 0 条 / 旧快照 → **不生成解读**（不硬凑、不回填）；
   网页与微信两端都固定带免责声明。
@@ -657,7 +660,7 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `macro_data.availability()` | **02 栏兜底口径的单一事实源**：判定本次到底有没有可用快讯，返回 `reason` ∈ `no_file`（文件读不到）/ `bad_type`（产物写坏被截断）/ `no_items`（窗口内 0 条，公开源全挂或全部超窗）/ `stale_snapshot`（读到前几天构建的旧快照，超过 `SNAPSHOT_MAX_AGE_DAYS=1`）。网页与微信两端共用，避免两套渲染各写一套口径而漂移 |
 | `tests/test_macro_data.py` | 快讯层测试（16 项，零联网）：RSS/JSONP 解析、跨源去重、分类路由（IMF+关税 必须落宏观而非大宗）、超窗与无日期拦截、`--mock` 输出契约 |
 | `tests/test_wechat_push_macro.py` | 宏观快讯渲染回归（推送 02 栏 + 网页 02 节，9 项）：必须渲染当次快讯且每条带日期；**四种不可用形态都要落到同一段「今日未获取」兜底文案**；过期快照不得从 01 / 07 栏漏出；网页 `MACROLIST` 注入幂等；正文/注入区禁止再出现 628.69 亿、8 月 12 日、25,440.17 等写死历史内容 |
-| `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（**并发 8 路**、超时、逐端点回退、RSSHub 实例可换、每轮请求上限、`--budget` 软墙钟）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、**开头 AI 解盘层**（`analyze()` / `analysis_text()` / `render_analysis_web()` / `render_analysis_wechat()`：每源 10 条 → 一句话结论 + 三条主线 + 逐源人话，本地规则引擎 `local-rules-v1`，不调外部大模型）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--budget` / `--text` / `--analysis` / `--limit` / `--self-test` |
+| `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（**并发 8 路**、超时、逐端点回退、RSSHub 实例可换、每轮请求上限、`--budget` 软墙钟）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、**开头 AI 解盘层**（`analyze()` / `analysis_text()` / `render_analysis_web()` / `render_analysis_wechat()`：每源 10 条 → 一句话结论 + 三条主线 + 逐源人话，DeepSeek 优先 / 本地规则 `local-rules-v2` 回退）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--budget` / `--text` / `--analysis` / `--limit` / `--self-test` |
 | `docs/rss-49-feeds.md` | **49 源目录与端点核对表**（`python3 rss_feeds.py --catalog-md docs/rss-49-feeds.md` 生成，禁止手改）：六大板块逐源列语种 / 主端点 / 回退端点 / 核验状态 / 口径说明；`tests/test_rss_feeds.py` 断言文档与 `CATALOG` 不漂移 |
 | `tests/test_rss_feeds.py` | **05 栏回归（79 项，零联网）**：目录就是那份 49 源清单（10-10-11-8-6-4、编号 1..49、无裸域名、必备源齐全）、三种报文解析与端点回退、超窗丢弃 + 无日期永不冒充最新、四种不可用形态统一兜底（缺产物/写坏/0 条/旧快照，且**不得出现任何历史标题**）、网页 `RSSFEEDS` 注入幂等且不串进 02 节、微信 05 栏预算降级（完整→标准→名录→缩略）**一源不删**且整页仍在 95,000 门禁内、渲染路径绝不联网、`build_site.py` 端到端补抓落盘、**开头 AI 解盘**（每源 10 条 / 确定性 / 证据只用真实条目且不同源 / 各档不丢结论 / 缺数据不硬编 / 无买卖字样） |
 | `community_data.py` | **社区数据层**：49 源经多方案评论采样与 Scrapling 公开页回退生成记录；失败标为未获取；`reanalyze_snapshot()` 根据已存文本重算，`offline_dataset()` 提供 49 源未获取兜底。 |
