@@ -78,7 +78,7 @@ except Exception:                                          # 注册表缺失/异
             in ('1', 'true', 'yes', 'on')
 
 SOURCE_HTML = os.path.join(REPO_ROOT, 'report.html')
-PAGES_URL = 'https://k-macao.github.io/03/'
+PAGES_URL = 'https://k-macao.github.io/004/'
 PUSH_URL = 'https://www.pushplus.plus/send'
 TITLE = '章鱼 AI·舆情004'
 # 解除限制，支持 100,000 字符
