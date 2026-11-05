@@ -263,6 +263,7 @@ jobs:
       # 可选:在仓库 Settings → Secrets 配置 PUSHPLUS_TOKEN 可覆盖
       # report.html 中的 token;不配置时自动从 report.html 读取
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4
@@ -376,6 +377,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+      DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
     steps:
       - name: 📥 检出仓库
         uses: actions/checkout@v4

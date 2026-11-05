@@ -185,6 +185,41 @@ class TestEveryStepHasRunOrUses(unittest.TestCase):
                                     '%s 的 step 数异常少: %s' % (job, count))
 
 
+class TestDeploymentGateAndEnvironment(unittest.TestCase):
+    """Keep the mirror repair from becoming a bypass of the deployment gate."""
+
+    def test_push_jobs_keep_deepseek_environment_in_both_copies(self):
+        # Regression: these two mappings existed only in the live workflow.
+        # The resulting mirror mismatch stopped deploy before building Pages.
+        for path in (WORKFLOW, CANONICAL):
+            text = ''.join(read_lines(path))
+            chunks = re.split(r'\n  (?:community_snapshot|deploy|wechat|daily):', text)[1:]
+            self.assertEqual(4, len(chunks), path)
+            for job, chunk in zip(('community_snapshot', 'deploy', 'wechat', 'daily'), chunks):
+                if job in ('wechat', 'daily'):
+                    with self.subTest(path=path, job=job):
+                        self.assertIn('DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}', chunk)
+
+    def test_full_tests_still_run_before_build_and_pages_upload(self):
+        # iter_steps intentionally omits block-scalar bodies, so inspect the
+        # actual command lines within the deploy job for this ordering check.
+        lines = read_lines(WORKFLOW)
+        start = lines.index('  deploy:\n')
+        end = lines.index('  wechat:\n', start)
+        deploy = lines[start:end]
+        def command_line(token):
+            matches = [i for i, line in enumerate(deploy) if token in line]
+            self.assertEqual(1, len(matches), 'deploy must retain exactly one ' + token)
+            return matches[0]
+        tests = command_line('python3 -m unittest discover -s tests')
+        build = command_line('run: python3 build_site.py')
+        upload = command_line('uses: actions/upload-pages-artifact@v3')
+        publish = command_line('uses: actions/deploy-pages@v4')
+        self.assertLess(tests, build)
+        self.assertLess(build, upload)
+        self.assertLess(upload, publish)
+
+
 class TestWorkflowStillDoesItsJob(unittest.TestCase):
     """光「文件合法」不够 —— daily job 被截掉后半段时也可能凑出合法文件。"""
 
