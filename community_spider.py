@@ -425,6 +425,7 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                         verbose: bool = True, backend: str = 'auto',
                         autothrottle: bool = True, max_blocked_retries: int = 2,
                         download_delay: float = 0.15, now=None, comment_strategies: bool = True,
+                        plan_strategies: bool = True,
                         post_limiter=None):
     """跑一轮社区抓取：返回 (结果字典, 统计字典)。
 
@@ -540,10 +541,60 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
             'comment_attempt': outcome['attempt'],
         }
 
+    # 逐源独立方案（community_plans）：RSS 优先、专用适配器与通用摘录都没拿到合格证据的源，
+    # 按该源自己的端点链逐级再试一遍。已经有评论/热帖回复的源不覆盖——方案只补强，不降级。
+    plan_stats = {'attempted_sources': 0, 'plan_sources': 0, 'matched_comments': 0,
+                  'requests_count': 0, 'attempts': {}}
+    if plan_strategies:
+        try:
+            import community_plans as plans_mod
+            targets = []
+            for community in communities:
+                key = community.get('key')
+                if not key or key in rss_ok_keys:
+                    continue
+                if plans_mod.should_run_plan(spider.results.get(key), plans_mod.plan_for(community)):
+                    targets.append(community)
+            if targets:
+                # 步间隔沿用调用方的 download_delay：方案层发的是源级列表/订阅请求，
+                # 与既有爬虫同一套礼貌口径；帖详情的 10 秒间隔仍由 post_limiter 管。
+                outcomes, plan_stats = plans_mod.run_plans(
+                    targets, session, timeout=timeout, now=now,
+                    budget=plans_mod.PlanBudget(step_delay=download_delay),
+                    skip_kinds=(plans_mod.STEP_ADAPTER,), verbose=verbose)
+                for key, outcome in outcomes.items():
+                    item = spider.results.get(key)
+                    if item is None:
+                        continue
+                    item['plan_attempt'] = outcome['attempt']
+                    comments = outcome['comments']
+                    if not comments:
+                        continue
+                    # 适配器已经拿到评论/热帖回复时，方案的较弱证据不覆盖较强证据。
+                    if item.get('ok') and item.get('content_kind') not in (None, '', 'page_excerpt'):
+                        continue
+                    first = comments[0]
+                    item.update({
+                        'ok': True, 'http_ok': True,
+                        'status': first.get('http_status') or item.get('status') or 0,
+                        'bytes': first.get('response_bytes') or item.get('bytes') or 0,
+                        'url': first['url'], 'title': first['post_title'], 'snippet': first['text'],
+                        'topic_hits': count_topic_hits(first['post_title'] + ' ' + first['text']),
+                        'selector': first['strategy'], 'adaptive': False, 'error': '',
+                        'content_kind': first['kind'], 'strategy': first['strategy'],
+                        'comments': comments,
+                        'matched_comments': outcome['attempt'].get('matched_comments', 0),
+                    })
+        except Exception as exc:  # 方案层是补强路径，任何异常都不得打断整轮采集
+            plan_stats['error'] = type(exc).__name__
+            if verbose:
+                print(f'  ⚠️ 逐源方案链失败（{type(exc).__name__}），保留既有结果', file=sys.stderr)
+
     stats = result.stats.to_dict()
     for field in ('requests_count', 'blocked_requests_count', 'robots_disallowed_count',
                   'failed_requests_count', 'response_bytes'):
         stats[field] = stats.get(field, 0) + comment_stats.get(field, 0)
+    stats['requests_count'] = stats.get('requests_count', 0) + plan_stats.get('requests_count', 0)
     for status, count in comment_stats.get('response_status_count', {}).items():
         status_counts = stats.setdefault('response_status_count', {})
         status_counts[status] = status_counts.get(status, 0) + count
@@ -551,6 +602,7 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     stats['elapsed_seconds'] = round(elapsed, 2)
     stats['requests_per_second'] = round(stats['requests_count'] / elapsed, 2) if elapsed else 0
     stats['comment_fetch'] = comment_stats
+    stats['plan_fetch'] = plan_stats
     stats.update({
         'engine': sc.ENGINE_NAME,
         'backend': backend_name,

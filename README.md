@@ -463,6 +463,62 @@ Reddit 可选：安装 `praw==8.0.3` 并在环境中提供 `REDDIT_CLIENT_ID`、
 | 48 | Wallstreet-Online | 德文 | 德文社区 |
 | 49 | 阿斯达克财经 · 讨论区 | 繁体中文 | 香港本地财经社区 |
 
+### 逐源独立抓取方案（49 源各一条端点链，2026-11-06）
+
+在此之前，49 源里只有 5 类有专用采样（PTT / LIHKG / Bogleheads / Discuss.com.hk / Reddit×4）、
+7 源配了 RSS，**其余 40 多个源共用一条通用阶梯**（一组 CSS 选择器 + 通用片段回捞 + 自适应指纹）。
+共用阶梯的毛病是「一源坏，坏得没有名字」：日志里只有 `status=0 / error=no_response`，
+看不出这个源该走哪个端点、为什么走不通、还有没有别的路。
+
+现在每个源都有一份**独立、可单独核对**的方案（`community_plans.py` 的 `PLANS`，唯一事实源）：
+
+| 步骤类型 | 含义 | 举例 |
+|---|---|---|
+| `adapter` | 已有专用适配器，方案层只登记不重复打 | PTT 推噓采样、LIHKG JSON、phpBB/Discuz 两阶段、PRAW |
+| `rss` | 站点官方订阅出口 | Discuss `rss.php?fid=115`、Bogleheads `rss.php?f=10`、Reddit `.rss`、MarketWatch 道琼斯出口 |
+| `json_api` | 站点公开接口（响应结构对着上游源码核对） | 雪球 `query/v1/symbol/search/status`、StockTwits `streams/symbol/HSI.json` |
+| `rsshub` | RSSHub 路由，按实例链轮换 | `/wallstreetcn/live/global/2`、`/cls/telegraph`、`/gelonghui/live`、`/baidu/tieba/forum/股票` |
+| `html` | 公开页面结构化摘录（可给多个候选 URL） | discuss.com.hk **archiver 轻量列表**、XenForo 论坛首页、jisilu 广场 |
+| `carrier` | Google News 检索载体（如实标注为聚合检索） | X/知乎/微博/小红书/抖音这类需登录或纯前端渲染的源 |
+
+**执行口径**：逐级尝试，**第一个产出合格证据的步骤胜出**，后续步骤不再发请求；每源最多尝试
+`PLAN_MAX_STEPS`（默认 3）个步骤，整轮请求预算 90 次、墙钟预算 420 秒（`COMMUNITY_PLAN_*` 可调），
+避免 49 源 × 多步链把 CI 的社区 job 拖到超时。所有条目仍要命中财经主题词并落在 7 天窗口内，
+抓不到就标「未获取」，**绝不回填历史内容**。
+
+**只补强，不降级**：适配器或 RSS 优先已经拿到评论/热帖回复（`content_kind` ≠ `page_excerpt`）的源，
+方案链不会跑，也不会用较弱证据覆盖较强证据；只有「未获取」或「只有通用页面摘录」的源才继续往下试。
+
+**端点核验方式**（本执行环境只能出网到 GitHub / PyPI / npm，**不能直连目标站点**，因此没有在线实测）：
+用 GitHub API 取 RSSHub 全量路由树 + 逐条读取路由源码的 `export const route` 块
+（`path` / `example` / `parameters` / `features.requireConfig` / `features.antiCrawler`），
+基准钉在 `DIYgod/RSSHub` @ `4be79cd40cae69ce68b7837f927b63cdab7be719`。
+逐源核对表见 [docs/community-49-plans.md](docs/community-49-plans.md)，
+路由证据见 [docs/community-49-routes.md](docs/community-49-routes.md)（两份都由代码生成，禁止手改）。
+
+几条核对出来的硬结论，直接写进了方案而不是靠猜：
+
+- **已核对 RSSHub 无路由**的站点（reddit / ptt / lihkg / stocktwits / bogleheads / WSO / investing.com /
+  quantnet / elitetrader / forexfactory / morningstar / marketwatch / wallstreet-online / aastocks /
+  蚂蚁财富 / 韭圈儿 / 开盘啦 / 理想论坛 / VIC / Yahoo! JP 财经）方案里**不写 RSSHub 步骤**，
+  改走官方订阅 / 公开接口 / 页面摘录 / 检索载体；`tests` 会钉住这一点，防止凭印象写出不存在的路由。
+- **需密钥的路由不算稳定路径**：`/twitter/keyword`、`/zhihu/topic`、`/weibo/keyword`、
+  `/xiaohongshu/user`、`/douyin/hashtag` 上游都要求 Cookie/Token，方案里显式 `needs_config`，
+  并且**排在免密钥的检索载体之后**、绝不作为链条最后一步；未配置时如实记 `not_configured`，不发请求。
+  因此这 5 个源在默认配置下的「方案强度」如实归为 `excerpt_only`，不虚报。
+- **discuss.com.hk 的 archiver 轻量列表**（`/archiver/?fid-115.html`）比主站 Discuz 页对反爬更友好，
+  这是从上游路由实现里读出来的，已作为该源的第 3、4 级路。
+- **雪球个股讨论接口**（`sort=time`）是公开、免 Cookie 的，但**不提供点赞数**，
+  因此热度指标一律记 0 并在标签里写明「接口未提供点赞数」，不编造榜单。
+
+```bash
+python3 community_plans.py --self-test        # 49 源方案覆盖 + 逐源端点链一览（离线）
+python3 community_plans.py --only XUEQIU      # 看单个源的完整方案
+python3 community_plans.py --plans-md docs/community-49-plans.md   # 重新生成逐源核对表
+python3 community_plans.py --routes-md docs/community-49-routes.md # 重新生成路由证据快照
+python3 -m unittest tests.test_community_plans # 47 项：注册表 / 诚实口径 / 降级 / 零联网 / 管线接入
+```
+
 ### 抓取口径：Scrapling 框架模型（分析 → 移植 → 落地）
 
 上游 [Scrapling](https://github.com/D4Vinci/Scrapling)（BSD-3-Clause，v0.4.15）用
@@ -555,7 +611,9 @@ CI 日志会打印当天落在哪一档：`✂️ 微信推送 03 栏：49 源�
 python3 community_data.py --demo              # 49 源离线模板（当天日期）
 python3 scrapling_core.py --self-test         # 移植层：CSS / 自适应 / 限速 / robots / 指纹
 python3 community_spider.py --self-test       # 爬虫：抽取 / 噪音淘汰 / 封锁降级
+python3 community_plans.py --self-test        # 49 源逐源方案：覆盖率 + 端点链 + 强度
 python3 -m unittest tests.test_community49    # 源数 / 类型 / 预算 / 不删源 / 框架接入
+python3 -m unittest tests.test_community_plans # 47 项：方案注册表 / 诚实口径 / 降级 / 零联网 / 接入
 python3 -m unittest tests.test_scrapling_core # 26 项：Fetcher / Selector / 自适应 / 引擎
 ```
 
@@ -684,6 +742,10 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `scrapling_core.py` | **Scrapling 框架模型移植（纯标准库，API 与上游一一对应）**：`FetcherSession`/`Response`（浏览器指纹头、重试退避、重定向历史、编码识别、代理轮换）、`Selector`/`Selectors`（CSS 子集、`get_all_text`、HTML→Markdown、选择器生成）、`AdaptiveStorage`（元素指纹入库 + `difflib` 相似度回捞）、`Scheduler`/`AutoThrottle`/`RobotsTxtManager`/`DevCache`/`CheckpointManager`/`Spider`/`CrawlerEngine`/`CrawlStats`。`python3 scrapling_core.py --self-test` |
 | `community_spider.py` | **社区爬虫（49 源）**：公开页 CSS 摘录与自适应回捞，调用评论适配器并优先采用有来源的评论样本；失败不编造内容。可用 `--backend scrapling` 切换可选静态传输层。 |
 | `community_comments.py` | **多方案评论适配器**：PTT 列表/回复、LIHKG 财经台 JSON 与可选 PRAW Reddit API；限量采样、去重、标注各自的热度、时间和来源。 |
+| `community_plans.py` | **49 源逐源独立抓取方案（唯一事实源 `PLANS`）**：每源一条有序端点链（`adapter` → `rss` → `json_api` → `rsshub` → `html` → `carrier`），第一个产出合格证据的步骤胜出；RSSHub 路由逐条对着上游源码核对（`ROUTE_EVIDENCE` + `RSSHUB_UPSTREAM` 钉住 commit），已核对无路由的站点绝不写 RSSHub 步骤（`RSSHUB_ABSENT`）；专属解析器只实现已核对响应结构的接口（雪球个股讨论、StockTwits symbol stream）；每源步数、整轮请求数与墙钟三重预算；`should_run_plan()` 保证**只补强不降级**（已有评论/热帖回复不被较弱摘录覆盖）；`--self-test` / `--only KEY` / `--plans-md` / `--routes-md` / `--json` / `--text` |
+| `docs/community-49-plans.md` | **49 源逐源方案核对表**（`python3 community_plans.py --plans-md …` 生成，禁止手改）：每源列目录 URL / 一句话方案 / 强度 / 限制，以及逐步的类型、核验状态、端点与口径说明；末尾附 RSSHub 路由证据表与「已核对无路由的站点」清单 |
+| `docs/community-49-routes.md` | **RSSHub 路由核对快照**（同由代码生成）：路由 → 上游文件（`lib/routes/`）→ 用在哪些源；上游基准 commit 与核对方式写在文件头，未被任何源使用的证据行如实标「—」 |
+| `tests/test_community_plans.py` | **逐源方案回归（47 项，零联网）**：49 源一一对应且每源 ≥2 级路、端点必须是可解析绝对目标（禁裸域名/占位域名/本机/凭据）、最后一步不得依赖密钥、检索载体永不冒充评论、`no_public_feed` 标记与步骤类型一致、已核对无路由的 25 源绝不出现 RSSHub 步骤、路由必须能还原到已核对的上游模式（最长前缀匹配）、适配器只登记给真有适配器的 8 源、方案强度忽略 `needs_config` 步骤、逐级降级与端点内回退、超窗/未来/非财经条目一律拒绝、未配置密钥的步骤不发请求、预算与步数上限、失败即「未获取」而非编造、导入与目录/渲染路径零联网、生成文档与注册表不漂移、管线只补强不降级 |
 | `tests/test_community_comments.py` | **离线回归**：三种方案、登录/限流与 robots 降级、排序、时效、样本口径、原帖链接与网页/微信渲染。 |
 | `tests/test_sentiment.py` | 舆情层测试（38 项，零联网）：`python3 -m unittest discover -s tests`；含「03B 对外输出不得出现任何来源痕迹」与「采集结果必须匹配到日报标的」两类回归 |
 | `char_charts.py` | **微信字符配图**：把力量分、涨跌幅、社区构成、舆情读数、**AI 预测（预期涨跌幅发散柱 + 置信度柱）与预测命中率回看**画成 matplotlib 同款的柱状/发散/堆叠字符图。缺数据不编柱。`python3 char_charts.py --self-test` |
