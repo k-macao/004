@@ -16,9 +16,12 @@ from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from verify_quotes import verify_data, verify_item, run_preflight, report_text  # noqa: E402
+from verify_quotes import (  # noqa: E402
+    verify_data, verify_item, run_preflight, report_text, _split_pct_gap,
+)
 
 FD = '2026-09-16'
+CI_FD = '2026-11-06'      # 2026-11-06 VIX 误阻断现场 (CI run 42200783483)
 
 
 def q(last, prev, chg=None, pct=None, as_of=FD):
@@ -212,6 +215,148 @@ class TestDegradedPaths(unittest.TestCase):
                            [lambda: probe(24200.0, as_of='2026-09-17')], FD)
         self.assertEqual(item['verdict'], 'warn')
         self.assertFalse(any(c['severity'] == 'fail' for c in item['checks']))
+
+
+class TestPctGapAttribution(unittest.TestCase):
+    """涨跌幅偏差归因 (2026-11-06 CI run 42200783483 · VIX 误阻断推送)。
+
+    现场数字: 流水线 VIX last=25.95 pct=−7.91%；yahoo last=26.07 pct=−7.49%。
+    两侧反推昨收 28.1790 / 28.1807，相差 0.0018 (0.006%) —— 昨收基准完全一致。
+    点位偏差 0.462% 通过 0.5% 闸门，涨跌幅偏差 0.42pp 却撞上 0.35pp 闸门被判
+    FAIL 并阻断推送。但 0.42pp 正是那个已被放行的点位偏差的算术必然:
+        pct_dev_pp = level_dev_% × (last/prev) = 0.462% × 0.9209 = 0.4258pp
+    两道闸门在同一个偏差上互相矛盾，故必须先归因再判罚。
+    """
+
+    # CI 现场数字 (原样照抄, 不合成)
+    CI_LAST, CI_PCT = 25.95, -7.91
+    CI_PREV = 28.18                       # (25.95 − 28.18)/28.18 = −7.9134% → −7.91
+    YH_LAST, YH_PCT = 26.07, -7.49
+
+    def ci_quote(self):
+        return q(self.CI_LAST, self.CI_PREV, as_of=CI_FD)
+
+    def ci_probes(self):
+        return [lambda: probe(self.YH_LAST, pct=self.YH_PCT, as_of=CI_FD,
+                              source='yahoo', family='yahoo')]
+
+    def ci_fleet(self):
+        """12 个标的 as_of 全部对齐 CI_FD。
+
+        fleet() 默认 as_of=2026-09-16，若直接把 fetch_date 换成 CI_FD，其余 11 个
+        标的会因距抓取日期 51 天 > MAX_AGE_DAYS(5) 被判陈旧 FAIL —— 那会掩盖本
+        类要验的 VIX 归因行为，端到端断言就成了假失败。
+        """
+        data = fleet({'VIX': self.ci_quote()})
+        data['fetch_date'] = CI_FD
+        for qt in data['quotes'].values():
+            qt['as_of'] = CI_FD
+        return data
+
+    def test_ci_quote_reproduces_the_reported_percentage(self):
+        """构造的 quote 必须真的算出 CI 日志里的 −7.91%，否则测试是自说自话。"""
+        qt = self.ci_quote()
+        self.assertEqual(qt['pct'], self.CI_PCT)
+        self.assertEqual(round(qt['last'] - qt['prev_close'], 2), -2.23)
+
+    def test_split_identity_is_exact(self):
+        """前收口径效应 + 点位快照效应 ≡ p′ − p (恒等式, 非近似)。"""
+        for last, prev, pl, pp in [
+            (self.CI_LAST, self.CI_PREV, self.YH_LAST, self.YH_PCT),   # 本次误阻断
+            (24713.78, 25274.96, 24713.78, 0.19),                      # 2026-09-16 事故
+            (17.20, 34.106, 17.20, 1.715),                             # VIX −49.57% 事故
+            (100.0, 100.0, 101.0, 1.0),                                # 纯点位漂移
+        ]:
+            prev_eff, level_eff = _split_pct_gap(last, prev, pl, pp)
+            exact = pp - (last - prev) / prev * 100
+            self.assertAlmostEqual(prev_eff + level_eff, exact, delta=1e-3,
+                                   msg=f'恒等式不成立: {last}/{prev} vs {pl}/{pp}')
+
+    def test_ci_vix_drift_is_warn_not_fail(self):
+        """昨收基准一致的快照漂移 → WARN 放行，不再阻断推送。"""
+        item = verify_item('VIX', self.ci_quote(), self.ci_probes(), CI_FD)
+        self.assertEqual(item['verdict'], 'warn')
+        self.assertFalse(any(c['severity'] == 'fail' for c in item['checks']),
+                         '昨收基准一致时不得判 FAIL 阻断推送')
+        rec = item['sources'][0]
+        self.assertTrue(rec['agree_level'])
+        self.assertFalse(rec['agree_pct'])
+        self.assertTrue(rec['pct_gap_explained_by_level'])
+        # 偏差几乎全部落在点位快照效应上，前收口径效应近零
+        self.assertLess(abs(rec['pct_prev_effect_pp']), 0.05)
+        self.assertGreater(rec['pct_level_effect_pp'], 0.4)
+
+    def test_explained_gap_stays_visible_in_report(self):
+        """放行不等于静默: 分解明细必须出现在人读报告里。"""
+        data = self.ci_fleet()
+        report = verify_data(data, probes_by_key={'VIX': self.ci_probes()}, fetch_date=CI_FD)
+        text = report_text(report)
+        self.assertNotIn('已阻断推送', text)
+        self.assertIn('前收口径效应', text)
+        self.assertIn('点位快照效应', text)
+        self.assertIn('非口径矛盾', text)
+
+    def test_preflight_allows_push_on_ci_numbers(self):
+        """端到端: CI 现场的 VIX 数字不再让 run_preflight 阻断推送。"""
+        import verify_quotes as vq
+        data = self.ci_fleet()
+        with tempfile.NamedTemporaryFile('w', suffix='.json', delete=False,
+                                         encoding='utf-8') as f:
+            json.dump(data, f)
+            path = f.name
+        try:
+            orig = vq.default_probes
+            vq.default_probes = lambda key, fd=None: (
+                self.ci_probes() if key == 'VIX' else [])
+            try:
+                ok = vq.run_preflight(data_path=path)
+            finally:
+                vq.default_probes = orig
+            self.assertTrue(ok, '昨收基准一致的快照漂移不应阻断推送')
+        finally:
+            os.unlink(path)
+
+    def test_prev_close_basis_error_still_fails_when_level_matches(self):
+        """归因不得放走真错误: 点位完全一致 (偏差 0%) 但昨收基准错 → 仍 FAIL。
+
+        这是 2026-09-16 恒指事故的形态 —— 点位与来源分毫不差，2.41pp 偏差
+        100% 来自前收口径。本例证明修复没有削弱闸门的抓错能力。
+        """
+        item = verify_item('HSI', q(24713.78, 25274.96, as_of=CI_FD),
+                           [lambda: probe(24713.78, pct=0.19, as_of=CI_FD,
+                                          source='yahoo', family='yahoo')], CI_FD)
+        rec = item['sources'][0]
+        self.assertEqual(rec['level_diff_pct'], 0.0)     # 点位毫无偏差
+        self.assertTrue(rec['agree_level'])
+        self.assertFalse(rec['agree_pct'])
+        self.assertFalse(rec.get('pct_gap_explained_by_level'),
+                         '前收口径效应超差时不得判定为「已由点位解释」')
+        self.assertGreater(abs(rec['pct_prev_effect_pp']), 2.0)
+        self.assertEqual(item['verdict'], 'fail')
+        self.assertTrue(any(c['name'] == 'sources' and c['severity'] == 'fail'
+                            for c in item['checks']))
+
+    def test_explanation_requires_level_agreement(self):
+        """点位本身已超差时，即便前收口径效应为 0 也不得豁免 —— 仍按矛盾判罚。"""
+        item = verify_item('HSI', q(100.0, 100.0, as_of=CI_FD),
+                           [lambda: probe(101.0, pct=1.0, as_of=CI_FD,
+                                          source='yahoo', family='yahoo')], CI_FD)
+        rec = item['sources'][0]
+        self.assertFalse(rec['agree_level'])             # 点位偏差 1% > 0.5%
+        self.assertLess(abs(rec['pct_prev_effect_pp']), 1e-6)   # 前收口径完全一致
+        self.assertFalse(rec.get('pct_gap_explained_by_level'))
+        self.assertEqual(item['verdict'], 'fail')
+
+    def test_attribution_needs_a_usable_prev_close(self):
+        """无可信前收时无法归因 → 保持原判罚，不得凭猜测放行。"""
+        quote = {'last': 25.95, 'prev_close': None, 'chg': None,
+                 'pct': self.CI_PCT, 'as_of': CI_FD}
+        item = verify_item('VIX', quote, self.ci_probes(), CI_FD)
+        rec = item['sources'][0]
+        self.assertNotIn('pct_gap_explained_by_level', rec)
+        self.assertTrue(any(c['name'] == 'internal_math' and c['severity'] == 'fail'
+                            for c in item['checks']))
+        self.assertEqual(item['verdict'], 'fail')
 
 
 if __name__ == '__main__':
