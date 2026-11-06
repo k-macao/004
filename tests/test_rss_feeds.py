@@ -1021,6 +1021,26 @@ class TestSuiteStaysHermetic(unittest.TestCase):
             '这些用例会以默认路径跑 build_site/wechat_push，CI 有出口时会把 '
             'rssfeeds_data.json 写进仓库根 → 请补 --rss <临时路径> 或 --rss-no-fetch')
 
+    def test_subprocess_callers_isolate_forecast_history(self):
+        offenders = []
+        for name in sorted(os.listdir(self.TESTS_DIR)):
+            if not name.startswith('test_') or not name.endswith('.py'):
+                continue
+            with open(os.path.join(self.TESTS_DIR, name), encoding='utf-8') as f:
+                source = f.read()
+            for block in self._spawns(source):
+                if 'build_site.py' not in block:
+                    continue
+                if ('--forecast-no-history' in block
+                        or '--forecast-history' in block
+                        or '--check' in block):
+                    continue
+                offenders.append('{}: {}'.format(name, ' '.join(block.split())[:160]))
+        self.assertEqual(
+            offenders, [],
+            '这些用例会以默认路径跑 build_site.py，在仓库根创建或污染 forecast_history.json '
+            '→ 请补 --forecast-no-history 或 --forecast-history <临时路径>')
+
     def test_inprocess_callers_disable_rss_fetch(self):
         """直接调 main() 的用例（不走 subprocess）也必须显式关掉补抓。"""
         for name in ('test_community_snapshot.py', 'test_wechat_push_mode.py'):

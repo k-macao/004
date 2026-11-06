@@ -206,6 +206,9 @@ class TestRenderTimeAnalysis(unittest.TestCase):
               mock.patch.object(wp, 'load_market_data', return_value={}),
               mock.patch.object(wp, 'load_sentiment_data', return_value={}),
               mock.patch.object(wp, 'load_macro_data', return_value={}),
+              mock.patch.object(wp, 'load_rss_feeds', return_value={}),
+              mock.patch.object(wp.forecast_mod, 'review_from_history',
+                                return_value=wp.forecast_mod.empty_review()),
               mock.patch.object(cd, 'analyze_live_snippet', wraps=cd.analyze_live_snippet) as analyze,
               mock.patch.object(cd.spider_mod, 'fetch_live_snippets', side_effect=AssertionError('network')),
               contextlib.redirect_stdout(io.StringIO())):

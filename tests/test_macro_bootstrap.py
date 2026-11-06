@@ -289,7 +289,8 @@ class TestWechatAndWebShareBootstrappedData(unittest.TestCase):
         # 否则残留的 SENTIMENT_DATA 会污染后续 test_sentiment（它依赖仓库根目录的真实产物）。
         missing = os.path.join(self._tmp.name, 'missing.json')
         guard = _EnvGuard({'MARKET_DATA': missing, 'COMMUNITY_DATA': missing,
-                           'SENTIMENT_DATA': missing})
+                           'SENTIMENT_DATA': missing, 'RSSFEEDS_DATA': missing,
+                           'FORECAST_HISTORY': missing, 'RSSFEEDS_AUTO_FETCH': '0'})
         guard.__enter__()
         self.addCleanup(guard.restore)
 
@@ -343,13 +344,13 @@ class TestBuildSiteEndToEnd(unittest.TestCase):
         self.missing = os.path.join(self._tmp.name, 'missing.json')
 
     def _run(self, *extra):
-        # Only macro bootstrap is under test; RSS must stay offline even in CI.
+        # Only macro bootstrap is under test; RSS and forecast history must stay isolated in CI.
         result = subprocess.run(
             [sys.executable, os.path.join(REPO_ROOT, 'build_site.py'),
              '--template', os.path.join(REPO_ROOT, 'report.html'),
              '--out', self.out, '--data', self.missing, '--community', self.missing,
              '--sentiment', self.missing, '--macro', self.macro,
-             '--rss', self.rss, '--rss-no-fetch', *extra],
+             '--rss', self.rss, '--rss-no-fetch', '--forecast-no-history', *extra],
             capture_output=True, text=True, timeout=180,
             env=dict(os.environ, GITHUB_ACTIONS='true', MACRO_AUTO_FETCH='0', RSSFEEDS_AUTO_FETCH='1'),
             cwd=self._tmp.name)

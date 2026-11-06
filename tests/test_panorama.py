@@ -324,10 +324,15 @@ class TestPanoramaRendering(unittest.TestCase):
         self.assertEqual(again.count(bs.PANORAMA_CLOSE), 1)
 
     def test_wechat_section_replaces_old_column(self):
+        missing = os.path.join(self._tmp.name, 'missing.json')
         env = {'MARKET_DATA': self._write('market_data.json', BULL),
                'MACRO_DATA': self._write('macro_data.json', self.macro),
                'SENTIMENT_DATA': self._write('sentiment_data.json', self.sent),
-               'COMMUNITY_DATA': self._write('community_data.json', self.comm)}
+               'COMMUNITY_DATA': self._write('community_data.json', self.comm),
+               'RSSFEEDS_DATA': missing,
+               'FORECAST_HISTORY': missing,
+               'MACRO_AUTO_FETCH': '0',
+               'RSSFEEDS_AUTO_FETCH': '0'}
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
@@ -352,7 +357,9 @@ class TestPanoramaRendering(unittest.TestCase):
 
     def test_wechat_section_degrades_when_all_sources_missing(self):
         missing = os.path.join(self._tmp.name, 'missing.json')
-        env = {k: missing for k in ('MARKET_DATA', 'MACRO_DATA', 'SENTIMENT_DATA', 'COMMUNITY_DATA')}
+        env = {k: missing for k in ('MARKET_DATA', 'MACRO_DATA', 'SENTIMENT_DATA',
+                                    'COMMUNITY_DATA', 'RSSFEEDS_DATA', 'FORECAST_HISTORY')}
+        env.update({'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0'})
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:

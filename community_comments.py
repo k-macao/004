@@ -794,7 +794,9 @@ def _parse_rss_items(xml_bytes, now, max_age_days=COMMENT_MAX_AGE_DAYS):
         return [child for child in el if _local(child) == tag]
 
     channel = _find(root, 'channel')
-    items = _findall(channel or root, 'item')
+    items = _findall(channel, 'item') if channel is not None else []
+    if not items:
+        items = _findall(root, 'item')
     is_atom = False
     if not items:
         items = _findall(root, 'entry')

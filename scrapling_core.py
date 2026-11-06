@@ -1160,13 +1160,24 @@ class AdaptiveStorage:
         self.storage_file = storage_file
         self.url = url.lower() if (url and isinstance(url, str)) else None
         self.lock = threading.RLock()
+        self.connection = None
+        self.cursor = None
         directory = os.path.dirname(os.path.abspath(storage_file))
         if directory:
             os.makedirs(directory, exist_ok=True)
-        self.connection = sqlite3.connect(storage_file, check_same_thread=False)
-        self.connection.execute('PRAGMA journal_mode=WAL')
-        self.cursor = self.connection.cursor()
-        self._setup_database()
+        conn = sqlite3.connect(storage_file, timeout=30.0, check_same_thread=False)
+        try:
+            conn.execute('PRAGMA busy_timeout=30000')
+            conn.execute('PRAGMA journal_mode=WAL')
+            cursor = conn.cursor()
+            self.connection = conn
+            self.cursor = cursor
+            self._setup_database()
+        except Exception:
+            conn.close()
+            self.connection = None
+            self.cursor = None
+            raise
 
     def _setup_database(self):
         self.cursor.execute("""
@@ -1206,12 +1217,23 @@ class AdaptiveStorage:
 
     def close(self):
         with self.lock:
-            try:
-                self.connection.commit()
-                self.cursor.close()
-                self.connection.close()
-            except sqlite3.ProgrammingError:  # pragma: no cover - 已关闭
-                pass
+            conn, cur = self.connection, self.cursor
+            self.connection = None
+            self.cursor = None
+            if cur is not None:
+                try:
+                    cur.close()
+                except sqlite3.Error:  # pragma: no cover - 已关闭
+                    pass
+            if conn is not None:
+                try:
+                    conn.commit()
+                except sqlite3.Error:  # pragma: no cover
+                    pass
+                try:
+                    conn.close()
+                except sqlite3.Error:  # pragma: no cover
+                    pass
 
     def __del__(self):  # pragma: no cover
         try:

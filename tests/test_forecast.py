@@ -388,6 +388,9 @@ class TestForecastRendering(unittest.TestCase):
                'MACRO_DATA': self._write('macro_data.json', {}),
                'SENTIMENT_DATA': self._write('sentiment_data.json', {}),
                'COMMUNITY_DATA': self._write('community_data.json', {}),
+               'RSSFEEDS_DATA': os.path.join(self._tmp.name, 'missing_rss.json'),
+               'MACRO_AUTO_FETCH': '0',
+               'RSSFEEDS_AUTO_FETCH': '0',
                'FORECAST_HISTORY': self.hist}
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
@@ -409,8 +412,8 @@ class TestForecastRendering(unittest.TestCase):
     def test_wechat_section_degrades_when_quotes_are_missing(self):
         missing = os.path.join(self._tmp.name, 'missing.json')
         env = {k: missing for k in ('MARKET_DATA', 'MACRO_DATA', 'SENTIMENT_DATA',
-                                    'COMMUNITY_DATA')}
-        env['FORECAST_HISTORY'] = self.hist
+                                    'COMMUNITY_DATA', 'RSSFEEDS_DATA')}
+        env.update({'FORECAST_HISTORY': self.hist, 'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0'})
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
@@ -491,6 +494,9 @@ class TestForecastRendering(unittest.TestCase):
             'COMMUNITY_DATA': missing,
             'SENTIMENT_DATA': missing,
             'MACRO_DATA': missing,
+            'RSSFEEDS_DATA': missing,
+            'MACRO_AUTO_FETCH': '0',
+            'RSSFEEDS_AUTO_FETCH': '0',
         }
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)

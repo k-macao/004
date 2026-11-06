@@ -34,6 +34,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 from urllib.parse import urlparse
 
@@ -252,17 +253,20 @@ class KeyedAdaptiveStorage:
 
     def __init__(self, storage_file: str):
         self.storage_file = storage_file
+        self._lock = threading.RLock()
         self._stores = {}
 
     def for_key(self, key: str) -> sc.AdaptiveStorage:
-        if key not in self._stores:
-            self._stores[key] = sc.AdaptiveStorage(self.storage_file, url=key)
-        return self._stores[key]
+        with self._lock:
+            if key not in self._stores:
+                self._stores[key] = sc.AdaptiveStorage(self.storage_file, url=key)
+            return self._stores[key]
 
     def close(self) -> None:
-        for store in self._stores.values():
-            store.close()
-        self._stores.clear()
+        with self._lock:
+            for store in self._stores.values():
+                store.close()
+            self._stores.clear()
 
 
 class CommunitySpider(sc.Spider):

@@ -47,7 +47,7 @@ class TestCommunityStore(unittest.TestCase):
             self.assertEqual(len(set(filenames)), 49)
             for comm in cd.COMMUNITIES:
                 path = os.path.join(directory, store._filename(comm))
-                with sqlite3.connect(path) as db:
+                with contextlib.closing(sqlite3.connect(path)) as db, db:
                     identity = dict(db.execute('select name,value from identity'))
                     payload = json.loads(db.execute('select record_json from captures').fetchone()[0])
                 self.assertEqual(identity['key'], comm['key'])
@@ -64,7 +64,7 @@ class TestCommunityStore(unittest.TestCase):
                 now = NOW + timedelta(hours=4 * i)
                 store.save_snapshot(directory, captured(now, f'港股市场资金流入第 {i} 次。'), history_limit=2)
             first = cd.COMMUNITIES[0]
-            with sqlite3.connect(os.path.join(directory, store._filename(first))) as db:
+            with contextlib.closing(sqlite3.connect(os.path.join(directory, store._filename(first)))) as db, db:
                 rows = db.execute('select record_json from captures order by rowid').fetchall()
             self.assertEqual(len(rows), 2)
             self.assertIn('第 3 次', json.loads(rows[-1][0])['analysis_input']['snippet'])
@@ -119,7 +119,7 @@ class TestCommunityStore(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store.save_snapshot(directory, captured())
             path = os.path.join(directory, store._filename(cd.COMMUNITIES[0]))
-            with sqlite3.connect(path) as db:
+            with contextlib.closing(sqlite3.connect(path)) as db, db:
                 db.execute("update captures set record_json = replace(record_json, '资金流入', '资金流出')")
             actual = store.load_snapshot(directory)
             self.assertEqual(actual['store']['unavailable_databases'], ['FUTU'])
