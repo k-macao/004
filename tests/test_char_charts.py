@@ -80,12 +80,17 @@ class TestChartGeometry(unittest.TestCase):
 class TestPushFigures(unittest.TestCase):
     def _render(self, extra_env=None):
         saved = {}
-        keys = ('MARKET_DATA', 'COMMUNITY_DATA', 'SENTIMENT_DATA', 'MACRO_DATA', 'MACRO_AUTO_FETCH')
-        for k in keys:
+        data_keys = (
+            'MARKET_DATA', 'COMMUNITY_DATA', 'SENTIMENT_DATA',
+            'MACRO_DATA', 'RSSFEEDS_DATA', 'FORECAST_HISTORY',
+        )
+        flag_keys = ('MACRO_AUTO_FETCH', 'RSSFEEDS_AUTO_FETCH')
+        for k in data_keys + flag_keys:
             saved[k] = os.environ.get(k)
         missing = os.path.join(REPO_ROOT, 'tests', 'fixtures', 'no-such-chart.json')
-        os.environ.update({k: missing for k in keys[:4]})
+        os.environ.update({k: missing for k in data_keys})
         os.environ['MACRO_AUTO_FETCH'] = '0'
+        os.environ['RSSFEEDS_AUTO_FETCH'] = '0'
         if extra_env:
             os.environ.update(extra_env)
         try:
@@ -104,10 +109,31 @@ class TestPushFigures(unittest.TestCase):
         self.assertNotIn('不编柱', html)
         self.assertNotIn('stacked bar', html)
         self.assertNotIn('\u2588', html)
+        self.assertNotIn('◆ 预测命中率', html)
         self.assertEqual(html.count('03B /'), 1)
         self.assertLess(len(html), 95000)
         for bad in STALE:
             self.assertNotIn(bad, html)
+
+    def test_settled_forecast_history_renders_review_figure_without_inventing_forecasts(self):
+        history = {
+            'version': 1,
+            'records': [
+                {'key': 'HSI', 'name': '恒生指数', 'target_date': '2026-09-24',
+                 'settled': True, 'hit': True, 'in_band': True, 'error_pct': 0.2},
+                {'key': 'SPX', 'name': '标普 500', 'target_date': '2026-09-24',
+                 'settled': True, 'hit': False, 'in_band': True, 'error_pct': 0.5},
+            ],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            hist_path = os.path.join(tmp, 'forecast_history.json')
+            with open(hist_path, 'w', encoding='utf-8') as f:
+                json.dump(history, f, ensure_ascii=False)
+            html = self._render({'FORECAST_HISTORY': hist_path})
+        self.assertIn('◆ 预测命中率', html)
+        self.assertIn('50% (1/2)', html)
+        self.assertNotIn('逐标的预测', html)
+        self.assertLess(len(html), 95000)
 
     def test_quote_figure_uses_the_push_snapshot(self):
         # 快照里同时给出港股、美股与商品三类标的，覆盖多序列的字符柱。

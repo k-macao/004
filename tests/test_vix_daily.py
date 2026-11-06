@@ -133,7 +133,10 @@ class TestVixWechatIntegration(unittest.TestCase):
                 'COMMUNITY_DATA': missing,
                 'SENTIMENT_DATA': missing,
                 'MACRO_DATA': missing,
+                'RSSFEEDS_DATA': missing,
+                'FORECAST_HISTORY': missing,
                 'MACRO_AUTO_FETCH': '0',
+                'RSSFEEDS_AUTO_FETCH': '0',
             }
             old = {key: os.environ.get(key) for key in env}
             os.environ.update(env)

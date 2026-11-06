@@ -60,14 +60,17 @@ def _render(env, now=None):
 
 
 def _no_data_env(tmpdir):
-    """把行情/社区/舆情三类数据都指向不存在的文件，让渲染路径确定（不受本地残留 json 影响）。
+    """把行情/社区/舆情/快讯/RSS/预测存档都指向不存在的文件，让渲染路径确定（不受本地或 CI 残留产物影响）。
 
-    MACRO_AUTO_FETCH=0：本文件断言的是「拿不到快讯时的降级形态」，必须锁死构建期
-    自动补抓（否则 CI 里 GITHUB_ACTIONS 存在会真的去联网抓一轮，判定就不确定了）。
+    MACRO_AUTO_FETCH=0 / RSSFEEDS_AUTO_FETCH=0：本文件断言的是「拿不到快讯时的降级形态」，
+    必须锁死构建期自动补抓（否则 CI 里 GITHUB_ACTIONS 存在会真的去联网抓一轮，判定就不确定了）。
     """
     missing = os.path.join(tmpdir, 'missing.json')
-    return {'MARKET_DATA': missing, 'COMMUNITY_DATA': missing, 'SENTIMENT_DATA': missing,
-            'MACRO_DATA': missing, 'MACRO_AUTO_FETCH': '0'}
+    return {
+        'MARKET_DATA': missing, 'COMMUNITY_DATA': missing, 'SENTIMENT_DATA': missing,
+        'MACRO_DATA': missing, 'RSSFEEDS_DATA': missing, 'FORECAST_HISTORY': missing,
+        'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0',
+    }
 
 
 class TestMacroSection(unittest.TestCase):
@@ -113,8 +116,10 @@ class TestMacroSection(unittest.TestCase):
             'COMMUNITY_DATA': paths['community_data.json'],
             'SENTIMENT_DATA': paths['sentiment_data.json'],
             'MACRO_DATA': paths['macro_data.json'],
+            'RSSFEEDS_DATA': os.path.join(self._tmp.name, 'missing_rss.json'),
             'FORECAST_HISTORY': paths['forecast_history.json'],
             'MACRO_AUTO_FETCH': '0',
+            'RSSFEEDS_AUTO_FETCH': '0',
             'SENTIMENT_SHOW_API_EVAL': '0',
         }
         html = _render(env, now=now)

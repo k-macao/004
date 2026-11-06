@@ -300,7 +300,9 @@ class TestWechat49Sources(unittest.TestCase):
             'COMMUNITY_DATA': self._write('community_data.json', communities),
             'SENTIMENT_DATA': os.path.join(self._tmp.name, 'missing.json'),
             'MACRO_DATA': os.path.join(self._tmp.name, 'missing.json'),
+            'RSSFEEDS_DATA': os.path.join(self._tmp.name, 'missing.json'),
             'MACRO_AUTO_FETCH': '0',
+            'RSSFEEDS_AUTO_FETCH': '0',
             'FORECAST_HISTORY': os.path.join(self._tmp.name, 'forecast_history.json'),
         }
         saved = {k: os.environ.get(k) for k in env}
