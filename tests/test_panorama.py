@@ -101,8 +101,9 @@ class TestPanoramaRules(unittest.TestCase):
             for force in data['forces']:
                 summary = panorama._force_summary(force)
                 self.assertIn(force['read'].strip().rstrip('；。'), summary)
-                self.assertIn('规则判断：' + force['tier'], summary)
-                self.assertIn('提取信息：', summary)
+                self.assertIn(f"{force['tier']}，方向{force['dir_word']}", summary)
+                self.assertNotIn('规则判断：', summary)
+                self.assertNotIn('提取信息：', summary)
                 self.assertIn(panorama._esc(summary), web)
                 self.assertIn(panorama._esc(summary), wechat)
         bull_hk = next(f for f in bull['forces'] if f['key'] == 'hk_tape')
@@ -124,14 +125,18 @@ class TestPanoramaRules(unittest.TestCase):
         self.assertIn(key, payload['messages'][1]['content'])
         self.assertIn('基于当次数据', panorama.render_web(data))
         self.assertIn('&lt;风险&gt;', panorama.render_wechat(data))
-        self.assertIn('AI 解读未生成', panorama._force_summary(data['forces'][1]))
+        self.assertNotIn('AI 解读未生成', panorama._force_summary(data['forces'][1]))
+        self.assertIn(data['forces'][1]['read'].strip().rstrip('；。'),
+                      panorama._force_summary(data['forces'][1]))
 
         fresh = panorama.scan(market=BULL, now=NOW)
         with mock.patch.dict(os.environ, {'DEEPSEEK_API_KEY': 'test-key'}), \
                 mock.patch.object(panorama.urllib.request, 'urlopen', side_effect=OSError('failed')), \
                 contextlib.redirect_stderr(io.StringIO()):
             panorama.add_expert_analysis(fresh)
-        self.assertIn('AI 解读未生成', panorama._force_summary(fresh['forces'][0]))
+        self.assertNotIn('AI 解读未生成', panorama._force_summary(fresh['forces'][0]))
+        self.assertIn(fresh['forces'][0]['read'].strip().rstrip('；。'),
+                      panorama._force_summary(fresh['forces'][0]))
 
     def test_direction_follows_the_data_not_a_template(self):
         bull = panorama.scan(market=BULL, now=NOW)['verdict']
@@ -210,8 +215,7 @@ class TestPanoramaDegradation(unittest.TestCase):
         self.assertTrue(any('RSS' in g for g in d['data_gaps']),
                         'RSS 49 源缺产物必须记一条缺口')
         for html in (panorama.render_web(d), panorama.render_wechat(d)):
-            self.assertIn('未获取', html)
-            self.assertIn('不回填历史叙事', html)
+            self.assertEqual('', html)
 
     def test_all_null_quotes_count_as_a_gap_not_as_coverage(self):
         """抓取失败最常见的形态是「文件在、值全 null」，不能被当成 100% 覆盖。"""
@@ -310,7 +314,7 @@ class TestPanoramaRendering(unittest.TestCase):
         page = bs.inject_panorama(tpl, html)
         block = _section_01(page, bs.PANORAMA_MARK, bs.PANORAMA_CLOSE)
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', block))
-        for need in ('推动股价的 5 大力量', '哪些是噪音', 'AI 总结解读', '是否可以做多',
+        for need in ('推动股价的 5 大力量', 'AI 总结解读', '是否可以做多',
                      '宏观事件', '板块轮动', '情绪变化'):
             self.assertIn(need, plain, f'网页 01 节缺少栏目要素: {need}')
         for bad in FORBIDDEN:
@@ -335,7 +339,7 @@ class TestPanoramaRendering(unittest.TestCase):
 
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html))
         self.assertIn('每日全球全景扫描', plain)
-        for need in ('推动股价的 5 大力量', '哪些是噪音', 'AI 总结解读', '是否可以做多',
+        for need in ('推动股价的 5 大力量', 'AI 总结解读', '是否可以做多',
                      '宏观事件', '板块轮动', '情绪变化'):
             self.assertIn(need, plain, f'微信 01 栏缺少栏目要素: {need}')
         for bad in OLD_COLUMN:
@@ -358,8 +362,9 @@ class TestPanoramaRendering(unittest.TestCase):
             for k, v in saved.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html))
-        self.assertIn('每日全球全景扫描', plain, '标题仍在，但正文必须降级')
-        self.assertIn('本栏不编故事', plain)
+        self.assertIn('每日全球全景扫描', plain, '标题仍在，无数据时不输出未获取说明')
+        self.assertNotIn('本栏不编故事', plain)
+        self.assertNotIn('未获取', plain)
         for bad in OLD_COLUMN:
             self.assertNotIn(bad, html)
         sec01 = _section_01(html, '每日全球全景扫描', '02 / 全球经济与财经动态')

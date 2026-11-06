@@ -111,11 +111,11 @@ class TestCommunityContentHasNoLinks(unittest.TestCase):
         for html in (web, wechat):
             # 主摘录（quote）
             self.assertIn('港股估值仍偏谨慎', html)
-            # 首条贡献的 meta 行
+            # 首条贡献的时间信息保留，但采样/互动状态说明已移除
             self.assertIn('2026-11-06T01:00:00Z', html)
-            self.assertIn('有限样本', html)
-            # 第二条起逐条渲染的正文、标题、热度与时间
-            for phrase in ('第二条采样回复', '港股走势', '评论点赞 12',
+            self.assertNotIn('有限样本', html)
+            # 第二条起逐条渲染的正文、标题与时间
+            for phrase in ('第二条采样回复', '港股走势',
                            '2026-11-06T02:00:00Z'):
                 self.assertIn(phrase, html)
 

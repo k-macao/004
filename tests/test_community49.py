@@ -319,44 +319,51 @@ class TestWechat49Sources(unittest.TestCase):
     def test_all_49_checked_sources_carry_honest_verification_markers_and_block_stale_dates(self):
         d = _mock_checked_dataset(now=NOW)
         html = self._render(d, now=NOW)
-        markers = wp.CHANNEL_READ_RE.findall(html)
-        self.assertEqual(len(markers), 49, '当次执行过抓取核验的 49 源均应带核验日期标记')
+        markers = wp._snapshot_channel_reads(d)
+        self.assertEqual(len(markers), 49, '数据层中当次执行过抓取核验的 49 源均应带核验日期标记')
         self.assertEqual(set(markers), {TODAY})
-        self.assertIn('49 大平台', html)
+        self.assertNotIn('抓取核验', html, '展示层不再输出抓取核验状态文字')
         self.assertIn('南向资金大幅净买入', html, '微信推送必须保留实盘抓到的真实片段')
         self.assertNotIn('跨域配对：', html, '配对交易已下线，推送里不应再出现跨域配对标签')
         self.assertNotIn('◆ AI 量化', html, '配对交易已下线，推送里不应再出现 AI 量化块')
         self.assertLess(len(html), wp.CONTENT_SAFE_LIMIT, '49 源仍须落在推送字符门禁之内')
+        for key in ('FUTU', 'XUEQIU', 'REDDIT'):
+            src = next(c for c in d['communities'] if c['key'] == key)
+            self.assertIn(src['name'], html, f'已获取的 {key} 必须出现在推送正文里')
         for key in ('ZHIHU', 'PTT', 'FTALPHA', 'JISILU', 'NAVER', 'AASTOCKS'):
             src = next(c for c in d['communities'] if c['key'] == key)
-            self.assertIn(src['name'], html, f'{key} 必须出现在推送正文里')
+            self.assertNotIn(src['name'], html, f'未获取的 {key} 在展示层应直接隐藏')
 
-        # 关键反作弊断言：旧日期的 community_data.json 渲染到明天时，日期不得被正则洗白，--push 严格模式必须拦截！
+        # 关键反作弊断言：旧日期的 community_data.json 渲染到明天时，--push 严格模式必须拦截！
         tomorrow = NOW + timedelta(days=1)
         stale_html = self._render(d, now=tomorrow)
-        self.assertEqual(set(wp.CHANNEL_READ_RE.findall(stale_html)), {TODAY},
-                         '严禁用正则把昨天的抓取日期改写成今天')
+        self.assertEqual(set(wp._snapshot_channel_reads(d)), {TODAY},
+                         '严禁把昨天的抓取日期改写成今天')
         with self.assertRaises(SystemExit) as ctx:
             with contextlib.redirect_stderr(io.StringIO()):
-                wp.assert_fetch_dates_are_today([('title', stale_html)], tomorrow, strict=True)
+                wp.assert_fetch_dates_are_today([('title', stale_html)], tomorrow,
+                                                strict=True, snapshot=d)
         self.assertEqual(ctx.exception.code, 5)
 
     def test_budget_ladder_keeps_every_source_and_keeps_forecast(self):
-        d = _mock_checked_dataset(now=NOW)
-        html = self._render(d, now=NOW)
+        all_live = _mock_checked_dataset(live_keys=[c['key'] for c in cd.COMMUNITIES], now=NOW)
+        html = self._render(all_live, now=NOW)
         self.assertNotIn('<!--COMMUNITY-SLOT-->', html)
         self.assertNotIn('<!--FORECAST-SLOT-->', html)
-        for c in d['communities']:
+        for c in all_live['communities']:
             self.assertIn(c['name'], html, f"{c['key']} 在预算降级时被整条删掉了")
         self.assertIn('04 / AI 预测', html)
+        self.assertLess(len(html), wp.CONTENT_SAFE_LIMIT)
 
     def test_fewer_sources_still_render_and_use_the_same_structure(self):
         d = _mock_checked_dataset(now=NOW)
         small = dict(d, communities=d['communities'][:3], summary={'ok': 2, 'total': 3, 'failed': ['老虎社区']})
         html = self._render(small, now=NOW)
-        self.assertEqual(len(wp.CHANNEL_READ_RE.findall(html)), 3)
-        self.assertIn('3 个境内外核心社区信号', html)
-        self.assertNotIn('49 大平台', html, '源数文案必须跟着当次数据走')
+        self.assertEqual(len(wp._snapshot_channel_reads(small)), 3)
+        self.assertIn(d['communities'][0]['name'], html)
+        self.assertIn(d['communities'][1]['name'], html)
+        self.assertNotIn('老虎社区', html, '未获取源应直接隐藏')
+        self.assertNotIn('49 大平台', html)
 
     def test_expected_channel_count_matches_the_catalog(self):
         self.assertEqual(wp.EXPECTED_CHANNEL_COUNT, len(cd.COMMUNITIES))

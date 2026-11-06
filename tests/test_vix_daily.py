@@ -76,23 +76,21 @@ class TestVixModel(unittest.TestCase):
         self.assertFalse(data['available'])
         self.assertFalse(vix_daily.analyze({'quotes': {'VIX': {'last': 0}}})['available'])
         web = vix_daily.render_web(data)
-        plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', web))
-        self.assertIn('今日未获取', plain)
-        self.assertIn('不回填历史点位', plain)
-        self.assertNotIn('极低波动定价', plain)
-        self.assertNotIn('0.00', plain)
+        wechat = vix_daily.render_wechat(data)
+        self.assertEqual('', web)
+        self.assertEqual('', wechat)
 
     def test_explanation_is_one_line_and_keeps_q_p_boundary(self):
-        """说明文字收成一行：口径 / Q-P 边界保留，长卡片与外部来源不再出现。"""
+        """展示层仅保留实质读数与行情日期，不输出方法论口径说明与外部来源。"""
         web = vix_daily.render_web(vix_daily.analyze(market()))
         plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', web))
-        for phrase in ('未来 30 天', '年化', '风险中性', '不是涨跌方向'):
-            self.assertIn(phrase, plain)
         self.assertIn('24.60', plain)
+        self.assertIn('风险定价升温', plain)
+        self.assertIn('恐慌定价升温', plain)
         self.assertIn('2026-10-07', plain)
         self.assertNotIn('vix-explain-grid', web)
         self.assertNotIn('vix-source', web)
-        for bad in ('CTAAgents', '说明参考', 'Cboe 官方评级'):
+        for bad in ('口径', '未来 30 天', 'CTAAgents', '说明参考', 'Cboe 官方评级'):
             self.assertNotIn(bad, web)
 
 
@@ -151,7 +149,8 @@ class TestVixWechatIntegration(unittest.TestCase):
 
         self.assertIn('00 / 每日 VIX 恐慌指数', rendered)
         self.assertIn('24.60', rendered)
-        self.assertIn('口径', rendered)
+        self.assertIn('风险定价升温', rendered)
+        self.assertNotIn('口径', rendered)
         self.assertNotIn('CTAAgents', rendered)
         self.assertLess(rendered.index('00 / 每日 VIX 恐慌指数'),
                         rendered.index('01 / 每日全球全景扫描'))

@@ -38,8 +38,8 @@ class TestChartGeometry(unittest.TestCase):
 
     def test_missing_quotes_do_not_invent_bars(self):
         html, plain = char_charts.quotes_chart({})
-        self.assertIn('不编柱', html)
-        self.assertNotIn('%', plain)
+        self.assertEqual('', html)
+        self.assertEqual('', plain)
         for bad in STALE:
             self.assertNotIn(bad, html)
 
@@ -50,7 +50,8 @@ class TestChartGeometry(unittest.TestCase):
         self.assertIn('+1.25%', plain)
         self.assertIn('-0.40%', plain)
         self.assertNotIn('黄金', plain)
-        self.assertIn('diverging barh', html)
+        self.assertIn('◆ 涨跌幅分布', html)
+        self.assertNotIn('diverging barh', html)
         self.assertIn('<table', html)
 
     def test_community_composition_uses_the_same_counts(self):
@@ -67,12 +68,12 @@ class TestChartGeometry(unittest.TestCase):
         self.assertIn('多', plain)
         self.assertIn('|', plain)
         self.assertIn('-18.5', plain)
-        self.assertIn('固定刻度', plain)
+        self.assertIn('◆ 多空合成分', plain)
 
     def test_opening_long_short_axis_does_not_turn_missing_into_zero(self):
         html, plain = char_charts.long_short_chart({'long_score': 0.0, 'can_long': 'unknown'})
-        self.assertIn('不把缺失数据画成中性 0', plain)
-        self.assertIn('不编柱', html)
+        self.assertEqual('', html)
+        self.assertEqual('', plain)
         self.assertNotIn('0.0', plain)
 
 
@@ -99,9 +100,10 @@ class TestPushFigures(unittest.TestCase):
 
     def test_fallback_push_has_a_figure_and_does_not_invent_bars(self):
         html = self._render()
-        self.assertGreaterEqual(html.count('字符配图'), 4)
-        self.assertIn('不编柱', html)
-        self.assertIn('stacked bar', html)
+        self.assertEqual(html.count('字符配图'), 0)
+        self.assertNotIn('不编柱', html)
+        self.assertNotIn('stacked bar', html)
+        self.assertNotIn('\u2588', html)
         self.assertEqual(html.count('03B /'), 1)
         self.assertLess(len(html), 95000)
         for bad in STALE:
@@ -125,7 +127,8 @@ class TestPushFigures(unittest.TestCase):
             html = self._render({'MARKET_DATA': path})
         self.assertIn('+1.20%', html)
         self.assertIn('-0.80%', html)
-        self.assertIn('diverging bar', html)
+        self.assertIn('◆ 涨跌幅分布', html)
+        self.assertNotIn('diverging bar', html)
         self.assertNotIn('z=', html, '配对交易已下线，推送里不应再出现配对 z 分数')
         self.assertLess(len(html), 95000)
         for bad in STALE:

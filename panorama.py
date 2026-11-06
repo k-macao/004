@@ -747,37 +747,28 @@ def _force_summary(force):
         return force['expert_analysis']
     read = (force.get('read') or '').strip().rstrip('；。')
     evidence = [e for e in force.get('evidence', []) if e.get('text')]
-    # 优先展示新闻标题；没有新闻时使用行情或其他可核验读数。
     news = [e for e in evidence if e.get('kind') == 'news']
     selected = (news or evidence)[:2]
     facts = '；'.join((f"{md_cn(e['date'])} " if e.get('date') else '') + e['text']
                      for e in selected)
     pieces = [read] if read else []
     if facts:
-        pieces.append('提取信息：' + facts)
-    pieces.append(f"规则判断：{force['tier']}，方向{force['dir_word']}（{force['score']} 分）")
-    return 'AI 解读未生成，以下为规则摘要：' + '；'.join(pieces) + '。'
+        pieces.append(facts)
+    pieces.append(f"{force['tier']}，方向{force['dir_word']}（{force['score']} 分）")
+    return '；'.join(pieces) + '。'
 
 
 HEAD_NOTE = ('口径：力量分 = 45% 幅度 + 30% 印证度 + 25% 时效；'
              '≥55 重点 / 35~55 次要 / <35 或未过噪音阈值均计噪音。')
 
+
 def render_web(data):
-    """01 栏网页版 HTML（沿用 report.html 的 .pub-* / .pixel-list 类）。"""
+    """01 栏网页版 HTML（无状态/口径/缺口说明，空数据时不渲染）。"""
+    if not data or not data.get('forces'):
+        return ''
+
     v = data['verdict']
-    parts = [f'<div class="pub-meta" style="margin:0 0 8px;">'
-             f'扫描时间 {_esc(data["generated_at"])} · 行情日期 {_esc(data["quote_date"] or "未获取")} · '
-             f'数据覆盖 {int(data["coverage"] * 100)}% · {_esc(HEAD_NOTE)}</div>']
-
-    if not data['forces']:
-        parts.append('<div class="pub-sub">◆ 今日未获取足够数据 —— 本栏不编故事</div>'
-                     '<div style="font-size:12px;line-height:1.8;">四路数据当次全部缺失，'
-                     '本栏<strong>不回填历史叙事</strong>。恢复命令：'
-                     '<code>python3 market_data.py &amp;&amp; python3 macro_data.py &amp;&amp; '
-                     'python3 community_data.py</code>。</div>')
-        return '\n'.join(parts)
-
-    parts.append('<div class="pub-sub">◆ 推动股价的 5 大力量（按当次证据强度排序）</div>')
+    parts = ['<div class="pub-sub">◆ 推动股价的 5 大力量</div>']
     for f in data['forces']:
         evs = ''.join(f'<li>{_ev_line(e)}</li>' for e in f['evidence'][:4])
         parts.append(
@@ -790,71 +781,55 @@ def render_web(data):
             + f'<div class="pub-verdict"><strong style="color:#000;">▶ AI 总结解读：</strong>{_esc(_force_summary(f))}</div>'
             + '</div>')
 
-    parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化</div>')
-    focus_bits = []
-    for fc in data['focus']:
-        focus_bits.append(
-            f'<li><strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}'
-            + '</li>')
-    parts.append('<ul class="pixel-list">' + ''.join(focus_bits) + '</ul>')
+    avail_focus = [fc for fc in (data.get('focus') or [])
+                   if fc.get('dir_word') and fc.get('dir_word') != '未获取']
+    if avail_focus:
+        parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化</div>')
+        focus_bits = [
+            f'<li><strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}</li>'
+            for fc in avail_focus
+        ]
+        parts.append('<ul class="pixel-list">' + ''.join(focus_bits) + '</ul>')
 
-    noise = data['noise']
-    parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 哪些是噪音（当日不参与决策）</div>')
+    noise = data.get('noise') or []
     if noise:
+        parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 哪些是噪音</div>')
         parts.append('<ul class="pixel-list">' + ''.join(
-            f'<li><strong>{_esc(n["name"])}</strong>（{n["score"]} 分）—— {_esc(n["read"])}'
-            + '</li>'
+            f'<li><strong>{_esc(n["name"])}</strong>（{n["score"]} 分）—— {_esc(n["read"])}</li>'
             for n in noise) + '</ul>')
-    else:
-        parts.append('<div style="font-size:12px;">当次没有被判为噪音的力量：'
-                     '所有取到的信号都越过了各自的噪音阈值，说明今天是「有方向」的一天。</div>')
 
-    conf_pct = int(v['confidence'] * 100)
-    reasons = []
-    if v['bulls']:
-        reasons.append('偏多力量：' + '、'.join(_esc(b) for b in v['bulls']))
-    if v['bears']:
-        reasons.append('偏空力量：' + '、'.join(_esc(b) for b in v['bears']))
-    parts.append(
-        '<div class="pub-sub" style="margin-top:12px;">◆ 是否可以做多</div>'
-        '<div class="quant-box">'
-        f'<div style="font-size:13px;font-weight:700;color:#000;">结论：{_esc(v["stance"])}'
-        f'　<span style="background:#000;color:#39ff14;padding:1px 6px;font-size:12px;">'
-        f'{_esc(v["score_text"])} · 置信度 {conf_pct}%</span></div>'
-        + ''.join(f'<div style="margin-top:6px;">{r}</div>' for r in reasons)
-        + ''.join(f'<div style="margin-top:6px;">{_esc(t)}</div>' for t in v['trigger'])
-        + ''.join(f'<div class="pub-meta" style="margin-top:4px;">调整项：{_esc(a)}</div>' for a in v['adjust'])
-        + f'<div class="pub-meta" style="margin-top:8px;">{_esc(v["rule"])}'
-          '（规则化推导，不构成投资建议）</div>'
-        + '</div>')
+    if v.get('can_long') and v.get('can_long') != 'unknown':
+        conf_pct = int(v['confidence'] * 100)
+        reasons = []
+        if v['bulls']:
+            reasons.append('偏多力量：' + '、'.join(_esc(b) for b in v['bulls']))
+        if v['bears']:
+            reasons.append('偏空力量：' + '、'.join(_esc(b) for b in v['bears']))
+        parts.append(
+            '<div class="pub-sub" style="margin-top:12px;">◆ 是否可以做多</div>'
+            '<div class="quant-box">'
+            f'<div style="font-size:13px;font-weight:700;color:#000;">结论：{_esc(v["stance"])}'
+            f'　<span style="background:#000;color:#39ff14;padding:1px 6px;font-size:12px;">'
+            f'{_esc(v["score_text"])} · 置信度 {conf_pct}%</span></div>'
+            + ''.join(f'<div style="margin-top:6px;">{r}</div>' for r in reasons)
+            + ''.join(f'<div style="margin-top:6px;">{_esc(t)}</div>' for t in v['trigger'])
+            + '</div>')
 
-    if data['data_gaps']:
-        parts.append('<div class="pub-meta" style="margin-top:8px;">数据缺口：'
-                     + _esc('；'.join(data['data_gaps'])) + '（缺口部分按空值处理，不回填旧文）</div>')
     return '\n'.join(parts)
 
 
 def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
-    """01 栏微信版 HTML（电竞 HUD 深色面板，全内联样式）。"""
+    """01 栏微信版 HTML（无状态/口径/缺口说明，空数据时不渲染）。"""
+    if not data or not data.get('forces'):
+        return ''
+
     def sub(t):
         return f'<div style="color:{green};font-weight:700;font-size:13px;margin-bottom:6px;">{t}</div>'
 
-    def meta(t):
-        return f'<div style="color:#9aa6c3;font-size:10px;line-height:1.7;margin-top:6px;">{t}</div>'
-
     v = data['verdict']
     out = [f'<div style="background:#0d1426;border:1px solid #2b3855;border-radius:4px;'
-           f'padding:14px 16px;margin:10px 0;font-size:12px;line-height:1.85;color:{ink};">'
-           + meta(f'扫描时间 {_esc(data["generated_at"])} · 行情日期 {_esc(data["quote_date"] or "未获取")} · '
-                  f'数据覆盖 {int(data["coverage"] * 100)}% · {_esc(HEAD_NOTE)}')]
-
-    if not data['forces']:
-        out.append(sub('◆ 今日未获取足够数据 —— 本栏不编故事')
-                   + '四路数据当次全部缺失，本栏<strong>不回填历史叙事</strong>；'
-                     '恢复后重建即可恢复完整扫描。</div>')
-        return ''.join(out)
-
-    out.append(sub('◆ 推动股价的 5 大力量（按当次证据强度排序）'))
+           f'padding:14px 16px;margin:10px 0;font-size:12px;line-height:1.85;color:{ink};">',
+           sub('◆ 推动股价的 5 大力量')]
     for f in data['forces']:
         evs = ''.join('<br/>· ' + _ev_line(e) for e in f['evidence'][:3])
         out.append(
@@ -868,33 +843,30 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff'):
             + f'<br/><strong style="color:{green};">AI 总结解读：</strong>{_esc(_force_summary(f))}'
             + '</div>')
 
-    out.append('<br/>' + sub('◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化'))
-    out.append(''.join(
-        f'· <strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}'
-        + '<br/>'
-        for fc in data['focus']))
+    avail_focus = [fc for fc in (data.get('focus') or [])
+                   if fc.get('dir_word') and fc.get('dir_word') != '未获取']
+    if avail_focus:
+        out.append('<br/>' + sub('◆ 三大关注面 · 宏观事件 / 板块轮动 / 情绪变化'))
+        out.append(''.join(
+            f'· <strong>{_esc(fc["category"])}（{_esc(fc["dir_word"])}）</strong>　{_esc(fc["summary"])}<br/>'
+            for fc in avail_focus))
 
-    out.append('<br/>' + sub('◆ 哪些是噪音（当日不参与决策）'))
-    if data['noise']:
+    if data.get('noise'):
+        out.append('<br/>' + sub('◆ 哪些是噪音'))
         out.append(''.join(f'· <strong>{_esc(n["name"])}</strong>（{n["score"]} 分）—— {_esc(n["read"])}<br/>'
                            for n in data['noise']))
-    else:
-        out.append('当次没有被判为噪音的力量：取到的信号都越过了各自的噪音阈值。<br/>')
 
-    out.append('<br/>' + sub('◆ 是否可以做多'))
-    out.append(f'<strong style="background:#101b2c;color:{neon};font-weight:700;padding:2px 6px;border:1px solid #435d31;">'
-               f'{_esc(v["stance"])} · {_esc(v["score_text"])} · 置信度 {int(v["confidence"] * 100)}%</strong>')
-    if v['bulls']:
-        out.append('<br/><strong>偏多力量：</strong>' + '、'.join(_esc(b) for b in v['bulls']))
-    if v['bears']:
-        out.append('<br/><strong>偏空力量：</strong>' + '、'.join(_esc(b) for b in v['bears']))
-    for t in v['trigger']:
-        out.append('<br/>' + _esc(t))
-    for a in v['adjust']:
-        out.append('<br/><span style="color:#9aa6c3;font-size:10.5px;">调整项：' + _esc(a) + '</span>')
-    out.append(meta(_esc(v['rule']) + '（规则化推导，不构成投资建议）'))
-    if data['data_gaps']:
-        out.append(meta('数据缺口：' + _esc('；'.join(data['data_gaps'])) + '（按空值处理，不回填旧文）'))
+    if v.get('can_long') and v.get('can_long') != 'unknown':
+        out.append('<br/>' + sub('◆ 是否可以做多'))
+        out.append(f'<strong style="background:#101b2c;color:{neon};font-weight:700;padding:2px 6px;border:1px solid #435d31;">'
+                   f'{_esc(v["stance"])} · {_esc(v["score_text"])} · 置信度 {int(v["confidence"] * 100)}%</strong>')
+        if v['bulls']:
+            out.append('<br/><strong>偏多力量：</strong>' + '、'.join(_esc(b) for b in v['bulls']))
+        if v['bears']:
+            out.append('<br/><strong>偏空力量：</strong>' + '、'.join(_esc(b) for b in v['bears']))
+        for t in v['trigger']:
+            out.append('<br/>' + _esc(t))
+
     out.append('</div>')
     return ''.join(out)
 

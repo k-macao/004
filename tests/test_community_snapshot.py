@@ -211,8 +211,8 @@ class TestRenderTimeAnalysis(unittest.TestCase):
               contextlib.redirect_stdout(io.StringIO())):
             html, _, _ = wp.build_single_wechat_html(now=NOW + timedelta(hours=1))
         self.assertGreater(analyze.call_count, 0)
-        self.assertIn('2026-10-29', html)
-        self.assertIn('本次读取分析', html)
+        self.assertIn('港股资金流入，市场估值回升', html)
+        self.assertNotIn('本次读取分析', html)
 
     def test_page_builder_loads_snapshot_and_reanalyzes_without_collecting(self):
         record = cd.build_live_record(cd.COMMUNITIES[0], '港股资金流入，市场估值回升。', '2026-10-29')
@@ -242,7 +242,8 @@ class TestRenderTimeAnalysis(unittest.TestCase):
             self.assertFalse(os.path.exists(rss_file))
             with open(out, encoding='utf-8') as handle:
                 html = handle.read()
-            self.assertIn('本次读取分析', html)
+            self.assertIn('港股资金流入，市场估值回升', html)
+            self.assertNotIn('本次读取分析', html)
             with open(community_file, encoding='utf-8') as handle:
                 self.assertNotIn('analysis_at', json.load(handle))
 

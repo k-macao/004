@@ -130,70 +130,84 @@ def _web_explanation(data):
 
 
 def render_web(data):
-    """渲染网页版 00 栏。所有动态文本均来自 ``analyze`` 的当次模型。"""
+    """渲染网页版 00 栏（无状态/口径/未获取说明，无可用数据时不渲染）。"""
     data = data if isinstance(data, dict) else {'available': False}
     if not data.get('available'):
-        return f'''<section class="vix-panel vix-missing" aria-label="每日 VIX 恐慌指数未获取">
-  <div class="vix-live-row"><span class="vix-symbol">CBOE VIX</span><strong class="vix-value">—</strong><span class="vix-chip">今日未获取</span></div>
-  <div class="vix-alert">⚠️ market_data.json 没有可用的 VIX 当次行情：本栏不回填历史点位、不把缺失解释成“平静”。运行 <code>python3 market_data.py</code> 后重建即可恢复。</div>
-  {_web_explanation(data)}
-</section>'''
+        return ''
 
-    band = data['band'] or {'code': 'unknown', 'label': '未分档', 'explanation': ''}
-    trend = data['trend'] or {'code': 'unknown', 'label': '日变动未获取', 'sentence': '较前收变化未获取'}
-    as_of = html.escape(data.get('as_of') or '日期未获取')
-    change_line = f'{data["change_text"]} / {data["pct_text"]}'
+    band = data['band'] or {'code': 'unknown', 'label': '', 'explanation': ''}
+    trend = data['trend'] or {'code': 'unknown', 'label': '', 'sentence': ''}
+    has_trend = trend.get('code') not in (None, 'unknown')
+    as_of_raw = (data.get('as_of') or '').strip()
+    change_span = (
+        f'\n    <span class="vix-change vix-{html.escape(trend.get("code") or "flat", quote=True)}">'
+        f'{data["change_text"]} / {data["pct_text"]}</span>'
+        if has_trend else ''
+    )
     marker = f'{data["gauge_pct"]:.2f}%'
-    summary = (f'{html.escape(band["label"])} · {html.escape(trend["label"])}。'
-               f'{html.escape(band.get("explanation") or "")}')
+    head_bits = [html.escape(band['label'])] if band.get('label') else []
+    if has_trend and trend.get('label'):
+        head_bits.append(html.escape(trend['label']))
+    head_txt = (' · '.join(head_bits) + '。') if head_bits else ''
+    summary = f'{head_txt}{html.escape(band.get("explanation") or "")}'
+    meta_bits = []
+    if as_of_raw:
+        meta_bits.append(f'行情日期 {html.escape(as_of_raw)}')
+    if data.get('expected_30d_text'):
+        meta_bits.append(f'30 天隐含波动 {html.escape(data["expected_30d_text"])}')
+    if has_trend and trend.get('sentence'):
+        meta_bits.append(html.escape(trend['sentence']))
+    meta_span = f'<span>{" · ".join(meta_bits)}</span>' if meta_bits else ''
     return f'''<section class="vix-panel" data-vix-state="{html.escape(band.get("code") or "unknown", quote=True)}" aria-label="每日 VIX 恐慌指数">
   <div class="vix-live-row">
     <span class="vix-symbol">CBOE VIX</span>
-    <strong class="vix-value">{data["level_text"]}</strong>
-    <span class="vix-change vix-{html.escape(trend.get("code") or "unknown", quote=True)}">{change_line}</span>
+    <strong class="vix-value">{data["level_text"]}</strong>{change_span}
     <span class="vix-chip">{html.escape(band["label"])}</span>
   </div>
-  <div class="vix-gauge" role="img" aria-label="VIX 实践分档仪表，当前 {data['level_text']}">
+  <div class="vix-gauge" role="img" aria-label="VIX 分档仪表，当前 {data['level_text']}">
     <div class="vix-gauge-track"><i style="left:{marker}"></i></div>
     <div class="vix-gauge-labels"><span>&lt;12 极低</span><span>12–20 常态</span><span>20–30 升温</span><span>30–40 高压</span><span>≥40 极端</span></div>
   </div>
-  <div class="vix-summary"><strong>今日判读：</strong>{summary}<span>行情日期 {as_of} · {html.escape(trend['sentence'])}</span></div>
-  {_web_explanation(data)}
+  <div class="vix-summary"><strong>今日判读：</strong>{summary}{meta_span}</div>
 </section>'''
 
 
 def render_wechat(data, cyan='#4fe5ff', danger='#ff6b7d', neon='#b6ff4a'):
-    """渲染微信内联样式版；比网页精简，但保留 Q/P 与非方向性边界。"""
+    """渲染微信内联样式版（无状态/口径/未获取说明，无可用数据时不渲染）。"""
     data = data if isinstance(data, dict) else {'available': False}
+    if not data.get('available'):
+        return ''
+
     shell = ('background:#10172a;color:#dce5fb;border:1px solid #2b3855;'
              f'border-left:3px solid {cyan};border-radius:5px;padding:12px 14px;'
              'margin:10px 0;font-size:12px;line-height:1.82;')
     meta = 'color:#9aa6c3;font-size:10px;line-height:1.7;'
-    if not data.get('available'):
-        return (f'<div style="{shell}">'
-                f'<div style="color:{cyan};font-weight:700;font-size:13px;">◆ CBOE VIX　'
-                f'<span style="color:{danger};">今日未获取</span></div>'
-                'market_data.json 没有可用的 VIX 当次行情：本栏不回填历史点位、'
-                '不把缺失解释成“平静”。<br/>'
-                '<strong>口径：</strong>VIX 是 SPX 期权市场对未来 30 天隐含波动率的年化定价；'
-                'VIX² 接近 Q 测度预期方差，不等于 P 测度已实现波动或崩盘概率。</div>')
-
-    trend = data['trend'] or {'code': 'unknown', 'label': '日变动未获取'}
-    band = data['band'] or {'label': '未分档', 'explanation': ''}
+    trend = data['trend'] or {'code': 'unknown', 'label': ''}
+    has_trend = trend.get('code') not in (None, 'unknown')
+    band = data['band'] or {'label': '', 'explanation': ''}
     trend_color = danger if trend.get('code') == 'up' else (neon if trend.get('code') == 'down' else cyan)
-    as_of = html.escape(data.get('as_of') or '日期未获取')
+    change_html = (
+        f'　<span style="color:{trend_color};font-weight:700;">{data["change_text"]} / {data["pct_text"]}</span>'
+        if has_trend else ''
+    )
+    badge_txt = html.escape(band['label'])
+    if has_trend and trend.get('label'):
+        badge_txt = f'{badge_txt} · {html.escape(trend["label"])}' if badge_txt else html.escape(trend['label'])
+    meta_bits = []
+    as_of_raw = (data.get('as_of') or '').strip()
+    if as_of_raw:
+        meta_bits.append(f'行情日期 {html.escape(as_of_raw)}')
+    if data.get('expected_30d_text'):
+        meta_bits.append(f'30 天隐含波动 {html.escape(data["expected_30d_text"])}')
+    meta_html = f'<span style="{meta}">{" · ".join(meta_bits)}</span>' if meta_bits else ''
     return (f'<div style="{shell}">'
             f'<div style="color:{cyan};font-weight:700;font-size:13px;">◆ CBOE VIX　'
-            f'<strong style="color:#edf2ff;font-size:22px;">{data["level_text"]}</strong>　'
-            f'<span style="color:{trend_color};font-weight:700;">{data["change_text"]} / {data["pct_text"]}</span></div>'
+            f'<strong style="color:#edf2ff;font-size:22px;">{data["level_text"]}</strong>{change_html}</div>'
             f'<div style="margin:5px 0 7px;"><strong style="background:#07101b;color:{trend_color};'
             'padding:1px 6px;border:1px solid #435d55;">'
-            f'{html.escape(band["label"])} · {html.escape(trend["label"])}</strong>　'
+            f'{badge_txt}</strong>　'
             f'{html.escape(band.get("explanation") or "")}</div>'
-            f'· <strong>口径：</strong>年化 {data["level_text"]}%；√时间折算未来 30 天幅度约 '
-            f'<strong>{data["expected_30d_text"]}</strong>（只表示幅度）。VIX 由 SPX 虚值期权合成，'
-            '度量未来 30 天隐含波动率定价；VIX² 接近 Q 测度预期方差，不等于 P 测度已实现波动或崩盘概率。<br/>'
-            f'<span style="{meta}">行情日期 {as_of}</span></div>')
+            f'{meta_html}</div>')
 
 
 def render_plain(data):

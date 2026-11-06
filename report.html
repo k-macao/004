@@ -177,6 +177,12 @@ button, a { -webkit-tap-highlight-color:transparent; }
   text-shadow:0 0 30px rgba(79,229,255,.14);
 }
 .masthead h1::first-letter { color:var(--cyan); }
+.masthead-date {
+  margin-top:12px;
+  color:var(--muted);
+  font:700 11px/1.4 var(--mono);
+  letter-spacing:.05em;
+}
 .masthead .sub {
   max-width:650px;
   margin-top:12px;
@@ -213,8 +219,6 @@ button, a { -webkit-tap-highlight-color:transparent; }
 .hud-stat span { display:block; margin-bottom:4px; color:var(--muted); font:700 9px/1 var(--mono); letter-spacing:.1em; }
 .hud-stat strong { display:block; overflow:hidden; color:var(--ink); font:600 12px/1.3 var(--hei); text-overflow:ellipsis; white-space:nowrap; }
 .hud-stat strong.signal { color:var(--cyan); }
-/* 03B 舆情·新闻因子 的 KPI 卡组：build_site.py 的 _stat_card() 只发这几个 class，
-   模板必须自带样式，否则注入内容会掉成无样式默认块（深色底上糊成一片黑字）。 */
 .stat-grid {
   display:grid;
   grid-template-columns:repeat(auto-fit,minmax(200px,1fr));
@@ -273,7 +277,6 @@ button, a { -webkit-tap-highlight-color:transparent; }
 .raid-nav a:hover::after, .raid-nav a:focus-visible::after { transform:scaleX(1); }
 .raid-nav b { margin-right:7px; color:var(--pink); font-family:var(--mono); font-size:9px; }
 .main { padding:34px 30px 32px; }
-/* 开头留出呼吸感，并先用极简字符轴交代多空方向；不把方向藏在长文末尾。 */
 .opening-brief {
   position:relative;
   overflow:hidden;
@@ -371,7 +374,6 @@ button, a { -webkit-tap-highlight-color:transparent; }
   color:var(--muted);
   font:10px/1.7 var(--mono);
 }
-/* 00 / 每日 VIX：当次点位 + 研究口径。分档仅作阅读导航，不生成交易信号。 */
 .vix-panel {
   position:relative;
   overflow:hidden;
@@ -651,24 +653,13 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 <div class="page">
 
   <header class="masthead">
-    <div class="masthead-topline">
-      <span class="live-state"><i></i>LIVE DATA LINK</span>
-      <span>OCTO // COMMAND CENTER · {{TS_FULL}}</span>
-    </div>
     <div class="masthead-body">
       <div>
         <div class="brand-eyebrow">MARKET INTELLIGENCE <span>SEASON // 04</span></div>
         <h1>章鱼 AI·舆情004</h1>
-        <div class="sub">全网 AI 调研境内境外数据 · 多模型混合部署 · 将市场信号编译为可执行战术</div>
+        <div class="masthead-date">{{TS_FULL}}</div>
       </div>
       <div class="rank-panel" aria-label="Market intelligence rank"><strong>S+</strong><small>MARKET INTEL</small></div>
-    </div>
-    <div class="hud-stats" aria-label="战情面板">
-      <div class="hud-stat"><span>MODE</span><strong class="signal">QUANT RAID</strong></div>
-      <div class="hud-stat"><span>FEED</span><strong>{{FETCH_STATUS}}</strong></div>
-      <div class="hud-stat"><span>INTEL</span><strong>{{COMMUNITY_FETCH_STATUS}}</strong></div>
-      <div class="hud-stat"><span>RSS</span><strong>{{RSS_STATUS}}</strong></div>
-      <div class="hud-stat"><span>OBJECTIVE</span><strong>RISK / REWARD</strong></div>
     </div>
   </header>
 
@@ -684,37 +675,29 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 
   <main class="main">
 
-    <h2 class="pub-heading" id="vix">00 / 每日 VIX 恐慌指数 (Daily VIX Fear Gauge · 未来 30 天隐含波动率)</h2>
+    <h2 class="pub-heading" id="vix">00 / 每日 VIX 恐慌指数</h2>
     <div id="vixDaily">
 <!-- VIX -->
     </div>
 
     <section class="opening-brief" aria-labelledby="openingSignalTitle">
-      <div class="opening-kicker">OPENING SIGNAL <span>多空先行 · 证据随后</span></div>
-      <h2 class="opening-title" id="openingSignalTitle">开局先看多空，再看故事</h2>
+      <div class="opening-kicker">OPENING SIGNAL</div>
+      <h2 class="opening-title" id="openingSignalTitle">多空方向概览</h2>
       <div class="opening-axis" role="img" aria-label="多空方向轴：左侧为空头防守，右侧为多头进攻">
         <span class="opening-axis-side bear">空头 / 防守</span>
         <span class="opening-axis-track">◀──────────────┼──────────────▶</span>
         <span class="opening-axis-side bull">多头 / 进攻</span>
       </div>
       <div class="opening-scale"><span>减仓 / 对冲</span><span>观望</span><span>分批建仓</span></div>
-      <div class="opening-reading"><span class="marker">●</span>恒指当次读数：<strong>{{HSI_PCT}}</strong>　<em>综合多空结论见 01 栏</em></div>
-      <div class="opening-note">字符轴只做方向提示；合成分、置信度与证据链均来自本次构建，不预设多空。</div>
+      <div class="opening-reading"><span class="marker">●</span>恒指涨跌幅：<strong>{{HSI_PCT}}</strong></div>
     </section>
 
-    <div class="push-wrap">
-      <div class="push-title">微信推送 · 一对一专属单页完整直推 (Token 本人)</div>
-      <p class="push-tip">点击下方按钮，将本报告<strong>行情 + {{COMMUNITY_TOTAL}} 社区 · 含核心量化指标 · 49 源实抓摘录</strong>推送给 Token 对应的微信本人。</p>
-      <button class="pixel-push-btn" id="pushBtn" onclick="manualPush()">▶ 立即推送微信单页完整版</button>
-      <div class="terminal-log-box" id="pushStatus">STATUS &gt; 一对一专属推送已就绪 (Token 本人)<span>▌</span></div>
-    </div>
-
-    <h2 class="pub-heading" id="battlefield">01 / 每日全球全景扫描 (Daily Global Panorama Scan · 5 大推动力量)</h2>
+    <h2 class="pub-heading" id="battlefield">01 / 每日全球全景扫描</h2>
     <div id="panoramaScan">
 <!-- PANORAMA -->
     </div>
 
-    <h2 class="pub-heading" id="market">02 / 行情快照 (Live Quotes)</h2>
+    <h2 class="pub-heading" id="market">02 / 行情快照</h2>
     <div class="pub-box">
       <div class="pub-sub">◆ 行情快照 · {{QUOTE_DATE_CN}} · {{TS_FULL}}</div>
       <table class="quote-table">
@@ -732,91 +715,47 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
         <tr><td>美元/离岸人民币</td><td>{{USDCNH_LAST}}</td><td>{{USDCNH_CHG}}</td><td class="q-pct">{{USDCNH_PCT}}</td><td>{{USDCNH_ASOF}}</td></tr>
         <tr><td>美元/在岸人民币</td><td>{{USDCNY_LAST}}</td><td>{{USDCNY_CHG}}</td><td class="q-pct">{{USDCNY_PCT}}</td><td>{{USDCNY_ASOF}}</td></tr>
       </table>
-      <div class="pub-meta">{{FETCH_STATUS}} · {{COMMUNITY_FETCH_STATUS}}</div>
-      <div id="macroList" style="border-top:1px dashed var(--border); margin-top:12px; padding-top:10px;">
+      <div id="macroList">
 <!-- MACROLIST -->
-<div class="pub-sub">◆ 宏观快讯 — 今日未获取</div>
-<div style="font-size:11.5px;line-height:1.8;color:#0a0a0a;">
-  ⚠️ 未读到 <strong>macro_data.json</strong>：构建步骤 <code style="background:#eceef0;padding:1px 4px;">python3 macro_data.py</code> 未执行，或公开快讯源当次全部失败。<br/>
-  本栏<strong>不再回填历史叙事</strong>，只保留下方当次抓取的实时行情；宏观结论以每次重建后的最新一版为准。
-  <div class="pub-meta" style="margin-top:6px;">本次判定：未读到 macro_data.json（构建步骤未执行，或产物未生成）（no_file）· 恢复命令：<code style="background:#eceef0;padding:1px 4px;">python3 macro_data.py --json macro_data.json --days 7 --text</code></div>
-</div>
 <!-- /MACROLIST -->
       </div>
     </div>
 
-    <h2 class="pub-heading" id="intel">03 / 社区论坛热评与公开摘录 ({{COMMUNITY_TOTAL}} 大平台 · 实抓 {{COMMUNITY_LIVE_OK}} 源 · {{COMMUNITY_TYPE_TOTAL}} 类社区 · 严格真实口径)</h2>
+    <h2 class="pub-heading" id="intel">03 / 社区论坛热评与公开摘录</h2>
     <div class="filter-row" role="group" aria-label="社区研判筛选">
-      <button class="filter-tab active" onclick="filterCards('all', this)">全部 {{COMMUNITY_TOTAL}} 平台</button>
+      <button class="filter-tab active" onclick="filterCards('all', this)">全部 ({{COMMUNITY_LIVE_OK}})</button>
       <button class="filter-tab" onclick="filterCards('bull', this)">偏多 ({{CF_BULL}})</button>
       <button class="filter-tab" onclick="filterCards('bear', this)">偏空 ({{CF_BEAR}})</button>
       <button class="filter-tab" onclick="filterCards('neutral', this)">中性 ({{CF_NEUTRAL}})</button>
       <button class="filter-tab" onclick="filterCards('mixed', this)">多空分歧 ({{CF_MIXED}})</button>
-      <button class="filter-tab" onclick="filterCards('unavailable', this)">未获取 ({{CF_UNAVAILABLE}})</button>
-      <span class="filter-result" id="filterResult"><i></i>{{COMMUNITY_TOTAL}} SOURCE FEEDS</span>
     </div>
-    <div class="pub-meta" style="margin:0 0 8px;">评论仅为有限样本，按各站实际指标排序，不代表全站排行；普通页面摘录不是热评。评论发布时间与抓取核验时间分别标注。指标口径：情感 = 样本文本金融词库净值（零哈希伪随机）· 事件 = 片段关键词实配 · 相关性 = 核心词与财经主题词命中密度 · 新颖度 = 批内去重独立度；未获取源不生成指标。</div>
     <div id="communityList">
 <!-- COMMUNITY_LIST:BEGIN -->
-<div class="pub-box">
-  <div class="pub-sub">◆ 社区论坛热评 — 待构建注入（严格真实口径）</div>
-  <p style="margin:0;">运行 <code>python3 community_snapshot.py</code> 并执行 <code>python3 build_site.py</code> 后，此处将读取四小时采集快照并重新分析 49 个社区源：抓到公开讨论正文则展示真实摘录与词库指标；风控拦截或未命中财经主题词的源一律如实标注「未获取」，绝不回填历史剧本或伪造多空计数。</p>
-</div>
 <!-- COMMUNITY_LIST:END -->
     </div>
 
-    <h2 class="pub-heading">03B / 舆情·新闻因子：多平台采集 → 标的匹配 (Sentiment &amp; News Factor Bench)</h2>
-    <div class="pub-box">
-      <div class="pub-sub">◆ 现成因子口径与本次读数（多量化平台合并采集 · 对外不显示数据来源）</div>
-      <p style="margin:0 0 8px;">由 <code>sentiment_factors.py</code> 每次构建前采集多家量化平台的
-        <strong>现成舆情 / 新闻因子</strong>（平台已给原生情感字段时优先采用，权限未开通时降级到
-        热度类因子 + 自建中文金融词库），再按关键词<strong>匹配到 02 节行情标的与日报主题</strong>，结果见下表。
-        单接口失败自动降级不阻断；数据来源不在对外输出中展示。</p>
-      <p style="margin:0;">
-        <span class="lead">舆情温度计 {{SENT_TEMP}} · {{SENT_LABEL}}</span>&nbsp;
-        净情感 {{SENT_NET}} · 负面占比 {{SENT_NEG}} · 热度 {{SENT_HEATZ}} · 风险分 {{SENT_RISK}} ·
-        采集新闻 {{SENT_NEWS}} 条（平台现成因子 {{SENT_NATIVE}} 条）→
-        匹配日报标的 {{SENT_MATCH_HITS}} 条（匹配率 {{SENT_MATCH_RATE}}）<br/>
-        <span style="color:#7d838b;font-size:10.5px;">数据日期 {{SENT_DATE}} · 采集状态 {{SENT_SOURCE_STATUS}} · 模式 {{SENT_MODE}} · {{SENT_STATUS}}</span>
-      </p>
-    </div>
+    <h2 class="pub-heading">03B / 舆情·新闻因子</h2>
 <!-- SENTIMENT_LIST:BEGIN -->
-    <div class="pub-box"><div class="pub-sub">◆ 舆情因子节点待生成</div>
-      运行 <code>python3 sentiment_factors.py --live</code>（境内出口 + 凭据）或
-      <code>python3 sentiment_factors.py --mock</code>（离线回放）后重新构建，
-      即可注入「标的匹配 + 因子读数」（对外不显示数据来源）。</div>
 <!-- SENTIMENT_LIST:END -->
 
-    <h2 class="pub-heading" id="forecast">04 / AI 预测 · 未来函数 (AI Forecast · Next Session · 先存档后结算)</h2>
+    <h2 class="pub-heading" id="forecast">04 / AI 预测</h2>
     <div id="aiForecast">
 <!-- FORECAST -->
     </div>
 
-    <h2 class="pub-heading" id="rss">05 / 全球 49 大财经 RSS 情报源 (Global 49 Finance RSS Intel Feeds · 六大板块 · 逐源核验)</h2>
-    <div class="pub-meta" style="margin:0 0 8px;">
-      覆盖国际宏观、美股与科技、A 股港股大中华区、大宗商品外汇、加密货币 Web3 与顶级投资人专栏六大板块，
-      共 <strong>49 源</strong>：原生官方 RSS 优先，站点无公开订阅源时用 RSSHub 路由或 Google News 检索载体（如实标注，不冒充原生源）。
-      逐源显示当次抓取状态与条目发布日期；<strong>抓不到的源标「未获取」，不回填历史标题、不编造「今日重点」</strong>。
-    </div>
+    <h2 class="pub-heading" id="rss">05 / 全球 49 大财经 RSS 情报源</h2>
     <div id="rssFeeds">
 <!-- RSSFEEDS -->
-<div class="pub-box">
-  <div class="pub-sub">◆ 49 大财经 RSS 情报源 — 今日未获取</div>
-  <p style="margin:0;">运行 <code>python3 rss_feeds.py</code> 抓取 49 源并执行 <code>python3 build_site.py</code> 后，
-    此处按六大板块渲染逐源状态与当次真实条目（每条自带发布日期）。抓不到的源如实标注「未获取」，
-    绝不回填历史标题或编造「今日重点」。</p>
-</div>
 <!-- /RSSFEEDS -->
     </div>
 
-    <h2 class="pub-heading" id="verdict">07 / 核心结论 (Boss Verdict)</h2>
+    <h2 class="pub-heading" id="verdict">07 / 核心结论</h2>
     <div class="pub-box">
 <!-- VERDICT:BEGIN -->
       <ul class="pixel-list">
         <li><strong>港股盘面</strong>：{{QUOTE_DATE_CN}}恒指 {{HSI_LAST}}（{{HSI_PCT}}），恒科 {{HSTECH_LAST}}（{{HSTECH_PCT}}）；</li>
-        <li><strong>宏观与快讯</strong>：构建时由 <code>build_site.py</code> 按当次有效快讯注入，缺失时按时效留空，不写死历史箱体或点位；</li>
         <li><strong>大宗与汇率</strong>：现货黄金 {{GOLD_LAST}}（{{GOLD_PCT}}）· WTI 原油 {{WTI_LAST}}（{{WTI_PCT}}）· 离岸人民币 {{USDCNH_LAST}}（{{USDCNH_PCT}}）；</li>
-        <li><strong>社区实抓情绪</strong>：实抓 {{COMMUNITY_LIVE_OK}}/{{COMMUNITY_TOTAL}} 源（偏多 {{CF_BULL}} · 偏空 {{CF_BEAR}} · 中性 {{CF_NEUTRAL}} · 分歧 {{CF_MIXED}} · 未获取 {{CF_UNAVAILABLE}}）。</li>
+        <li><strong>社区多空</strong>：偏多 {{CF_BULL}} · 偏空 {{CF_BEAR}} · 中性 {{CF_NEUTRAL}} · 多空分歧 {{CF_MIXED}}。</li>
       </ul>
 <!-- VERDICT:END -->
     </div>
@@ -828,7 +767,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
 
   <footer class="footer">
     <div class="author">作者：章鱼 ai&nbsp;&nbsp;仅供参考，分析研究</div>
-    <p id="pageGenTime">生成时间：{{TS_FULL}} · 内容发布时间见各条目 · 100K 完整单页直推版 · 含核心量化指标</p>
+    <p id="pageGenTime">生成时间：{{TS_FULL}}</p>
   </footer>
 
 </div>
@@ -841,7 +780,7 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
  "parts": [
   {
    "title": "章鱼 AI·舆情004",
-   "content": "<div><strong>章鱼 AI·舆情004</strong> — 待构建注入：运行 build_site.py 与 tools/wechat_push.py --embed 后生成当次实时推送负载（模板不冻结历史快照）。</div>"
+   "content": "<div><strong>章鱼 AI·舆情004</strong></div>"
   }
  ],
  "pages_url": "https://k-macao.github.io/004/",
@@ -854,9 +793,6 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
   const PUSHPLUS_TOKEN = '507a6c0cf9cf46229f5f3c5107a967cc';
   const PUSHPLUS_TOPIC = '';
 
-  function utcStampFull(d) { d = d || new Date(); return d.toISOString().replace('T',' ').substring(0,19) + ' UTC'; }
-
-  // 严格真实口径：不再于浏览器端用当前访客时钟篡改构建「生成时间」
   document.addEventListener('DOMContentLoaded', function () { colorizeQuoteSignals(); });
 
   function colorizeQuoteSignals() {
@@ -870,54 +806,11 @@ code { padding:1px 5px; color:var(--cyan); background:rgba(79,229,255,.08); bord
   function filterCards(type, tabEl) {
     document.querySelectorAll('.filter-tab').forEach(t => t.classList.remove('active'));
     tabEl.classList.add('active');
-    let visible = 0;
     document.querySelectorAll('#communityList .pub-card').forEach(card => {
       const v = card.getAttribute('data-verdict');
       const show = type === 'all' || v === type;
       card.style.display = show ? '' : 'none';
-      if (show) visible += 1;
     });
-    const result = document.getElementById('filterResult');
-    if (result) result.innerHTML = '<i></i>' + visible + ' SOURCE FEED' + (visible === 1 ? '' : 'S');
-  }
-
-  async function manualPush() {
-    const btn = document.getElementById('pushBtn');
-    const status = document.getElementById('pushStatus');
-    const now = new Date();
-    const tsFull = utcStampFull(now);
-    btn.disabled = true;
-    btn.textContent = '⏳ 推送中…';
-    status.innerHTML = 'TIME CHECK &gt; ' + tsFull + ' 正在推送…<span>▌</span>';
-    try {
-      let part = null;
-      try {
-        const el = document.getElementById('wechat-parts');
-        if (el) { const p = JSON.parse(el.textContent); if (Array.isArray(p.parts) && p.parts.length) part = p.parts[0]; }
-      } catch (e) { console.warn(e); }
-      if (!part || !part.content) {
-        part = { title: '章鱼 AI·舆情004', content: '<div>手动推送请求时间：' + tsFull + '（当前页未内嵌构建产物）</div>' };
-      }
-      const pushTitle = '章鱼 AI·舆情004';
-      status.innerHTML = 'TRANSMITTING &gt; 正在发送当次构建快照（请求时间 ' + tsFull + '）…<span>▌</span>';
-      const body = new URLSearchParams();
-      body.append('token', PUSHPLUS_TOKEN);
-      body.append('title', pushTitle);
-      body.append('content', part.content);
-      body.append('template', 'html');
-      if (PUSHPLUS_TOPIC) body.append('topic', PUSHPLUS_TOPIC);
-      await fetch('https://www.pushplus.plus/send', { method:'POST', mode:'no-cors', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:body.toString() });
-      btn.textContent = '✔ 已成功推送';
-      status.innerHTML = '<span>SUCCESS &gt; 已推送 (Token 本人 · ' + tsFull + ') 请在微信查收。</span><span>▌</span>';
-    } catch (err) {
-      console.error('推送失败', err);
-      btn.textContent = '✖ 推送失败';
-      status.innerHTML = 'FAILED &gt; ' + err.message + '<span>▌</span>';
-    }
-    setTimeout(() => {
-      btn.disabled = false;
-      btn.textContent = '▶ 立即推送微信单页完整版';
-    }, 4000);
   }
 </script>
 
