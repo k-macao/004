@@ -358,6 +358,44 @@ class TestPctGapAttribution(unittest.TestCase):
                             for c in item['checks']))
         self.assertEqual(item['verdict'], 'fail')
 
+    # ---- 归因是逐来源的: 一个来源被豁免不得掩盖另一个来源的真矛盾 ----
+    # 基准 quote: last=prev=100 ⇒ pct=0.00，便于把偏差精确指派给某一项成因。
+    #   probe(100.4, pct=0.4)  点位差 0.4%(在容差内)、前收效应 0.0pp  → 可豁免的快照漂移
+    #   probe(100.0, pct=-2.0) 点位差 0(完全一致)、  前收效应 −2.0pp  → 真前收口径矛盾
+
+    def drift_probe(self, source, family):
+        return lambda: probe(100.4, pct=0.4, as_of=CI_FD, source=source, family=family)
+
+    def genuine_probe(self, source, family, pct=-2.0):
+        return lambda: probe(100.0, pct=pct, as_of=CI_FD, source=source, family=family)
+
+    def test_explained_drift_does_not_mask_a_genuine_primary_source_conflict(self):
+        """主源真矛盾 + 他源已豁免的漂移 → 仍 FAIL，豁免不得掩蔽主源。"""
+        item = verify_item('HSI', q(100.0, 100.0, as_of=CI_FD),
+                           [self.genuine_probe('yahoo', 'yahoo'),
+                            self.drift_probe('stooq_hist', 'stooq')], CI_FD)
+        by_fam = {r['family']: r for r in item['sources']}
+        self.assertTrue(by_fam['stooq']['pct_gap_explained_by_level'])   # 该源确已豁免
+        self.assertFalse(by_fam['yahoo'].get('pct_gap_explained_by_level', False))
+        self.assertEqual(item['verdict'], 'fail')
+        self.assertTrue(any(c['name'] == 'sources' and c['severity'] == 'fail'
+                            and '与主源官方口径矛盾' in c['detail'] for c in item['checks']))
+
+    def test_explained_drift_does_not_mask_two_family_contradiction(self):
+        """主源这次是被豁免的一方，但另两族彼此一致地矛盾 → 仍按 ≥2 族判 FAIL。"""
+        item = verify_item('HSI', q(100.0, 100.0, as_of=CI_FD),
+                           [self.drift_probe('yahoo', 'yahoo'),
+                            self.genuine_probe('stooq', 'stooq'),
+                            self.genuine_probe('frankfurter', 'ecb', pct=-2.01)], CI_FD)
+        by_fam = {r['family']: r for r in item['sources']}
+        self.assertTrue(by_fam['yahoo']['pct_gap_explained_by_level'])   # 主源已豁免
+        self.assertEqual(item['verdict'], 'fail')
+        self.assertTrue(any(c['severity'] == 'fail' and '2 个独立来源族' in c['detail']
+                            for c in item['checks']))
+        # 豁免仍须留痕，不因整体 FAIL 而被吞掉
+        self.assertTrue(any(c['name'] == 'pct' and c['severity'] == 'warn'
+                            for c in item['checks']))
+
 
 if __name__ == '__main__':
     unittest.main()
