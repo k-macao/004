@@ -358,6 +358,22 @@ class TestPctGapAttribution(unittest.TestCase):
                             for c in item['checks']))
         self.assertEqual(item['verdict'], 'fail')
 
+    def test_attribution_works_with_production_probe_shape(self):
+        """生产形状是二元组 ('名字', () -> dict)，不是裸可调用对象。
+
+        default_probes() 返回 [('yahoo', lambda: probe_yahoo(...)), ...]，
+        其余用例用裸 lambda 注入；本用例按生产原样构造，确认真实路径同样归因，
+        避免测试全绿而线上形态另有分支。
+        """
+        item = verify_item('VIX', self.ci_quote(),
+                           [('yahoo', self.ci_probes()[0])], CI_FD)
+        rec = item['sources'][0]
+        self.assertEqual(rec['source'], 'yahoo')
+        self.assertTrue(rec['pct_gap_explained_by_level'])
+        self.assertEqual(item['verdict'], 'warn')
+        self.assertTrue(any(c['name'] == 'pct' and c['severity'] == 'warn'
+                            for c in item['checks']))
+
     # ---- 归因是逐来源的: 一个来源被豁免不得掩盖另一个来源的真矛盾 ----
     # 基准 quote: last=prev=100 ⇒ pct=0.00，便于把偏差精确指派给某一项成因。
     #   probe(100.4, pct=0.4)  点位差 0.4%(在容差内)、前收效应 0.0pp  → 可豁免的快照漂移
