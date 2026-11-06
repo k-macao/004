@@ -18,11 +18,25 @@
     • level          点位与各来源比对 (相对偏差容差 VERIFY_LEVEL_TOL_PCT)
     • pct            涨跌幅与来源比对 (绝对偏差容差 VERIFY_PCT_TOL_PP)
 
+  涨跌幅偏差归因 (见 _split_pct_gap):
+    涨跌幅是派生量，两个来源的涨跌幅之差可按恒等式精确拆成两个独立成因:
+        p′ − p = L′·(1/P′ − 1/P)·100  +  (L′ − L)/P·100
+                 └──── 前收口径效应 ────┘   └─── 点位快照效应 ───┘
+    前收口径效应才是真矛盾 (两方昨收基准不同)，点位快照效应只是构建与校验
+    相隔数秒的行情漂移，已由点位闸门管辖。故超差时先做归因: 若前收口径效应
+    在容差内且点位已判定一致，则降级为 WARN 并写明分解明细，不再重复计罚。
+    不归因会让两道闸门互相矛盾 —— 0.5% 点位容差在昨收基准上必然产生 ≈0.5pp
+    涨跌幅偏差，而 PCT_TOL_PP 只有 0.35pp，于是点位差 0.36%–0.50% 的正常快照
+    会被点位放行、被涨跌幅判死 (2026-11-06 VIX 误阻断推送即此)。
+    注意: 2026-09-16 恒指事故的点位与来源完全相同 (点位效应 = 0)，2.41pp 偏差
+    100% 落在前收口径，归因后仍然 FAIL —— 本机制不削弱对真事故的拦截。
+
   判定规则:
     • FAIL: 主源官方口径互相矛盾；≥2 个独立来源族彼此一致但与流水线不一致；
             内部数学不自洽；行情日期超前/陈旧
     • WARN: 仅 1 个独立来源族不一致；数据缺失；独立来源不足；来源日期晚于流水线
-            (盘后滚动到新交易日属正常，仅提示)
+            (盘后滚动到新交易日属正常，仅提示)；涨跌幅超差但经归因确认全部
+            来自点位快照漂移 (昨收基准一致，非口径矛盾)
     • PASS: 其余情况。跨日期的来源比对从宽 (只比点位、WARN 封顶)，避免
             早上 09:00 推送时新交易日已开盘造成的误报。
 
@@ -185,6 +199,31 @@ def _ck(name, severity, detail):
     return {'name': name, 'severity': severity, 'detail': detail}
 
 
+def _split_pct_gap(last, prev, probe_last, probe_pct):
+    """把「来源涨跌幅 − 流水线涨跌幅」精确分解成两个独立成因 (恒等式, 无近似):
+
+        p′ − p = L′·(1/P′ − 1/P)·100  +  (L′ − L)/P·100
+                 └──── 前收口径效应 ────┘   └─── 点位快照效应 ───┘
+
+    其中 P′ = L′/(1 + p′/100) 是来源隐含的昨收 (代入后前收口径效应化简为
+    ((1 + p′/100) − L′/P)·100)。
+
+    • 前收口径效应 — 两方是否站在同一个昨收基准上算涨跌。这才是真正的口径
+      矛盾: 2026-09-16 恒指事故点位与来源完全一致 (点位效应 = 0)，2.41pp
+      偏差 100% 落在前收，本项即为其判据。
+    • 点位快照效应 — 构建与校验相隔数秒造成的行情漂移，已由点位闸门
+      (LEVEL_TOL_PCT) 独立管辖。涨跌幅闸门若再罚一次，就等于对同一个偏差
+      双重计罚: 0.5% 的点位容差在昨收基准上必然产生 ≈0.5pp 涨跌幅偏差，
+      而 PCT_TOL_PP 只有 0.35pp，两道闸门互相矛盾，任何点位差 0.36%–0.50%
+      的正常快照都会被点位放行、被涨跌幅判死 (2026-11-06 VIX 误阻断)。
+
+    返回 (前收口径效应, 点位快照效应)，单位均为百分点，二者之和恒等于 p′ − p。
+    """
+    prev_effect = ((1.0 + probe_pct / 100.0) - probe_last / prev) * 100.0
+    level_effect = (probe_last - last) / prev * 100.0
+    return round(prev_effect, 4), round(level_effect, 4)
+
+
 def verify_item(key, quote, probe_fns, fetch_date, level_tol=None, pct_tol=None):
     """校验单个标的 → item dict (verdict: pass/warn/fail)。probe_fns 可为空列表(离线)。"""
     level_tol = LEVEL_TOL_PCT if level_tol is None else level_tol
@@ -259,12 +298,20 @@ def verify_item(key, quote, probe_fns, fetch_date, level_tol=None, pct_tol=None)
                'reachable': True, 'last': pl, 'pct': pp, 'as_of': pa,
                'level_diff_pct': round(diff, 3) if diff is not None else None,
                'same_date': same}
+        # 点位比对
+        rec['agree_level'] = (rec['level_diff_pct'] is not None and rec['level_diff_pct'] <= level_tol)
         # 涨跌幅比对 (仅同日期且来源提供 pct 时)
         if pp is not None and pct is not None:
             rec['pct_diff_pp'] = round(abs(pp - float(pct)), 3)
             rec['agree_pct'] = rec['pct_diff_pp'] <= pct_tol
-        # 点位比对
-        rec['agree_level'] = (rec['level_diff_pct'] is not None and rec['level_diff_pct'] <= level_tol)
+            # 超差时把偏差按成因分解，避免与点位闸门重复计罚同一个偏差
+            if not rec['agree_pct'] and prev and float(pp) > -100:
+                prev_eff, level_eff = _split_pct_gap(last, prev, pl, float(pp))
+                rec['pct_prev_effect_pp'] = prev_eff
+                rec['pct_level_effect_pp'] = level_eff
+                # 前收口径一致 ⇒ 偏差全部来自点位快照漂移，而该漂移已被点位闸门接受
+                rec['pct_gap_explained_by_level'] = bool(
+                    abs(prev_eff) <= pct_tol and rec['agree_level'])
         if same:
             rec['strict'] = True
             same_date.append(rec)
@@ -277,8 +324,20 @@ def verify_item(key, quote, probe_fns, fetch_date, level_tol=None, pct_tol=None)
         checks.append(_ck('sources', 'warn', '所有校验来源均不可达, 无法交叉确认 (insufficient_sources)'))
     else:
         # 同日期来源: 严格模式 — 来源族彼此一致但与流水线矛盾 → FAIL
+        # 涨跌幅超差但已按恒等式归因于点位快照漂移的，不算矛盾 (否则与点位闸门
+        # 双重计罚同一个偏差)；其前收口径效应仍单独列出，偏差不会被静默吞掉。
         dis_fams = sorted({r['family'] for r in same_date
-                           if r.get('agree_level') is False or r.get('agree_pct') is False})
+                           if r.get('agree_level') is False
+                           or (r.get('agree_pct') is False
+                               and not r.get('pct_gap_explained_by_level'))})
+        for r in same_date:
+            if r.get('pct_gap_explained_by_level'):
+                checks.append(_ck(
+                    'pct', 'warn',
+                    f'来源 {r["source"]} 涨跌幅偏差 {r["pct_diff_pp"]}pp 超容差 {pct_tol}pp，'
+                    f'但按恒等式分解: 前收口径效应 {r["pct_prev_effect_pp"]}pp (昨收基准一致) '
+                    f'+ 点位快照效应 {r["pct_level_effect_pp"]}pp = 偏差全部来自点位漂移，'
+                    f'而点位偏差 {r["level_diff_pct"]}% 已在 {level_tol}% 容差内 → 非口径矛盾，不阻断'))
         if dis_fams:
             if 'yahoo' in dis_fams:
                 det = [r for r in same_date if r['family'] == 'yahoo'][0]
