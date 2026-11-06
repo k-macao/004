@@ -5,8 +5,8 @@
 #   1. push 到 main            → 按需更新/复用社区快照 → 构建、部署并推送
 #   2. Actions 手动运行         → 同上, 可用 wechat_push 开关选择是否推送微信
 #   3. 每天北京时间 09:00 定时   → 自动重建站点并推送完整报告
-#   4. 每 4 小时               → 检查/更新 49 源社区快照
-#   5. 每 5 分钟循环           → 重建并推送；社区采集不到期时只读取快照
+#   4. 每 2 小时错峰 / 每 4 小时 → 防 GitHub Actions 限流 */5 造成数小时断更，完整重建站点并推送
+#   5. 每 5 分钟循环           → 重建并推送；社区采集未满 4 小时时直接读取快照复用
 #
 # 动态抓取管线 (每次运行均执行, 真正上线 — 行情+社区双动态):
 #   market_data.py      → market_data.json      (Yahoo Finance / Stooq 多源回退抓取最新行情)
@@ -29,8 +29,10 @@ on:
   # ⏰ 每天北京时间 (UTC+8) 上午 09:00 自动推送 → 即 UTC 01:00
   schedule:
     - cron: '0 1 * * *'
-    # 🗣️ 社区快照：四小时一次；其他事件只检查并复用同一份快照。
+    # 🗣️ 4 小时窗口 & 2 小时错峰兜底：GitHub Actions 对公共仓库高频 */5 会大幅限流/丢弃，
+    #    多组错峰 cron 保证即使 */5 被限流也能稳定唤醒；所有 schedule 触发一律构建部署新报告，绝不跳过。
     - cron: '0 */4 * * *'
+    - cron: '17 */2 * * *'
     # 🔄 每 5 分钟循环：重抓行情、读取社区快照 → 重建报告 → 推送微信
     #    注意: 若单次运行超过 5 分钟, 新 run 排队等上一条跑完 (不互相取消), 实际节奏 ≈ 最快每 5 分钟一轮
     - cron: '*/5 * * * *'
@@ -48,10 +50,11 @@ permissions:
   id-token: write
 
 concurrency:
-  # 四小时采集触发独立分组，不挤掉五分钟报告；各组最多一条运行、一条待运行。
-  # 社区任务另有跨工作流运行的独立锁，并按快照时间判断是否到期。
-  group: ${{ github.event_name == 'schedule' && (github.event.schedule == '0 */4 * * *' && 'community-four-hour-trigger' || 'pages-schedule-loop') || 'pages' }}
-  # 不取消正在运行的社区采集，避免中断后立即重新抓取。
+  # 所有 schedule 触发均构建并部署 Pages，统一归入 pages-schedule-loop 串行排队（最多一条运行、一条待运行），
+  # 避免多条 cron 同刻唤醒时并发抢占 github-pages 环境或重复推送；push / 手动触发走独立 pages 组。
+  # 社区任务另有跨工作流运行的独立锁，并按快照时间判断是否满 4 小时到期。
+  group: ${{ github.event_name == 'schedule' && 'pages-schedule-loop' || 'pages' }}
+  # 不取消正在运行的采集/构建/推送，上一轮跑完再开下一轮。
   cancel-in-progress: false
 
 jobs:
@@ -114,8 +117,8 @@ jobs:
   # ---------- 任务 1: 动态抓取 + 动态构建 + 部署到 GitHub Pages ----------
   deploy:
     needs: community_snapshot
-    # 四小时 cron 只采集；相同分钟的五分钟 cron 负责报告和推送，避免多推一次。
-    if: ${{ github.event_name != 'schedule' || github.event.schedule != '0 */4 * * *' }}
+    # 每次触发（push / 手动 / 任一 schedule cron）均完整构建并发布新报告，更新公开页扫描时间 (data_time)。
+    # GitHub Actions 对高频 */5 大幅限流且不会在 0 */4 同刻补跑 */5，任何 schedule 都不得跳过构建。
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -369,11 +372,11 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           exit $CODE
 
-  # ---------- 任务 3: 定时触发自动抓取 + 重建 + 推送 (每天 09:00 + 每 5 分钟循环) ----------
-  # 仅 schedule 触发时运行, 避免 push/手动触发时与 wechat 任务重复推送
+  # ---------- 任务 3: 定时触发自动抓取 + 重建 + 推送 (所有 schedule 定时触发) ----------
+  # 仅 schedule 触发时运行, 避免 push/手动触发时与 wechat 任务重复推送；不排除任何 cron 分支
   daily:
     needs: community_snapshot
-    if: ${{ github.event_name == 'schedule' && github.event.schedule != '0 */4 * * *' }}
+    if: ${{ github.event_name == 'schedule' }}
     runs-on: ubuntu-latest
     env:
       PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
@@ -415,6 +418,8 @@ jobs:
             echo "⚠️ 舆情因子：GitHub 海外出口取不到境内数据域（聚宽/米筐等按 IP 拒绝）→ 降级离线回放 --mock，页面与推送显示降级说明"
             python3 sentiment_factors.py --mock
           fi
+          set -e
+
       - name: 📡 动态抓取 49 大财经 RSS 情报源 (rss_feeds.py → rssfeeds_data.json · 网页 05 节 + 微信 05 栏数据源)
         # RSSHub 是第三方公共服务，构建期也可被 build_site.py 的 ensure() 补抓；
         # 这里显式跑一次，既是一手数据源，也把逐源可用性写进 Step Summary 方便排查。
@@ -444,9 +449,6 @@ jobs:
           fi
           cat rss_summary.txt
           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-
-
-          set -e
 
       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区+宏观快讯注入)
         env:
