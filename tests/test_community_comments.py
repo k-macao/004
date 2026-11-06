@@ -279,12 +279,14 @@ class TestPipeline(unittest.TestCase):
         self.assertTrue(any(u == cc.LIHKG_LIST_URL and h.get('X-LI-DEVICE-TYPE') == 'browser'
                             for u, h in calls))
         web = bs.build_community_html(data['communities'])
-        for phrase in ('采样评论', '热帖回复', '非回复点赞', '评论点赞 35',
-                       '其他采样回复', '2026-10-30T02:59:00Z'):
-            self.assertIn(phrase, web)
+        self.assertIn('2026-10-30T02:59:00Z', web)
+        self.assertIn(lihkg['quote'][:16], web)
+        self.assertNotIn('采样评论', web)
+        self.assertNotIn('评论点赞', web)
         wechat = wp.community_card(lihkg, level='standard')
-        for phrase in ('采样评论', '评论点赞 35', '评论点赞 12'):
-            self.assertIn(phrase, wechat)
+        self.assertIn(lihkg['quote'][:16], wechat)
+        self.assertNotIn('采样评论', wechat)
+        self.assertNotIn('评论点赞', wechat)
         self.assertNotIn('secret-user', web + wechat)
         # 全内容隐藏链接：出处 URL 只留在数据层（上面已断言 source_url），内容层不渲染链接。
         for rendered in (web, wechat):
@@ -321,7 +323,7 @@ class TestPipeline(unittest.TestCase):
         web = bs.build_community_html([record])
         self.assertNotIn('href', web)
         self.assertNotIn('reddit.com/r/investing', web)
-        self.assertIn('评论站内得分 4', wp.community_card(record, level='full'))
+        self.assertIn('Market valuations remain uncertain this week.', wp.community_card(record, level='full'))
         self.assertEqual(data['fetch_engine']['comment_fetch']['attempts']['RINVESTING']['status'], 'ok')
 
     def test_comment_sentiment_does_not_include_the_parent_title(self):
@@ -348,7 +350,10 @@ class TestPipeline(unittest.TestCase):
         self.assertEqual(hit['comment_attempt']['status'], 'http_403')
         self.assertEqual(stats['comment_fetch']['comment_sources'], 0)
         rec = cd.build_live_record(LIHKG, hit['snippet'], '2026-10-30', evidence=hit)
-        self.assertIn('未核验为评论', bs.build_community_html([rec]))
+        self.assertIn('未核验为评论', rec['meta'])
+        rendered = bs.build_community_html([rec])
+        self.assertIn('港股公開頁一般摘錄', rendered)
+        self.assertNotIn('未核验为评论', rendered)
         self.assertFalse(rec['comments'])
 
     def test_robots_disallow_followups_and_do_not_discard_page_excerpt(self):

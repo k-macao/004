@@ -118,7 +118,7 @@ class TestMacroSection(unittest.TestCase):
             'SENTIMENT_SHOW_API_EVAL': '0',
         }
         html = _render(env, now=now)
-        for token in ('background:#060811', 'OCTO // COMMAND CENTER', '逐标的预测',
+        for token in ('background:#060811', '章鱼 AI·舆情004', '逐标的预测',
                       'background:#0d1426', 'background:#10172a', 'color:#ff6b7d',
                       'background:#0e1528',
                       '市场舆情因子读数', '宏观快讯', 'color:#4fe5ff', 'color:#b6ff4a'):
@@ -145,8 +145,6 @@ class TestMacroSection(unittest.TestCase):
         for part in payload['parts']:
             self.assertEqual(part['title'], title)
             self.assertIn(title, part['content'])
-        self.assertIn("const pushTitle = '" + title + "';", report)
-        self.assertIn("part = { title: '" + title + "'", report)
         self.assertIn('<title>' + title + '</title>', report)
         self.assertIn('<h1>' + title + '</h1>', report)
         self.assertNotIn('章鱼 AI 量化策略日报', report)
@@ -169,15 +167,14 @@ class TestMacroSection(unittest.TestCase):
 
     def test_missing_macro_degrades_with_explicit_notice(self):
         html = _render(_no_data_env(self._tmp.name))
-        self.assertIn('宏观快讯 — 今日未获取', html)
-        self.assertIn('macro_data.py', html, '降级提示要直接给出恢复命令')
-        self.assertIn('不再回填历史叙事', html)
-        self.assertIn('行情未获取', html, '行情缺失应直说，而不是显示兜底点位')
-        # 网页 02 节走同一降级方向：缺 macro_data.json 时标注「今日未获取」，不摆历史叙事
+        self.assertNotIn('今日未获取', html)
+        self.assertNotIn('macro_data.py', html)
+        self.assertNotIn('不再回填历史叙事', html)
+        self.assertNotIn('行情未获取', html)
+        for bad in STALE_MARKERS:
+            self.assertNotIn(bad, html)
         web = bs.build_macro_html({})
-        self.assertIn('今日未获取', web)
-        self.assertIn('python3 macro_data.py', web)
-        self.assertIn('不再回填历史叙事', web)
+        self.assertEqual('', web)
 
     def test_macro_items_are_rendered_with_publish_dates(self):
         data = md.build(mock=True, quiet=True)
@@ -195,8 +192,8 @@ class TestMacroSection(unittest.TestCase):
             self.assertIn(wp.re.sub(r'\s+', ' ', t)[:20], wp.re.sub(r'<[^>]+>', ' ', html),
                           f'当次抓到的快讯应渲染进 02 栏: {t}')
         plain = wp.re.sub(r'<[^>]+>', ' ', html)
-        self.assertIn('时效窗口', plain)
-        self.assertIn('不显示数据来源', plain, '对外沿用舆情层同一脱敏口径')
+        self.assertNotIn('时效窗口', plain)
+        self.assertNotIn('不显示数据来源', plain)
         self.assertTrue(re.search(r'\[\d{1,2} 月 \d{1,2} 日\]', plain),
                         '每条快讯应自带发布日期，读者才能自行判断时效')
         for bad in STALE_MARKERS:
@@ -210,8 +207,8 @@ class TestMacroSection(unittest.TestCase):
         block = page.split(bs.MACROLIST_MARK, 1)[1].split(bs.MACROLIST_CLOSE, 1)[0]
         plain_block = wp.re.sub(r'\s+', ' ', wp.re.sub(r'<[^>]+>', ' ', block))
         self.assertNotIn('今日未获取', plain_block)
-        self.assertIn('时效窗口', plain_block)
-        self.assertIn('不显示数据来源', plain_block)
+        self.assertNotIn('时效窗口', plain_block)
+        self.assertNotIn('不显示数据来源', plain_block)
         self.assertTrue(re.search(r'\[\d{1,2} 月 \d{1,2} 日\]', plain_block),
                         '网页每条快讯同样自带发布日期')
         for t in titles:
@@ -230,20 +227,18 @@ class TestMacroSection(unittest.TestCase):
         with open(path, 'w', encoding='utf-8') as f:
             json.dump({'fetch_date': '2026-09-16', 'communities': [
                 {'key': 'FUTU', 'id': '01', 'name': '甲', 'icon': '🐮', 'verdict_label': '偏多',
-                 'verdict_class': 'bull', 'quote': 'q1', 'verdict': 'v1', 'meta': '综合站内 10 条讨论 · 最新读取 2026-09-16'},
+                 'verdict_class': 'bull', 'available': True, 'quote': 'q1', 'verdict': 'v1', 'meta': '综合站内 10 条讨论 · 最新读取 2026-09-16'},
                 {'key': 'XUEQIU', 'id': '02', 'name': '乙', 'icon': '❄️', 'verdict_label': '偏空',
-                 'verdict_class': 'bear', 'quote': 'q2', 'verdict': 'v2', 'meta': '综合站内 10 条讨论 · 最新读取 2026-09-16'},
+                 'verdict_class': 'bear', 'available': True, 'quote': 'q2', 'verdict': 'v2', 'meta': '综合站内 10 条讨论 · 最新读取 2026-09-16'},
                 {'key': 'LAOHU', 'id': '03', 'name': '丙', 'icon': '🐯', 'verdict_label': '中性',
-                 'verdict_class': 'neutral', 'quote': 'q3', 'verdict': 'v3', 'meta': '综合站内 10 条讨论 · 最新读取 2026-09-16'},
+                 'verdict_class': 'neutral', 'available': True, 'quote': 'q3', 'verdict': 'v3', 'meta': '综合站内 10 条讨论 · 最新读取 2026-09-16'},
             ]}, f, ensure_ascii=False)
         env = _no_data_env(self._tmp.name)
         env['COMMUNITY_DATA'] = path
         html = wp.re.sub(r'<[^>]+>', ' ', _render(env))
-        m = re.search(r'偏多 (\d+) 家 · <.*?>?偏空 (\d+) 家', html)
         self.assertIn('偏多 1 家', html)
         self.assertIn('偏空 1 家', html)
         self.assertIn('中性 1 家', html)
-        self.assertIn('3 个境内外核心社区信号', html, '小节标题的源数应随实际社区数变化')
         self.assertNotIn('8 月初五连阳', html)
 
 
@@ -311,19 +306,14 @@ class TestMacroAvailabilityFallback(unittest.TestCase):
         for reason, payload in UNAVAILABLE_CASES.items():
             with self.subTest(reason=reason):
                 web = bs.build_macro_html(payload if payload is not None else {}, now=NOW)
-                self.assertIn('宏观快讯 — 今日未获取', web)
-                self.assertIn('不再回填历史叙事', web)
-                self.assertIn('python3 macro_data.py', web)
-                self.assertIn('只保留下方当次抓取的实时行情', web)
-                self.assertIn('以每次重建后的最新一版为准', web)
+                self.assertEqual('', web)
 
                 env = _no_data_env(self._tmp.name)
                 env['MACRO_DATA'] = self._macro_path(payload)
                 wx = _render(env)
-                self.assertIn('宏观快讯 — 今日未获取', wx)
-                self.assertIn('不再回填历史叙事', wx)
-                self.assertIn('python3 macro_data.py', wx)
-                self.assertIn('只保留下方当次抓取的实时行情', wx)
+                sec02 = wx.split('02 / 全球经济与财经动态', 1)[1].split('03 / 社区论坛热评', 1)[0]
+                self.assertNotIn('宏观快讯', sec02)
+                self.assertNotIn('今日未获取', sec02)
 
     def test_stale_snapshot_never_leaks_into_other_sections(self):
         """过期快照不能只在 02 栏挡住 —— 01 栏证据链与 07 栏结论也必须拿不到旧闻。"""
@@ -339,13 +329,15 @@ class TestMacroAvailabilityFallback(unittest.TestCase):
         self.assertNotIn('ABCXYZ', page, '网页 02 节注入区同样不得出现旧闻')
 
     def test_fallback_states_why_this_time_failed(self):
-        """兜底文案要说明「这次为什么没有」，否则线上无从判断是没跑还是源挂了。"""
+        """不可用原因保留在数据层 availability()，展示层直接隐藏。"""
         cases = {'no_items': '时效窗口', 'stale_snapshot': '旧快照'}
         for reason, needle in cases.items():
             with self.subTest(reason=reason):
-                web = bs.build_macro_html(UNAVAILABLE_CASES[reason], now=NOW)
-                self.assertIn(needle, web)
-                self.assertIn(reason, web, '机器可读的 reason 也要带上，便于排查')
+                avail = md.availability(UNAVAILABLE_CASES[reason], now=NOW)
+                self.assertFalse(avail['ok'])
+                self.assertEqual(avail['reason'], reason)
+                self.assertIn(needle, avail['detail'])
+                self.assertEqual('', bs.build_macro_html(UNAVAILABLE_CASES[reason], now=NOW))
 
 
 if __name__ == '__main__':

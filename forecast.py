@@ -773,24 +773,32 @@ def _dir_chip(f):
     return f"{f['dir_word']} · {fmt_pct(f['mu_pct'])} · 置信度 {int(f['confidence'] * 100)}%"
 
 
-def render_web(data):
-    """04 节网页版 HTML（沿用 report.html 的 .pub-* / .pixel-list / .quant-box 类）。"""
-    head = (f'<div class="pub-meta" style="margin:0 0 8px;">'
-            f'预测生成 {_esc(data["generated_at"])} · 基准日 {_esc(data["base_date"] or "未获取")} · '
-            f'目标日 {_esc(data["target_date"] or "未获取")}（{_esc(data["horizon"])}） · '
-            f'数据覆盖 {int(data["coverage"] * 100)}% · {_esc(data["lookahead_note"])}</div>')
+def _clean_review_summary(rev):
+    settled = int((rev or {}).get('settled') or 0)
+    if settled <= 0:
+        return ''
+    hits = int(rev.get('hits') or 0)
+    hr = float(rev.get('hit_rate') or 0.0) * 100
+    bits = [f'已结算 {settled} 条', f'方向命中 {hits}/{settled}（{hr:.0f}%）']
+    if rev.get('band_rate') is not None:
+        in_band = int(rev.get('in_band') or 0)
+        br = float(rev.get('band_rate') or 0.0) * 100
+        bits.append(f'区间覆盖 {in_band}/{settled}（{br:.0f}%）')
+    return ' · '.join(bits)
 
-    if not data.get('available'):
-        return '\n'.join([
-            head,
-            '<div class="pub-sub">◆ 今日未获取 —— 本栏不预测</div>',
-            f'<div style="font-size:12px;line-height:1.8;">{_esc(_unavailable_line(data))}'
-            '恢复命令：<code>python3 market_data.py &amp;&amp; python3 forecast.py</code>。</div>',
-            _review_web(data.get('review') or empty_review()),
-        ])
+
+def render_web(data):
+    """04 节网页版 HTML（无状态/口径/缺口说明，空数据时不渲染）。"""
+    if not data or not data.get('available'):
+        return _review_web((data or {}).get('review')) if data else ''
 
     st = data['stance']
-    parts = [head]
+    parts = []
+    if data.get('base_date') and data.get('target_date'):
+        parts.append(
+            f'<div style="font-size:11.5px;color:var(--muted-strong);margin:0 0 8px;">'
+            f'基准日 {_esc(data["base_date"])} → 目标日 {_esc(data["target_date"])}（{_esc(data["horizon"])}）</div>'
+        )
     parts.append('<div class="pub-sub">◆ 明日盘面倾向（港股加权）</div>')
     parts.append(
         '<div class="quant-box">'
@@ -798,7 +806,6 @@ def render_web(data):
         f'　<span style="background:#000;color:#39ff14;padding:1px 6px;font-size:12px;">'
         f'{_esc(fmt_signed(st["z"], 2, "σ"))} · 置信度 {int(st["confidence"] * 100)}%</span></div>'
         f'<div style="margin-top:6px;">{_esc(st["summary"])}</div>'
-        f'<div class="pub-meta" style="margin-top:6px;">时序核验：{_esc(data["no_lookahead"]["note"])}</div>'
         '</div>')
 
     parts.append('<div class="pub-sub" style="margin-top:12px;">'
@@ -820,40 +827,43 @@ def render_web(data):
     parts.append('\n'.join(rows))
 
     hl = data['headline']
-    parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 驱动拆解（以'
-                 + _esc(hl['name']) + '为例，逐项可复算）</div>')
-    parts.append('<ul class="pixel-list">' + ''.join(
-        f'<li><strong>{_esc(d["name"])}：</strong>{_esc(fmt_signed(d["value"], 3, "σ"))}　{_esc(d["why"])}</li>'
-        for d in hl['drivers']) + '</ul>')
-    parts.append(f'<div class="pub-meta">合成 μ = {_esc(fmt_signed(hl["mu_sigma"], 3, "σ"))} × σ {hl["sigma"]:.2f} '
-                 f'= {_esc(fmt_pct(hl["mu_pct"]))}；{_esc(hl["range_text"])}。'
-                 f'驱动项一致度 {int(hl["agreement"] * 100)}%。</div>')
+    active_drivers = [d for d in (hl.get('drivers') or []) if abs(float(d.get('value') or 0.0)) > 1e-9]
+    if active_drivers:
+        parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 驱动拆解（'
+                     + _esc(hl['name']) + '）</div>')
+        parts.append('<ul class="pixel-list">' + ''.join(
+            f'<li><strong>{_esc(d["name"])}：</strong>{_esc(fmt_signed(d["value"], 3, "σ"))}　{_esc(d["why"])}</li>'
+            for d in active_drivers) + '</ul>')
 
-    sig = data['signals']
-    parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 三路输入信号</div>')
-    parts.append('<ul class="pixel-list">' + ''.join(
-        f'<li><strong>{label}：</strong>{_esc((sig.get(k) or {}).get("text") or "未获取")}</li>'
-        for k, label in (('carry', '全球联动'), ('sentiment', '情绪'), ('macro', '宏观')))
-        + '</ul>')
+    sig = data.get('signals') or {}
+    avail_sigs = [
+        (label, (sig.get(k) or {}).get('text'))
+        for k, label in (('carry', '全球联动'), ('sentiment', '情绪'), ('macro', '宏观'))
+        if (sig.get(k) or {}).get('value') is not None and (sig.get(k) or {}).get('text')
+    ]
+    if avail_sigs:
+        parts.append('<div class="pub-sub" style="margin-top:12px;">◆ 输入信号</div>')
+        parts.append('<ul class="pixel-list">' + ''.join(
+            f'<li><strong>{label}：</strong>{_esc(txt)}</li>'
+            for label, txt in avail_sigs) + '</ul>')
 
-    parts.append(_review_web(data.get('review') or empty_review()))
-    if data['data_gaps']:
-        parts.append('<div class="pub-meta" style="margin-top:8px;">数据缺口：'
-                     + _esc('；'.join(data['data_gaps'])) + '（缺口项一律按 0 处理，不回填旧预测）</div>')
-    parts.append(f'<div class="pub-meta" style="margin-top:6px;">{_esc(data["rule"])}</div>')
+    rev_html = _review_web(data.get('review'))
+    if rev_html:
+        parts.append(rev_html)
     return '\n'.join(parts)
 
 
 def _review_web(rev):
+    if not rev or int(rev.get('settled') or 0) <= 0:
+        return ''
+    summary = _clean_review_summary(rev)
     rows = ''.join(
         f'<li><strong>{_esc(v["name"])}</strong>：{v["n"]} 条已结算 · 方向命中 '
         f'{v["hit_rate"] * 100:.0f}% · 平均绝对误差 {v["mae_pct"]:.2f} 个百分点</li>'
         for v in (rev.get('by_symbol') or [])[:6])
-    return ('<div class="pub-sub" style="margin-top:12px;">◆ 历史预测回看（先存档 · 后结算）</div>'
-            f'<div style="font-size:12px;line-height:1.8;">{_esc(rev.get("text") or "")}</div>'
-            + (f'<ul class="pixel-list">{rows}</ul>' if rows else '')
-            + '<div class="pub-meta">只对目标日已抓到实际行情的预测计分；'
-              f'逾期 {SETTLE_EXPIRE_DAYS} 天未结算的作废，不计入命中率。</div>')
+    return ('<div class="pub-sub" style="margin-top:12px;">◆ 历史预测回看</div>'
+            f'<div style="font-size:12px;line-height:1.8;">{_esc(summary)}</div>'
+            + (f'<ul class="pixel-list">{rows}</ul>' if rows else ''))
 
 
 def _wechat_table(data, green):
@@ -883,31 +893,17 @@ def _wechat_table(data, green):
 
 
 def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff', compact=False):
-    """04 栏微信版 HTML（全内联样式，口径与网页版完全一致）。
+    """04 栏微信版 HTML（无状态/口径/缺口说明，空数据时不渲染）。"""
+    if not data or not data.get('available'):
+        return _review_wechat((data or {}).get('review'), green) if (data and not compact) else ''
 
-    compact=True 时收敛为「倾向 + 逐标的表 + 回看一行」，砍掉驱动拆解 / 三路信号 ——
-    微信单页有 10 万字符硬上限，推送侧按剩余预算选版本（见 tools/wechat_push.py）。
-    完整拆解在网页 04 节，两版数字同源，不会出现口径漂移。
-    """
     def sub(t):
         return f'<div style="color:{green};font-weight:700;font-size:13px;margin:10px 0 4px;">{t}</div>'
 
-    def meta(t):
-        return f'<div style="color:#9aa6c3;font-size:10.5px;margin-top:6px;line-height:1.7;">{t}</div>'
-
-    head = (f'预测生成 {_esc(data["generated_at"])} · 基准日 '
-            f'{_esc(data["base_date"] or "未获取")} · 目标日 '
-            f'{_esc(data["target_date"] or "未获取")}（{_esc(data["horizon"])}） · '
-            f'数据覆盖 {int(data["coverage"] * 100)}%')
-    out = [f'<div style="font-size:11.5px;line-height:1.85;color:{ink};">'
-           + meta(head + (' · ' + _esc(data['lookahead_note']) if not compact else ''))]
-
-    if not data.get('available'):
-        out.append(sub('◆ 今日未获取 —— 本栏不预测') + _esc(_unavailable_line(data)))
-        if not compact:
-            out.append(_review_wechat(data.get('review') or empty_review(), green))
-        out.append('</div>')
-        return ''.join(out)
+    out = [f'<div style="font-size:11.5px;line-height:1.85;color:{ink};">']
+    if data.get('base_date') and data.get('target_date'):
+        out.append(f'<div style="color:#9aa6c3;font-size:10.5px;margin-bottom:4px;">'
+                   f'基准日 {_esc(data["base_date"])} → 目标日 {_esc(data["target_date"])}（{_esc(data["horizon"])}）</div>')
 
     st = data['stance']
     out.append(sub('◆ 明日盘面倾向（港股加权）'))
@@ -915,68 +911,69 @@ def render_wechat(data, neon='#b6ff4a', green='#4fe5ff', ink='#edf2ff', compact=
                f'{_esc(st["label"])} · {_esc(fmt_signed(st["z"], 2, "σ"))} · '
                f'置信度 {int(st["confidence"] * 100)}%</strong>'
                f'<br/>{_esc(st["summary"])}')
-    if not compact:
-        out.append(meta('时序核验：' + _esc(data['no_lookahead']['note'])))
 
     out.append(sub(f'◆ 逐标的预测 · 目标日 {_esc(md_cn(data["target_date"]))}'))
     out.append(_wechat_table(data, green))
 
     if compact:
-        rev = data.get('review') or empty_review()
-        out.append(meta('历史预测回看（先存档 · 后结算）：' + _esc(rev.get('text') or '')
-                        + '　完整驱动拆解与三路输入信号见网页 04 节。'))
+        rev_sum = _clean_review_summary(data.get('review'))
+        if rev_sum:
+            out.append(f'<div style="color:#9aa6c3;font-size:10.5px;margin-top:6px;">历史预测回看：{_esc(rev_sum)}</div>')
         out.append('</div>')
         return ''.join(out)
 
     hl = data['headline']
-    out.append(sub(f'◆ 驱动拆解（以{_esc(hl["name"])}为例）'))
-    out.append(''.join(f'· <strong>{_esc(d["name"])}</strong> {_esc(fmt_signed(d["value"], 3, "σ"))}　{_esc(d["why"])}<br/>'
-                       for d in hl['drivers']))
-    out.append(f'合成 μ = {_esc(fmt_signed(hl["mu_sigma"], 3, "σ"))} × σ {hl["sigma"]:.2f} = '
-               f'{_esc(fmt_pct(hl["mu_pct"]))}，驱动项一致度 {int(hl["agreement"] * 100)}%。')
+    active_drivers = [d for d in (hl.get('drivers') or []) if abs(float(d.get('value') or 0.0)) > 1e-9]
+    if active_drivers:
+        out.append(sub(f'◆ 驱动拆解（{_esc(hl["name"])}）'))
+        out.append(''.join(f'· <strong>{_esc(d["name"])}</strong> {_esc(fmt_signed(d["value"], 3, "σ"))}　{_esc(d["why"])}<br/>'
+                           for d in active_drivers))
 
-    sig = data['signals']
-    out.append(sub('◆ 三路输入信号'))
-    out.append(''.join(
-        f'· <strong>{label}</strong>：{_esc((sig.get(k) or {}).get("text") or "未获取")}<br/>'
-        for k, label in (('carry', '全球联动'), ('sentiment', '情绪'), ('macro', '宏观'))))
+    sig = data.get('signals') or {}
+    avail_sigs = [
+        (label, (sig.get(k) or {}).get('text'))
+        for k, label in (('carry', '全球联动'), ('sentiment', '情绪'), ('macro', '宏观'))
+        if (sig.get(k) or {}).get('value') is not None and (sig.get(k) or {}).get('text')
+    ]
+    if avail_sigs:
+        out.append(sub('◆ 输入信号'))
+        out.append(''.join(
+            f'· <strong>{label}</strong>：{_esc(txt)}<br/>'
+            for label, txt in avail_sigs))
 
-    out.append(_review_wechat(data.get('review') or empty_review(), green))
-    if data['data_gaps']:
-        out.append(meta('数据缺口：' + _esc('；'.join(data['data_gaps'])) + '（按 0 处理，不回填旧预测）'))
-    out.append(meta(_esc(data['rule'])))
+    rev_wx = _review_wechat(data.get('review'), green)
+    if rev_wx:
+        out.append(rev_wx)
     out.append('</div>')
     return ''.join(out)
 
 
 def render_wechat_line(data, green='#4fe5ff'):
-    """预算实在不够时的最后一版：一行摘要，宁可少说，也不删到让人误读。"""
-    if not data.get('available'):
-        return (f'<div style="color:{green};font-weight:700;font-size:12px;margin:8px 0 2px;">'
-                f'◆ AI 预测 · 未来函数</div><div style="font-size:11px;line-height:1.8;">'
-                f'{_esc(_unavailable_line(data))}</div>')
+    """预算紧凑时的一行摘要（无可用预测时返回空串）。"""
+    if not data or not data.get('available'):
+        return ''
     st = data['stance']
     hl = data['headline']
     return (f'<div style="color:{green};font-weight:700;font-size:12px;margin:8px 0 2px;">'
-            f'◆ AI 预测 · 未来函数 · 目标日 {_esc(md_cn(data["target_date"]))}</div>'
+            f'◆ AI 预测 · 目标日 {_esc(md_cn(data["target_date"]))}</div>'
             f'<div style="font-size:11px;line-height:1.8;">明日盘面倾向：{_esc(st["label"])}'
             f'（{_esc(fmt_signed(st["z"], 2, "σ"))} · 置信度 {int(st["confidence"] * 100)}%）；'
             f'{_esc(hl["name"])} {_esc(hl["dir_word"])} {_esc(fmt_pct(hl["mu_pct"]))}，'
             f'区间 {_esc(fmt_pct(hl["low_pct"]))} ~ {_esc(fmt_pct(hl["high_pct"]))}。'
-            f'{_esc(st["summary"])}　'
-            '本条为微信单页字符预算内的摘要版，完整逐标的预测与驱动拆解见网页 04 节。</div>')
+            f'{_esc(st["summary"])}</div>')
 
 
 def _review_wechat(rev, green='#4fe5ff'):
+    if not rev or int(rev.get('settled') or 0) <= 0:
+        return ''
+    summary = _clean_review_summary(rev)
     head = (f'<div style="color:{green};font-weight:700;font-size:13px;margin:10px 0 4px;">'
-            '◆ 历史预测回看（先存档 · 后结算）</div>')
+            '◆ 历史预测回看</div>')
     rows = ''.join(
         f'· <strong>{_esc(v["name"])}</strong> {v["n"]} 条已结算 · 命中 '
         f'{v["hit_rate"] * 100:.0f}% · 平均绝对误差 {v["mae_pct"]:.2f} 个百分点<br/>'
         for v in (rev.get('by_symbol') or [])[:6])
-    return (head + _esc(rev.get('text') or '') + '<br/>' + rows
-            + f'<div style="color:#9aa6c3;font-size:10.5px;margin-top:4px;line-height:1.7;">'
-              '只对目标日已抓到实际行情的预测计分，不用当次行情给当次预测打分。</div>')
+    return head + _esc(summary) + ('<br/>' + rows if rows else '')
 
 
 # ---------------------------------------------------------------------------

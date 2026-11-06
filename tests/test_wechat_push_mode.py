@@ -23,7 +23,7 @@ class WechatPushModeTests(unittest.TestCase):
         embedded = re.search(r'<script[^>]*id="wechat-parts"[^>]*>(.*?)</script>', html, re.S)
         self.assertEqual(json.loads(embedded.group(1))['mode'], 'one-to-one')
         self.assertNotIn('oai.1', html)
-        self.assertIn("if (PUSHPLUS_TOPIC) body.append('topic', PUSHPLUS_TOPIC);", html)
+        self.assertIn("const PUSHPLUS_TOPIC = '';", html)
 
     def test_explicit_empty_topic_overrides_environment(self):
         with patch.dict(os.environ, {'PUSHPLUS_TOPIC': 'old-group'}):

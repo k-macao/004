@@ -144,37 +144,29 @@ _FIG_EMPTY = 'padding:4px 10px 8px'
 _FIG_NOTE = 'padding:2px 10px 8px;font-size:10px;color:#9aa6c3'
 
 
-def _rows_html(title, rows, note):
-    """微信用表格装字符柱：标签、柱、数值分列，不靠中文等宽。"""
+def _rows_html(title, rows, note=''):
+    """微信用表格装字符柱：标签、柱、数值分列，不靠中文等宽；无数据不渲染，不输出图注说明。"""
+    if not rows:
+        return ''
     body = [
         f'<table class="char-fig" style="{_FIG_TABLE}">',
-        f'<caption style="{_FIG_CAP}">◆ 字符配图 · ' + html.escape(title) + '</caption>',
+        f'<caption style="{_FIG_CAP}">◆ ' + html.escape(title) + '</caption>',
     ]
-    if not rows:
+    for label, bar, value in rows:
         body.append(
-            f'<tr><td style="{_FIG_EMPTY}">'
-            '（当次没有可画的数，本图不编柱，不回填历史点位）</td></tr>')
-    else:
-        for label, bar, value in rows:
-            # 柱尾的空格只是把单元格撑宽，表格已经按列对齐，去掉不影响观感
-            body.append(
-                f'<tr><td style="{_FIG_LABEL}">{html.escape(str(label))}</td>'
-                f'<td style="{_FIG_BAR}">{html.escape(str(bar).rstrip())}</td>'
-                f'<td style="{_FIG_VALUE}">{html.escape(str(value))}</td></tr>')
-    if note:
-        body.append(f'<tr><td colspan="3" style="{_FIG_NOTE}">' + html.escape(note) + '</td></tr>')
+            f'<tr><td style="{_FIG_LABEL}">{html.escape(str(label))}</td>'
+            f'<td style="{_FIG_BAR}">{html.escape(str(bar).rstrip())}</td>'
+            f'<td style="{_FIG_VALUE}">{html.escape(str(value))}</td></tr>')
     body.append('</table>')
     return ''.join(body)
 
 
-def _plain(title, rows, note):
-    lines = ['◆ ' + title]
+def _plain(title, rows, note=''):
     if not rows:
-        lines.append('（当次没有可画的数，本图不编柱，不回填历史点位）')
+        return ''
+    lines = ['◆ ' + title]
     for label, bar, value in rows:
         lines.append(f'{_pad(label, LABEL_W)} {bar}  {value}')
-    if note:
-        lines.append(note)
     return '\n'.join(lines)
 
 
@@ -197,19 +189,18 @@ def _quote_pcts(quotes):
 def quotes_chart(quotes):
     """涨跌幅发散柱。只画有当次 pct 的标的。"""
     pts = _quote_pcts(quotes)
-    title = '涨跌幅 diverging barh（零线居中）'
+    title = '涨跌幅分布'
     if not pts:
-        return _rows_html(title, [], '没有涨跌幅就不画柱。'), _plain(title, [], '')
+        return '', ''
     limit = max(1.0, max(abs(v) for _, v in pts))
     rows = [(name, diverging_bar(v, limit), f'{_fmt(v)}%') for name, v in pts]
-    note = (f'满刻度 ±{limit:.2f}%。+ 在零线右侧，- 在左侧；缺涨跌幅的标的不补 0。')
-    return _rows_html(title, rows, note), _plain(title, rows, note)
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def forces_chart(scan):
     """力量分有序柱 + 做多合成分发散柱。刻度固定 0–100 / ±100。"""
     forces = (scan or {}).get('forces') or []
-    title = '推动力量 ordered barh + 做多合成分'
+    title = '推动力量与做多合成分'
     rows = []
     ranked = sorted(forces, key=lambda f: -(_num(f.get('score')) or 0))
     for f in ranked:
@@ -223,61 +214,49 @@ def forces_chart(scan):
                      f'{score:.0f} {DIR_WORD.get(direction, "中性")}'))
     verdict = (scan or {}).get('verdict') or {}
     long_score = _num(verdict.get('long_score'))
-    if long_score is not None and (rows or verdict):
+    if long_score is not None and verdict.get('can_long') != 'unknown' and (rows or verdict):
         rows.append(('做多合成分', diverging_bar(long_score, 100, half=10),
                      f'{_fmt(long_score, 1)} {verdict.get("stance") or ""}'.strip()))
-    note = ('力量分柱按 0–100 固定刻度（#利好 =利空 .中性）；做多合成分零线居中，'
-            '阈值 −10 防御 / +10 轻仓试多 / +25 可做多。')
     if not rows:
-        return _rows_html(title, [], note), _plain(title, [], note)
-    return _rows_html(title, rows, note), _plain(title, rows, note)
+        return '', ''
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def community_chart(counts):
     """社区研判构成：一条堆叠柱。家数来自当次汇总，不另算。"""
     counts = counts or {}
     parts = [(glyph, int(counts.get(key) or 0)) for key, _name, glyph in COMMUNITY_PARTS]
-    title = '社区研判 stacked bar（构成）'
+    title = '社区多空分布'
     total = sum(c for _, c in parts)
     if total <= 0:
-        return _rows_html(title, [], '没有社区研判计数，不编构成。'), _plain(title, [], '')
+        return '', ''
     bar, _ = stacked_bar(parts, width=24)
     legend = '  '.join(f'{glyph}{name}{counts.get(key) or 0}'
                        for key, name, glyph in COMMUNITY_PARTS)
-    rows = [('构成', bar, f'共 {total} 家'), ('图例', legend, '')]
-    note = '一条柱即 100%（matplotlib bar stacked）。格子按家数占比分配，柱端是家数不是涨跌幅。'
-    return _rows_html(title, rows, note), _plain(title, rows, note)
+    rows = [('构成', bar, f'共 {total} 家'), ('多空', legend, '')]
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def long_short_chart(verdict):
-    """开头用一条固定刻度的字符轴交代多空合成分。
-
-    这张图故意保持极简：零线居中、空头在左、多头在右，数值仍来自
-    panorama 的当次 verdict。合成分缺失时不把缺失误画成中性 0。
-    """
-    title = '多空坐标 · 做多合成分（固定 ±100）'
+    """开头用一条固定刻度的字符轴交代多空合成分。"""
+    title = '多空合成分'
     verdict = verdict or {}
     score = _num(verdict.get('long_score'))
-    # panorama 会保留中间计算分，但 can_long=unknown 时结论并不成立；
-    # 此时必须留空，不能把内部的 0.0 误读成「中性」。
     if score is None or verdict.get('can_long') == 'unknown':
-        note = '当次没有可用做多合成分，不标方向、不把缺失数据画成中性 0。'
-        return _rows_html(title, [], note), _plain(title, [], note)
+        return '', ''
 
     axis = diverging_bar(score, 100, half=12)
-    stance = str(verdict.get('stance') or '当次结论未标注')
+    stance = str(verdict.get('stance') or '')
     rows = [
         ('空头 / 防守  ←', axis, f'{score:+.1f}'),
-        ('阈值', '−25    −10      0      +10    +25', stance),
+        ('区间', '−25    −10      0      +10    +25', stance),
     ]
-    note = ('▓ 左侧 = 空 / 防守，| = 中性轴，█ 右侧 = 多 / 进攻。'
-            '固定刻度 ±100，不按当次最大值拉伸；−10 / +10 / +25 为决策阈值。')
-    return _rows_html(title, rows, note), _plain(title, rows, note)
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def sentiment_chart(sd):
     """舆情温度柱、多空构成、标的净情感发散柱。不读取来源字段。"""
-    title = '舆情因子 bar / stacked / diverging'
+    title = '舆情因子'
     sd = sd or {}
     m = sd.get('market') or {}
     rows = []
@@ -287,7 +266,6 @@ def sentiment_chart(sd):
     pos, neg = _num(m.get('pos_share')), _num(m.get('neg_share'))
     if pos is not None and neg is not None:
         rest = max(0.0, 100.0 - pos - neg)
-        # 用百分数取整后再分配，避免把未标注的残差画成另一套口径
         parts = [(FULL, int(round(pos))), (DARK, int(round(neg))), (LIGHT, int(round(rest)))]
         bar, total = stacked_bar(parts, width=20)
         if total:
@@ -311,22 +289,15 @@ def sentiment_chart(sd):
         spark = ''.join(SPARK[min(3, int((v - lo) / span * 4))] for v in vals)
         last = series[-1]
         rows.append(('情绪序列', spark, str(last.get('date') or '')[:10]))
-    note = '温度柱刻度 0–100，50 为中性；净情感零线居中，序列只画数值、不写来源。'
-    return _rows_html(title, rows, note), _plain(title, rows, note)
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def forecast_chart(data):
-    """AI 预测：预期涨跌幅发散柱 + 置信度有序柱。刻度按 σ 固定，不按当日最大值拉伸。
-
-    只画当次真的算出了预期的标的；预测缺席（行情未取到）时不编柱，
-    也绝不把上一版预测搬过来充数。
-    """
+    """AI 预测：预期涨跌幅发散柱 + 置信度有序柱。"""
     forecasts = (data or {}).get('forecasts') or []
-    title = 'AI 预测 diverging bar（预期涨跌幅）+ 置信度 barh'
-    note_base = ('预期涨跌幅零线居中，满刻度 ±1.5σ（模型对单日预测的硬上限）；'
-                 '置信度柱按 0–100% 固定刻度。本图与正文同一次预测，缺数据不补 0。')
+    title = 'AI 预测 · 预期涨跌幅与置信度'
     if not forecasts:
-        return _rows_html(title, [], note_base), _plain(title, [], note_base)
+        return '', ''
 
     short = dict(QUOTE_ORDER)
     rows = []
@@ -346,22 +317,16 @@ def forecast_chart(data):
     if z is not None:
         rows.append(('明日倾向', diverging_bar(z, 1.0),
                      f"{_fmt(z)}σ {str(stance.get('label') or '').split('（')[0]}".strip()))
-    note = note_base + f" 目标日 {(data or {}).get('target_date') or '未获取'}。"
-    return _rows_html(title, rows, note), _plain(title, rows, note)
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def forecast_review_chart(review):
-    """历史预测回看：方向命中率 / 区间覆盖率有序柱（0–100% 固定刻度）。
-
-    只画**已结算**的样本；一条都没结算时不编柱 —— 不用当次行情给当次预测打分。
-    """
+    """历史预测回看：方向命中率 / 区间覆盖率有序柱（0–100% 固定刻度）。"""
     review = review or {}
-    title = '预测回看 ordered barh（命中率 · 已结算样本）'
+    title = '预测命中率'
     settled = _num(review.get('settled')) or 0
-    note = ('只统计「目标日已抓到实际行情」的预测；未结算与作废的不计分。'
-            '刻度固定 0–100%，不按样本最大值拉伸。')
     if not settled:
-        return _rows_html(title, [], note), _plain(title, [], note)
+        return '', ''
     rows = []
     hr = _num(review.get('hit_rate'))
     if hr is not None:
@@ -377,14 +342,12 @@ def forecast_review_chart(review):
             continue
         rows.append((str(v.get('name') or v.get('key') or ''), pos_bar(rate * 100, 100, fill=MID),
                      f"{rate * 100:.0f}% (n={int(v.get('n') or 0)})"))
-    tail = note + (f" 样本 {int(settled)} 条"
-                   + ('' if review.get('enough_sample') else '（样本不足，只作参考）') + '。')
-    return _rows_html(title, rows, tail), _plain(title, rows, tail)
+    return _rows_html(title, rows), _plain(title, rows)
 
 
 def macro_counts_chart(macro):
-    """各小节入库条数。文件不可用时不画，避免把「清空的旧快照」画成实测 0。"""
-    title = '宏观快讯条数 barh'
+    """各小节入库条数。文件不可用或全 0 时不画。"""
+    title = '宏观快讯分布'
     macro = macro or {}
     if not (macro.get('categories') or {}):
         return '', ''
@@ -396,12 +359,11 @@ def macro_counts_chart(macro):
         label = str((blk or {}).get('label') or key).split('—')[0].split('（')[0].strip()
         n = len((blk or {}).get('items') or [])
         rows.append((label, n))
-    if not rows:
+    if not rows or all(n <= 0 for _, n in rows):
         return '', ''
     scale = max(1, max(n for _, n in rows))
-    drawn = [(name, pos_bar(n, scale), f'{n} 条') for name, n in rows]
-    note = f'柱长按本图最多 {scale} 条缩放。0 条是窗口内没有，不是历史条数。'
-    return _rows_html(title, drawn, note), _plain(title, drawn, note)
+    drawn = [(name, pos_bar(n, scale), f'{n} 条') for name, n in rows if n > 0]
+    return _rows_html(title, drawn), _plain(title, drawn)
 
 
 def _self_test():
@@ -424,31 +386,31 @@ def _self_test():
     ok('堆叠柱格子数等于宽度', len(bar) == 24 and total == 14)
     ok('堆叠柱保留四个序列', {FULL, DARK, MID, LIGHT} <= set(bar) and ' ' not in bar)
     html_q, plain_q = quotes_chart({})
-    ok('无行情不编柱', '不编柱' in html_q and '%' not in plain_q.split('不编柱')[-1])
+    ok('无行情直接留空', html_q == '' and plain_q == '')
     html_q, plain_q = quotes_chart({'HSI': {'pct': 1.2}, 'WTI': {'pct': -0.4}})
     ok('有行情才写出涨跌幅', '+1.20%' in plain_q and '-0.40%' in plain_q)
-    ok('字符柱进了微信表格', '<table' in html_q and 'diverging barh' in html_q)
+    ok('字符柱进了微信表格且无图注说明', '<table' in html_q and '涨跌幅分布' in html_q and '满刻度' not in html_q)
     html_c, plain_c = community_chart({'bull': 6, 'bear': 3, 'neutral': 3, 'mixed': 2})
     ok('社区构成写出家数', '共 14 家' in plain_c and '偏多6' in plain_c.replace(' ', ''))
     html_ls, plain_ls = long_short_chart({'long_score': -18.5, 'stance': '偏防御'})
-    ok('开头多空轴保留零线与方向', '|' in plain_ls and '空头' in plain_ls and '多' in plain_ls and '-18.5' in plain_ls)
+    ok('开头多空轴保留零线与方向', '|' in plain_ls and '空头' in plain_ls and '-18.5' in plain_ls)
     html_ls, plain_ls = long_short_chart({})
-    ok('开头缺合成分不编中性柱', '不把缺失数据画成中性 0' in plain_ls and FULL not in plain_ls)
+    ok('开头缺合成分直接留空', html_ls == '' and plain_ls == '')
     html_s, plain_s = sentiment_chart({})
-    ok('舆情空图不写来源名', '不编柱' in html_s and '米筐' not in html_s and 'RQ_' not in html_s)
+    ok('舆情空图直接留空且不写来源名', html_s == '' and '米筐' not in html_s and 'RQ_' not in html_s)
     html_f, plain_f = forecast_chart({})
-    ok('无预测不编柱', '不编柱' in html_f and FULL not in plain_f and '|' not in plain_f)
+    ok('无预测直接留空', html_f == '' and plain_f == '')
     html_f, plain_f = forecast_chart({
         'target_date': '', 'stance': {'z': 0.4, 'confidence': 0.6, 'label': '弱偏多'},
         'forecasts': [{'key': 'HSI', 'name': '恒生指数', 'mu_pct': 0.5, 'sigma': 1.2,
                        'dir_word': '看涨'}]})
     ok('预测柱写出预期涨跌幅与倾向', '+0.50%' in plain_f and '明日倾向' in plain_f)
     html_r, plain_r = forecast_review_chart({'settled': 0})
-    ok('没有已结算样本就不画命中率', '不编柱' in html_r and FULL not in plain_r)
+    ok('没有已结算样本直接留空', html_r == '' and plain_r == '')
     html_r, plain_r = forecast_review_chart({'settled': 4, 'hits': 3, 'hit_rate': 0.75,
                                              'in_band': 2, 'band_rate': 0.5,
                                              'enough_sample': False, 'by_symbol': []})
-    ok('已结算样本才画命中率', '75%' in plain_r and '样本不足' in plain_r)
+    ok('已结算样本才画命中率', '75%' in plain_r and '预测命中率' in html_r)
     failed = [n for n, c in checks if not c]
     if failed:
         raise SystemExit('自检失败: ' + '、'.join(failed))

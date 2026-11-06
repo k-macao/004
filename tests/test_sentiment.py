@@ -362,7 +362,8 @@ class TestReportAndPush(unittest.TestCase):
         self.assertIn('宁德时代', html)
         self.assertNotIn('{{SENT_', html)
         empty = self.build_site.inject_sentiment(tpl, self.build_site.build_sentiment_html({}))
-        self.assertTrue(empty and '舆情' in empty, '缺数据时也必须给出降级说明')
+        self.assertNotIn('舆情因子节点待生成', empty)
+        self.assertEqual('', self.build_site.build_sentiment_html({}))
 
     def test_check_cli_passes_on_repo_template(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, 'build_site.py'), '--check'],
@@ -526,7 +527,7 @@ class TestSourceAnonymity(unittest.TestCase):
         self.assertIn('标的匹配', web, '网页应渲染「舆情因子 × 日报标的匹配」表')
         for name in ('恒生指数', '现货黄金', '美联储与美元流动性'):
             self.assertIn(name, web, f'匹配表应展示 {name}')
-        self.assertIn('匹配率', web)
+        self.assertNotIn('匹配率', web)
         push = self._push()
         self.assertIn('🎯', push, '微信推送应逐条展示匹配到的标的')
         self.assertIn('命中', push)

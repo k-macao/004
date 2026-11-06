@@ -326,8 +326,9 @@ class TestWechatAndWebShareBootstrappedData(unittest.TestCase):
                         contextlib.redirect_stderr(io.StringIO()):
                     html, _t, _tf = wp.build_single_wechat_html()
         self.assertFalse(os.path.exists(self.path), '渲染过程不得凭空造出产物')
-        plain = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html))
-        self.assertIn('宏观快讯 — 今日未获取', plain)
+        sec02 = html.split('02 / 全球经济与财经动态', 1)[1].split('03 / 社区论坛热评', 1)[0]
+        self.assertNotIn('宏观快讯', sec02)
+        self.assertNotIn('今日未获取', sec02)
 
 
 class TestBuildSiteEndToEnd(unittest.TestCase):
@@ -363,8 +364,7 @@ class TestBuildSiteEndToEnd(unittest.TestCase):
             page = f.read()
         block = page.split(bs.MACROLIST_MARK, 1)[1].split(bs.MACROLIST_CLOSE, 1)[0]
         self.assertNotIn('今日未获取', block)
-        self.assertIn('时效窗口', block)
-        self.assertIn('每次构建现抓', block)
+        self.assertIn('美联储利率路径与离岸流动性', block)
         self.assertRegex(block, r'\[\d{1,2} 月 \d{1,2} 日\]', '每条快讯应自带发布日期')
 
     def test_without_bootstrap_the_page_still_degrades_explicitly(self):
@@ -374,8 +374,7 @@ class TestBuildSiteEndToEnd(unittest.TestCase):
         with open(self.out, encoding='utf-8') as f:
             page = f.read()
         block = page.split(bs.MACROLIST_MARK, 1)[1].split(bs.MACROLIST_CLOSE, 1)[0]
-        self.assertIn('今日未获取', block)
-        self.assertIn('no_file', block)
+        self.assertEqual('', block.strip())
 
     def test_check_mode_never_fetches(self):
         p = subprocess.run(

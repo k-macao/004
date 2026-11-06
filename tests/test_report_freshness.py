@@ -80,14 +80,14 @@ class TestReportTimestamps(unittest.TestCase):
             self.assertEqual(json.loads(data_path.read_text(encoding='utf-8')), old_market())
 
         stamp = NOW.strftime('%Y-%m-%d %H:%M:%S UTC')
-        header = re.search(r'OCTO // COMMAND CENTER · ([^<]+)</span>', html)
+        header = re.search(r'<div class="masthead-date">([^<]+)</div>', html)
         self.assertIsNotNone(header)
         self.assertEqual(header.group(1), stamp)
         footer = re.search(r'<p id="pageGenTime">(.*?)</p>', html, re.S)
         self.assertIsNotNone(footer)
         self.assertIn(f'生成时间：{stamp}', footer.group(1))
         self.assertNotIn('{{TS_FULL}}', html)
-        self.assertIn(OLD_CAPTURE, html, 'the actual source capture time remains visible')
+        self.assertNotIn(OLD_CAPTURE, html, 'capture status text is hidden while build time is current')
         self.assertIn('<td>2026-11-02</td>', html, 'the exchange date is not relabelled as today')
 
 

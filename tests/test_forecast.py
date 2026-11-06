@@ -104,7 +104,8 @@ class TestNoLookahead(unittest.TestCase):
         self.assertFalse(d['available'])
         self.assertEqual(d['unavailable_reason'], 'bad_sequence')
         self.assertEqual(d['forecasts'], [])
-        self.assertIn('时序不成立', _plain(fc.render_web(d)))
+        self.assertEqual('', fc.render_web(d))
+        self.assertEqual('', fc.render_wechat(d))
 
     def test_current_quotes_can_never_settle_current_forecasts(self):
         """全模块最关键的一条：当次行情结算不了当次预测（结构上杜绝 look-ahead）。"""
@@ -272,8 +273,7 @@ class TestDegradation(unittest.TestCase):
         self.assertEqual(len(d['data_gaps']), fc.COVERAGE_ROUTES)
         self.assertTrue(any('RSS' in g for g in d['data_gaps']))
         for html in (fc.render_web(d), fc.render_wechat(d)):
-            plain = _plain(html)
-            self.assertIn('本栏不预测', plain)
+            self.assertEqual('', html)
             self.assertNotIn('{{', html)
             for bad in STALE:
                 self.assertNotIn(bad, html)
@@ -357,8 +357,8 @@ class TestForecastRendering(unittest.TestCase):
         page = bs.inject_forecast(tpl, html)
         block = page.split(bs.FORECAST_MARK, 1)[1].split(bs.FORECAST_CLOSE, 1)[0]
         plain = _plain(block)
-        for need in ('明日盘面倾向', '逐标的预测', '驱动拆解', '三路输入信号',
-                     '历史预测回看', '预测区间', '置信度'):
+        for need in ('明日盘面倾向', '逐标的预测', '驱动拆解',
+                     '预测区间', '置信度'):
             self.assertIn(need, plain, f'网页 04 节缺少栏目要素: {need}')
         self.assertIn(NEXT, block, '注入区必须写明目标日')
         for bad in STALE:
@@ -399,7 +399,7 @@ class TestForecastRendering(unittest.TestCase):
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         plain = _plain(html)
         self.assertIn('AI 预测', plain)
-        for need in ('明日盘面倾向', '逐标的预测', '驱动拆解', '历史预测回看'):
+        for need in ('明日盘面倾向', '逐标的预测', '驱动拆解'):
             self.assertIn(need, plain, f'微信 04 栏缺少栏目要素: {need}')
         self.assertFalse(os.path.exists(self.hist),
                          '推送路径只读存档；落盘由建站负责，避免 dry-run/emit/push 重复灌水')
@@ -420,8 +420,9 @@ class TestForecastRendering(unittest.TestCase):
             for k, v in saved.items():
                 os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
         plain = _plain(html)
-        self.assertIn('AI 预测', plain, '标题仍在，但正文必须降级')
-        self.assertIn('本栏不预测', plain)
+        self.assertIn('AI 预测', plain, '标题仍在，无行情时不输出未获取说明或假预测')
+        self.assertNotIn('本栏不预测', plain)
+        self.assertNotIn('逐标的预测', plain)
         for bad in STALE:
             self.assertNotIn(bad, html)
 
@@ -440,8 +441,8 @@ class TestForecastRendering(unittest.TestCase):
         self.assertIn('逐标的预测', _plain(compact))
         self.assertIn(fc.fmt_pct(d['headline']['mu_pct']), compact)
         self.assertIn(fc.fmt_pct(d['headline']['mu_pct']), line)
-        self.assertNotIn('◆ 驱动拆解', _plain(compact), '精简版不展开驱动拆解，只指向网页 04 节')
-        self.assertIn('见网页 04 节', _plain(compact))
+        self.assertNotIn('◆ 驱动拆解', _plain(compact), '精简版不展开驱动拆解')
+        self.assertNotIn('见网页 04 节', _plain(compact))
 
     def test_push_picks_the_richest_block_that_fits(self):
         d = fc.predict(market=BULL, now=NOW)
@@ -463,7 +464,8 @@ class TestForecastRendering(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             stub = wp.fit_forecast_block(full_up, d)
         self.assertNotIn(slot, stub)
-        self.assertIn('见网页 04 节', _plain(stub), '一点预算都没有时只留指引，不硬塞')
+        self.assertNotIn('见网页 04 节', _plain(stub), '一点预算都没有时不硬塞状态指引')
+        self.assertEqual('x' * (wp.CONTENT_SAFE_LIMIT - 10), stub)
 
     def test_push_stays_under_the_hard_push_gate(self):
         env = {'FORECAST_HISTORY': self.hist}
@@ -505,15 +507,15 @@ class TestForecastRendering(unittest.TestCase):
 
     def test_char_charts_never_invent_bars(self):
         empty_html, empty_plain = char_charts.forecast_chart({})
-        self.assertIn('不编柱', empty_html)
-        self.assertNotIn('\u2588', empty_plain)
+        self.assertEqual('', empty_html)
+        self.assertEqual('', empty_plain)
         d = fc.predict(market=BULL, now=NOW)
         html, plain = char_charts.forecast_chart(d)
         self.assertIn('恒指', plain)
         self.assertIn('明日倾向', plain)
         rev_html, rev_plain = char_charts.forecast_review_chart(fc.empty_review())
-        self.assertIn('不编柱', rev_html)
-        self.assertNotIn('\u2588', rev_plain)
+        self.assertEqual('', rev_html)
+        self.assertEqual('', rev_plain)
 
 
 if __name__ == '__main__':

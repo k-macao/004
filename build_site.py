@@ -375,12 +375,25 @@ def find_leftovers(html):
     return sorted(set(re.findall(r'\{\{\s*[A-Za-z0-9_]+\s*\}\}', html)))
 
 
-def build_quant_html(quant):
-    """构建核心量化指标 HTML（网页版）—— 每条新闻/社区卡片后追加。
+def _clean_verdict_text(raw):
+    t = str(raw or '').strip()
+    t = re.sub(r'以上分析仅基于[^。]*。?\s*$', '', t).strip()
+    t = re.sub(r'仅用于演示[^。]*。?\s*$', '', t).strip()
+    return t
 
-    四项指标的口径说明（情感 / 事件 / 相关性 / 新颖度）在 03 栏表头统一给出一次，
-    卡片里只留数值与标签，避免 49 张卡片把同四句话重复 49 遍。
-    """
+
+def _clean_novelty_display(novelty):
+    if not isinstance(novelty, dict):
+        return '—'
+    if novelty.get('score') is not None:
+        return f"{novelty['score']}/100"
+    disp = str(novelty.get('display') or '—')
+    disp = re.sub(r'\s*[(（][^()（）]*首发时间链[^()（）]*[)）]', '', disp).strip()
+    return disp or '—'
+
+
+def build_quant_html(quant):
+    """构建核心量化指标 HTML（网页版）—— 每条可用社区卡片后追加。"""
     if not quant:
         return ""
     sentiment = quant.get('sentiment', {})
@@ -391,7 +404,7 @@ def build_quant_html(quant):
     s_display = sentiment.get('display', '—')
     e_label = event.get('label', '综合')
     r_display = relevance.get('display', '—')
-    n_display = novelty.get('display', '—')
+    n_display = _clean_novelty_display(novelty)
 
     return (
         f'  <div class="quant-metrics">\n'
@@ -407,80 +420,60 @@ def build_quant_html(quant):
 
 
 def community_evidence_html(c):
-    """Render bounded comment samples with no hyperlink (never HTML from the source).
-
-    全内容隐藏链接：内容层不渲染任何外链，也不再出现「查看原帖/原页」「原帖」字样。
-    出处 URL 只保留在数据层（`source_url` / `comments[].url`），供离线核查与追溯，
-    因此隐藏链接不牺牲可核查性，也不改变任何抓取或真实性口径。
-    """
+    """Render bounded comment samples with no hyperlink and no status/scope disclaimers."""
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
     if not comments:
         return ''
     first = comments[0]
-    details = [first.get('published_label') or '发布时间未知', first.get('scope') or '有限样本']
-    if c.get('matched_comments') is not None:
-        details.append(f"本次匹配 {c.get('matched_comments')} 条，展示 {len(comments)} 条")
-    detail_html = _esc(' · '.join(str(x) for x in details if x))
-    parts = [f'  <div class="pub-meta">{detail_html}</div>\n']
+    parts = []
+    pub0 = str(first.get('published_label') or '').strip()
+    if pub0:
+        parts.append(f'  <div class="pub-meta">{_esc(pub0)}</div>\n')
     if len(comments) > 1:
-        parts.append('  <div class="pub-meta">其他采样回复：</div>\n  <ul class="pixel-list">\n')
+        parts.append('  <ul class="pixel-list">\n')
         for item in comments[1:]:
             text = _esc((item.get('text') or '') + ('…' if item.get('text_truncated') else ''))
             title = _esc(item.get('post_title') or '')
-            metric = _esc((item.get('metric') or {}).get('label') or '热度未知')
-            published = _esc(item.get('published_label') or '发布时间未知')
-            parts.append(f'    <li>【{title}】{text} <span class="pub-meta">'
-                         f'{metric} · {published}</span></li>\n')
+            head = f'【{title}】' if title else ''
+            pub_lbl = str(item.get('published_label') or '').strip()
+            meta_span = f' <span class="pub-meta">{_esc(pub_lbl)}</span>' if pub_lbl else ''
+            parts.append(f'    <li>{head}{text}{meta_span}</li>\n')
         parts.append('  </ul>\n')
     return ''.join(parts)
 
 
 def build_community_html(communities, market=None):
-    """根据 community_data.json 生成 49 个社区的 HTML 列表（实抓源展示摘录与词库指标，未获取源诚实标注且不编造指标）。"""
+    """仅渲染抓到实质内容的社区卡片；未获取卡片、抓取核验状态与方法说明一律隐藏。"""
     html_parts = []
     for c in communities:
+        vclass = c.get('verdict_class') or 'unavailable'
+        is_avail = bool(c.get('available', vclass != 'unavailable')) and vclass != 'unavailable'
+        if not is_avail:
+            continue
         icon = c.get('icon', '📌')
         cid = c.get('id', '01')
         name = _esc(c.get('name', '未知社区'))
-        vclass = c.get('verdict_class') or 'unavailable'
-        label = _esc(c.get('verdict_label') or ('未获取' if vclass == 'unavailable' else '中性'))
-        is_avail = bool(c.get('available', vclass != 'unavailable')) and vclass != 'unavailable'
+        label = _esc(c.get('verdict_label') or '中性')
         quote = _esc(c.get('quote', ''))
-        verdict = _esc(c.get('verdict', ''))
-        ctype = c.get('ctype', '')
-        quant = c.get('quant') if is_avail else None
-        default_meta = (f"公开页实抓摘录 · {ctype} · 抓取核验 {c.get('fetch_date', '')}"
-                        if is_avail else f"当次未获取 · {ctype}")
-        meta = _esc(c.get('meta') or default_meta)
+        verdict = _esc(_clean_verdict_text(c.get('verdict', '')))
+        quant = c.get('quant')
 
-        if is_avail:
-            quote_label = {'comment': '采样评论', 'thread_reply': '热帖回复',
-                           'demo': '演示样本'}.get(c.get('content_kind'), '公开页摘录（未核验为评论）')
-            evidence_html = community_evidence_html(c)
-            quant_html = build_quant_html(quant)
-            verdict_block = (
-                f'  <div class="pub-verdict"><strong>▶ 词库极性与摘录说明：</strong>{verdict}</div>\n'
-                if verdict else ''
-            )
-            quant_line = f'{quant_html}\n' if quant_html else ''
-            article = (
-                f'<article class="pub-card" data-verdict="{_esc(vclass)}">\n'
-                f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
-                f'  <p class="pub-quote"><strong>{quote_label}：</strong>{quote}</p>\n'
-                f'{evidence_html}'
-                f'{verdict_block}'
-                f'{quant_line}'
-                f'  <div class="pub-meta">{meta}</div>\n'
-                f'</article>'
-            )
-        else:
-            article = (
-                f'<article class="pub-card" data-verdict="unavailable">\n'
-                f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
-                f'  <p class="pub-quote"><strong>抓取状态：</strong>{quote}</p>\n'
-                f'  <div class="pub-meta">{meta}</div>\n'
-                f'</article>'
-            )
+        evidence_html = community_evidence_html(c)
+        quant_html = build_quant_html(quant)
+        verdict_block = (
+            f'  <div class="pub-verdict"><strong>▶ 极性判读：</strong>{verdict}</div>\n'
+            if verdict else ''
+        )
+        quant_line = f'{quant_html}\n' if quant_html else ''
+        article = (
+            f'<article class="pub-card" data-verdict="{_esc(vclass)}">\n'
+            f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
+            f'  <p class="pub-quote">{quote}</p>\n'
+            f'{evidence_html}'
+            f'{verdict_block}'
+            f'{quant_line}'
+            f'</article>'
+        )
         html_parts.append(article)
     return "\n".join(html_parts)
 
@@ -505,80 +498,33 @@ def inject_community_list(template, community_html):
 
 
 def _md_cn(date_str):
-    """'2026-09-16' → '9 月 16 日'；异常输入原样返回。"""
-    m = re.match(r'20\d{2}-(\d{2})-(\d{2})$', str(date_str or ''))
+    """'2026-09-16' → '9 月 16 日'；空值返回空串。"""
+    s = str(date_str or '').strip()
+    if not s:
+        return ''
+    m = re.match(r'20\d{2}-(\d{2})-(\d{2})$', s)
     if not m:
-        return date_str or '日期未标注'
+        return s
     return f'{int(m.group(1))} 月 {int(m.group(2))} 日'
 
 
 def build_macro_unavailable_html(avail, market=None):
-    """02 节兜底区块 —— 本次没有可用快讯时的唯一出口（网页版）。
-
-    四种触发形态（reason）：
-      no_file        macro_data.json 读不到（构建步骤未执行 / 产物未生成）
-      bad_type       产物写坏、被截断，解析出来不是预期结构
-      no_items       文件在、结构对，但时效窗口内 0 条（公开源当次全挂或全部超窗）
-      stale_snapshot 读到的是前几天构建的旧快照（当次抓取未执行或失败）
-
-    无论哪种，都只说明「这次没有」，绝不回填任何历史叙事。
-    """
-    reason = avail.get('reason')
-    detail = avail.get('detail') or ''
-    return (
-        '<div class="pub-sub">◆ 宏观快讯 — 今日未获取</div>\n'
-        '<div style="font-size:11.5px;line-height:1.8;color:#0a0a0a;">\n'
-        '  ⚠️ 未读到 <strong>macro_data.json</strong>：构建步骤 '
-        '<code style="background:#eceef0;padding:1px 4px;">python3 macro_data.py</code> 未执行，'
-        '或公开快讯源当次全部失败。<br/>\n'
-        '  本栏<strong>不再回填历史叙事</strong>（旧文案写死在模板里正是上一版正文长期过期的根因），'
-        '只保留下方当次抓取的实时行情；宏观结论以每次重建后的最新一版为准。\n'
-        + (f'  <div class="pub-meta" style="margin-top:6px;">本次判定：{_esc(detail)}'
-           f'（{_esc(reason)}）· 恢复命令：'
-           '<code style="background:#eceef0;padding:1px 4px;">'
-           'python3 macro_data.py --json macro_data.json --days 7 --text</code></div>\n'
-           if detail else '')
-        + '</div>\n'
-    )
+    """02 节兜底区块 —— 无可用快讯时直接留空，不渲染报错/恢复命令。"""
+    return ''
 
 
 def build_macro_html(macro_data, now=None, market=None):
-    """02 节宏观/财经快讯区块（macro_data.json 驱动，条目自带发布日期）。
-
-    对外**不显示数据来源**（与舆情层同一脱敏口径，只给公开源可用数）；
-    抓不到快讯时显示「今日未获取」+ 恢复命令，绝不回填历史叙事
-    （2026-09-16 旧内容事故根因：正文写死 8 月 12 日等旧事实）。
-
-    兜底口径由 `macro_data.availability()` 统一判定（网页/微信共用同一事实源），
-    覆盖四种「本次没有可用快讯」的形态：文件缺失、产物写坏、窗口内 0 条、快照过期。
-    """
+    """02 节宏观/财经快讯区块（仅展示带发布日期的有效条目，不渲染状态/口径/空小节提示）。"""
     avail = macro_data_mod.availability(macro_data, now=now)
     if not avail['ok']:
         return build_macro_unavailable_html(avail)
-    # 走到这里 availability 已保证 macro_data 是 dict 且窗口内有条目
     cats = (macro_data or {}).get('categories') or {}
-    summ = (macro_data or {}).get('summary') or {}
-    win = (macro_data or {}).get('window') or {}
-    mode = (macro_data or {}).get('mode') or ''
 
-    note = (
-        f'宏观快讯 {summ.get("kept_items", 0)} 条入库 · 时效窗口 {win.get("max_age_days", "—")} 天'
-        f'（{win.get("since") or "—"} 起）· 公开源 {summ.get("ok", 0)}/{summ.get("total", 0)} 可用'
-        + (f' · 已拦截超窗 {summ.get("stale_dropped", 0)} 条 / 无日期 {summ.get("undated_dropped", 0)} 条'
-           if (summ.get('stale_dropped') or summ.get('undated_dropped')) else '')
-        + f' · 抓取于 {macro_data.get("generated_at") or "—"}'
-        + (f' · 模式 {mode}' if mode and mode != 'live' else '')
-        + ' · 不显示数据来源（与舆情层同一脱敏口径）'
-    )
-    parts = ['<div class="pub-sub">◆ 宏观快讯 — 每次构建现抓 · 发布日期见每条前缀</div>',
-             f'<div class="pub-meta" style="margin:2px 0 8px;">{_esc(note)}</div>']
-
-    empty_labels = []
+    parts = []
     for ckey, blk in cats.items():
         label = (blk or {}).get('label') or ckey
         items = (blk or {}).get('items') or []
         if not items:
-            empty_labels.append(label.replace(' — ', '·').split('（')[0])
             continue
         rows = []
         for it in items:
@@ -586,28 +532,23 @@ def build_macro_html(macro_data, now=None, market=None):
             raw_snip = (it.get('snippet') or '').strip()
             ttl = _esc(raw_title)
             snip = _esc(raw_snip[:72])
+            d_cn = _md_cn(it.get('published_date'))
+            d_html = f'<strong style="color:#000;">[{_esc(d_cn)}]</strong> ' if d_cn else ''
             rows.append(
-                f'  <li><strong style="color:#000;">[{_esc(_md_cn(it.get("published_date")))}]</strong> {ttl}'
+                f'  <li>{d_html}{ttl}'
                 + (f' <span style="color:var(--muted);font-size:11px;">{snip}</span>' if snip else '')
                 + '</li>'
             )
         parts.append(f'<div class="pub-sub" style="margin-top:10px;">◆ {_esc(label)}</div>')
         parts.append('<ul class="pixel-list" style="margin:6px 0 0;">\n' + '\n'.join(rows) + '\n</ul>')
 
-    if not (summ.get('kept_items') or 0):
-        parts.append(
-            '<div style="background:#eceef0;border-left:3px solid #141414;border-radius:4px;'
-            'padding:8px 10px;margin:8px 0;font-size:11.5px;color:#0a0a0a;">'
-            f'⚠️ 当次 {summ.get("ok", 0)}/{summ.get("total", 0)} 个公开源可用，窗口（'
-            f'{win.get("max_age_days", "—")} 天）内没有任何可核验的宏观快讯 —— '
-            '本栏不复用任何历史叙事，宏观结论请以行情快照与 03 / 03B 节当次数据为准。</div>'
-        )
-    elif empty_labels:
-        parts.append(
-            '<div class="pub-meta" style="margin-top:8px;">窗口内无匹配快讯的小节：'
-            + _esc('、'.join(empty_labels)) + '（按时效留空，不回填旧文）</div>'
-        )
-    return '\n'.join(parts)
+    if not parts:
+        return ''
+    return (
+        '<div style="border-top:1px dashed var(--border); margin-top:12px; padding-top:10px;">\n'
+        + '\n'.join(parts)
+        + '\n</div>'
+    )
 
 
 def inject_macro_list(template, macro_html):
@@ -784,14 +725,7 @@ def inject_forecast(template, forecast_html):
 
 
 def build_sentiment_html(s, market=None):
-    """03B / 舆情·新闻因子节点（温度计 + 标的匹配 + 个股热度 + 风险事件 + 情感样本 + 采集概况）。
-
-    对外输出**不显示数据来源**：平台名 / 接口 ID / 域名 / SDK / 凭据与依赖提示由
-    `sentiment_match.redact()` 统一遮成「量化平台」，逐源明细表默认不渲染
-    （内部核对需临时显示时设 `SENTIMENT_SHOW_SOURCE=1`）。
-    「量化平台现成舆情 / 新闻因子接入评测（9 阶段实测）」评分矩阵默认隐藏
-    （`SENTIMENT_SHOW_API_EVAL=1` 可临时恢复），结论仍完整保留在 `docs/sentiment-api-eval.md`。
-    """
+    """03B / 舆情·新闻因子节点（默认对外无状态/口径/说明文案，缺数据时直接留空）。"""
     esc = _esc
     anon = not smatch.show_source()
 
@@ -803,40 +737,48 @@ def build_sentiment_html(s, market=None):
         return esc(t)
 
     if not s:
-        return ('<div class="pub-box"><div class="pub-sub">◆ 舆情 / 新闻因子节点待生成</div>'
-                '本节点由 <code>sentiment_factors.py</code> 动态注入：'
-                '<code>python3 sentiment_factors.py --live</code>（境内出口 + 凭据）实测取数，'
-                '或 <code>python3 sentiment_factors.py --mock</code> 用录制报文离线回放。'
-                + ('<div class="pub-meta">接入评测与打分由 <code>tools/probe_sentiment_apis.py</code> 生成，'
-                   '结论详见 <code>docs/sentiment-api-eval.md</code>。</div>' if show_api_eval() else '')
-                + '</div>')
+        return ''
 
     m = s.get('market') or {}
-    sm = s.get('summary') or {}
+    mm = s.get('matches') or {}
     parts = []
+
+    date_raw = str(s.get('fetch_date') or '').strip()
+    date_line = (f'<br/><span style="color:var(--muted);font-size:10.5px;">数据日期 {esc(date_raw)}</span>'
+                 if date_raw else '')
+    if m:
+        cov_pct = _f2((mm.get('coverage') or 0) * 100, '.1f')
+        parts.append(
+            '<div class="pub-box">'
+            '<div class="pub-sub">◆ 市场舆情因子总览</div>'
+            '<p style="margin:0;">'
+            f'<span class="lead">舆情温度计 {_f2(m.get("sent_temp"), ".1f")} · {esc(m.get("label") or "—")}</span>&nbsp;'
+            f'净情感 {_f2(m.get("net_senti"), "+.3f")} · '
+            f'负面占比 {_f2(m.get("neg_share"), ".1f")}% · '
+            f'热度 {_f2(m.get("heat_z"), "+.2f")}σ · '
+            f'风险分 {_f2(m.get("risk_score"), ".0f")} · '
+            f'新闻 {m.get("news_count", 0)} 条 · '
+            f'匹配日报标的 {mm.get("matched_news", 0)} 条（{cov_pct}%）'
+            f'{date_line}</p></div>'
+        )
 
     def card(title, val, desc):
         return (f'<div class="stat-card"><div class="stat-title">{esc(title)}</div>'
                 f'<div class="stat-val">{val}</div><div class="stat-desc">{desc}</div></div>')
 
     cards = [
-        card('市场舆情温度计 SENT_TEMP', f"{m.get('sent_temp', '—')} <span style=\"font-size:12px\">{esc(m.get('label') or '')}</span>",
-             '净情感 ±35 分 · 热度异动 ±12 分 · 负面占比最多扣 18 分；&gt;65 亢奋、&lt;35 恐慌'),
+        card('市场舆情温度计 SENT_TEMP',
+             f"{m.get('sent_temp', '—')} <span style=\"font-size:12px\">{esc(m.get('label') or '')}</span>",
+             f"正面占比 {_f2(m.get('pos_share'), '.1f')}% · 负面占比 {_f2(m.get('neg_share'), '.1f')}%"),
         card('净情感强度 NET_SENTI', _f2(m.get('net_senti'), '+.3f'),
              f"负面占比 {_f2(m.get('neg_share'), '.1f')}% · 正面 {_f2(m.get('pos_share'), '.1f')}%"),
         card('新闻热度 Z 值 NEWS_HEAT_Z', _f2(m.get('heat_z'), '+.2f') + ' σ',
-             f"本次关联新闻 {m.get('news_count', 0)} 条（对比近 20 日均值）"),
+             f"关联新闻 {m.get('news_count', 0)} 条"),
         card('突发事件风险分 EVENT_RISK', _f2(m.get('risk_score'), '.0f'),
-             '监管/诉讼/违约/退市/减持等高风险词加权命中，单日取最大值'),
-        card('量化平台接口可用性', f"{sm.get('ok', '—')}/{sm.get('total', '—')}",
-             f"模式：{clean(s.get('mode_note'), 44) or '—'}"),
-        card('平台现成因子占比', f"{m.get('platform_native', 0)} / {m.get('news_count', 0)}",
-             '带原生情感字段者直接采用平台口径，其余由自建中文金融词库打分'),
+             f"风险事件 {len(m.get('events') or [])} 条"),
     ]
     parts.append('<div class="stat-grid">' + ''.join(cards) + '</div>')
 
-    # ---- 采集 → 匹配：新闻舆情按关键词对齐到日报标的与主题（对外不显示来源） ----
-    mm = s.get('matches') or {}
     tgts = mm.get('targets') or []
     if tgts:
         rows = []
@@ -850,27 +792,14 @@ def build_sentiment_html(s, market=None):
                         f"<td>{esc(t.get('label') or '—')} {_f2(t.get('sent_temp'), '.1f')}</td>"
                         f"<td>{clean(top.get('title'), 34) or '—'}</td></tr>")
         parts.append(
-            '<div class="pub-box"><div class="pub-sub">◆ 舆情因子 × 日报标的匹配'
-            '（多平台采集后自动对齐 · 不显示数据来源）</div>'
-            f'<div style="font-size:11.5px;color:#333;margin-bottom:6px;">本次共采集 '
-            f'<strong>{mm.get("total_news", 0)}</strong> 条新闻舆情，其中 '
-            f'<strong>{mm.get("matched_news", 0)}</strong> 条匹配到本页 02 节行情标的与日报主题'
-            f'（匹配率 {_f2((mm.get("coverage") or 0) * 100, ".1f")}%）· 采集关键词 '
-            f'{esc("、".join(mm.get("keywords_used") or []) or "—")}</div>'
+            '<div class="pub-box"><div class="pub-sub">◆ 舆情因子 × 日报标的匹配</div>'
             '<table class="quote-table"><tr><th>标的 / 主题</th><th>命中</th><th>净情感</th>'
-            '<th>负面占比</th><th>风险分</th><th>舆情温度</th><th>代表新闻（不含来源）</th></tr>'
-            + ''.join(rows) + '</table>'
-            + (f'<div class="pub-meta">未匹配 {mm.get("unmatched", 0)} 条（与日报标的相关性不足，'
-               '只计入市场级读数，不进标的表）。</div>' if mm.get('unmatched') else '')
-            + '<div class="pub-meta">匹配规则：标题命中权重 0.4 / 正文 0.15，净情感与风险分复用同一套'
-              '自建中文金融词库口径（平台已给原生情感字段时优先采用平台口径）。</div>'
-            + '</div>')
+            '<th>负面占比</th><th>风险分</th><th>舆情温度</th><th>代表新闻</th></tr>'
+            + ''.join(rows) + '</table></div>')
 
     # ---- 平台接入评测（9 阶段实测）矩阵：默认对外隐藏 ----
     ev = s.get('api_eval') or {}
     if ev.get('ranking') and not show_api_eval():
-        # 探针照常跑、api_eval 照常写入 sentiment_data.json，只是不渲染给读者；
-        # 结论仍完整保留在 docs/sentiment-api-eval.md（内部评测档案）。
         print(f'  🔒 03B「量化平台现成舆情 / 新闻因子接入评测（9 阶段实测）」已隐藏'
               f'（{len(ev["ranking"])} 个源的评分矩阵未渲染；结论见 docs/sentiment-api-eval.md，'
               f'需展示时设 SENTIMENT_SHOW_API_EVAL=1）')
@@ -884,16 +813,11 @@ def build_sentiment_html(s, market=None):
                         f"<td class=\"q-pct\">{r.get('score')}</td></tr>")
         parts.append(
             '<div class="pub-box"><div class="pub-sub">◆ 量化平台现成舆情 / 新闻因子接入评测</div>'
-            f'<div style="font-size:11.5px;color:#333;margin-bottom:6px;">评测生成于 '
-            f'{esc(ev.get("generated_at") or "—")} · 模式 '
-            f'{esc("联网实测" if ev.get("mode") == "live" else "文档基线（离线回放，未实测连通性与权限）")}'
-            ' · 9 阶段：依赖 → 网络 → 鉴权 → 取数 → 字段 → 时效 → 覆盖 → 延迟 → 额度</div>'
             '<table class="quote-table"><tr><th>平台</th><th>接口</th><th>判定</th><th>评分</th></tr>'
             + ''.join(rows) + '</table>'
             + ('<ul class="pixel-list">' + ''.join(
                 f'<li>{esc(line)}</li>' for line in (ev.get('conclusion') or [])[:6]) + '</ul>')
-            + '<div class="pub-meta">完整能力矩阵、阶段明细与上线方案见 <code>docs/sentiment-api-eval.md</code>'
-              '（由 <code>tools/probe_sentiment_apis.py</code> 生成）。</div></div>')
+            + '</div>')
 
     stocks = (s.get('stocks') or [])[:8]
     if stocks:
@@ -907,12 +831,9 @@ def build_sentiment_html(s, market=None):
                         f"<td>{st.get('news_count')}</td>"
                         f"<td>{st.get('risk_score')}</td></tr>")
         parts.append(
-            '<div class="pub-box"><div class="pub-sub">◆ 个股舆情热度与情感（关注度因子 + 情感因子）</div>'
+            '<div class="pub-box"><div class="pub-sub">◆ 个股舆情热度与情感</div>'
             '<table class="quote-table"><tr><th>标的</th><th>关注指数</th><th>热度 Z</th>'
-            '<th>净情感</th><th>新闻数</th><th>风险分</th></tr>' + ''.join(rows) + '</table>'
-            '<div class="pub-meta">关注指数为量化平台现成热度类因子（小时/日频，无极性）；'
-            '净情感来自平台原生情感字段或自建中文金融词库打分。</div>'
-            + '</div>')
+            '<th>净情感</th><th>新闻数</th><th>风险分</th></tr>' + ''.join(rows) + '</table></div>')
 
     events = (m.get('events') or [])[:5]
     if events:
@@ -921,23 +842,25 @@ def build_sentiment_html(s, market=None):
             f"{esc('、'.join(e.get('terms') or []))} · 风险分 {e.get('risk_score')}"
             f"{' · ' + esc(str(e.get('published_at'))[:16]) if e.get('published_at') else ''}</li>"
             for e in events)
-        parts.append('<div class="pub-box"><div class="pub-sub">◆ 舆情风险事件（EVENT_RISK 命中明细）</div>'
+        parts.append('<div class="pub-box"><div class="pub-sub">◆ 舆情风险事件</div>'
                      f'<ul class="pixel-list">{lis}</ul></div>')
+
     top_neg = (m.get('top_negative') or [])[:2]
     top_pos = (m.get('top_positive') or [])[:2]
     if top_neg or top_pos:
         def li(x, tag):
             hits = (x.get('hits') or {})
             kw = '、'.join((hits.get('neg') or [])[:3] + (hits.get('pos') or [])[:3])
-            return (f"<li><span style=\"background:#000;color:#39ff14;font-size:10px;\""
+            pub_t = esc(str(x.get('published_at') or ''))[:16]
+            pub_seg = f" · {pub_t}" if pub_t else ''
+            return (f"<li><span style=\"background:#000;color:#39ff14;font-size:10px;"
                     f"padding:1px 6px;margin-right:6px;\">{tag}</span>{clean(x.get('title'), 60)}"
                     f"<span style=\"color:#7d838b;\">"
-                    f" · {esc(str(x.get('published_at') or ''))[:16]} · 情感 {x.get('sentiment')}"
-                    f" · 命中 {esc(kw)}</span></li>")
-        parts.append('<div class="pub-box"><div class="pub-sub">◆ 情感样本极值（可回溯：命中词与权重 · 不含来源）</div>'
+                    f"{pub_seg} · 情感 {x.get('sentiment')}"
+                    f"{' · 命中 ' + esc(kw) if kw else ''}</span></li>")
+        parts.append('<div class="pub-box"><div class="pub-sub">◆ 情感样本极值</div>'
                      '<ul class="pixel-list">' + ''.join(li(x, '负面') for x in top_neg)
-                     + ''.join(li(x, '正面') for x in top_pos) + '</ul>'
-                     + '</div>')
+                     + ''.join(li(x, '正面') for x in top_pos) + '</ul></div>')
 
     srcs = s.get('sources') or []
     if srcs and not anon:
@@ -951,35 +874,19 @@ def build_sentiment_html(s, market=None):
                         f"<td>{esc(r.get('latest_date') or '—')}</td>"
                         f"<td class=\"q-off\">{esc((r.get('error') or r.get('note') or '')[:60])}</td></tr>")
         parts.append(
-            '<div class="pub-box"><div class="pub-sub">◆ 逐源取数明细（本次构建 · 内部视图）</div>'
-            '<table class="quote-table"><tr><th>接口</th><th>平台</th><th>状态</th>'
-            '<th>新闻/序列</th><th>最新日期</th><th>说明</th></tr>' + ''.join(rows) + '</table>'
-            '<div class="pub-meta">单源失败自动降级、不阻断构建与推送；失败原因如实标注在此表。'
-            '（对外默认隐藏，本表由 SENTIMENT_SHOW_SOURCE=1 开启）</div></div>')
-    elif srcs:
-        c = smatch.collection_summary(s)
-        parts.append(
-            '<div class="pub-box"><div class="pub-sub">◆ 本次采集概况（多量化平台合并 · 不显示来源）</div>'
-            f'量化平台接口 <strong>{c["ok"]}/{c["total"]}</strong> 可用 · 采集新闻 '
-            f'<strong>{c["news"]}</strong> 条 · 指数序列 {c["series"]} 行 · 平台现成因子 '
-            f'{c["native"]} 条 · 自建词库打分 {c["self_built"]} 条'
-            + (f' · <strong>{c["failed_n"]}</strong> 个接口本次自动降级（单接口失败不阻断构建与推送）'
-               if c['failed_n'] else ' · 全部接口取数成功')
-            + f'<div class="pub-meta">数据日期 {esc(c["date"] or "—")} · 模式 {clean(c["mode_note"], 60) or "—"}'
-              ' · 全源不可用时温度计回退中性 50 并标注降级；来源明细仅保留在内部构建产物中。</div></div>')
+            '<div class="pub-box"><div class="pub-sub">◆ 逐源取数明细（内部视图）</div>'
+            '<table class="quote-table"><tr><th>接口</th><th>平台</th><th>结果</th>'
+            '<th>新闻/序列</th><th>最新日期</th><th>明细</th></tr>' + ''.join(rows) + '</table></div>')
 
     series = (s.get('series') or [])[-10:]
     if series:
         lis = ''.join(
             f"<li>{esc(r.get('date'))} · {clean(r.get('name'), 24)}"
             f"{'（' + clean(r.get('platform') or r.get('source'), 20) + '）' if not anon else ''}"
-            f" <strong>{r.get('value')}</strong>"
-            f' <span class="pub-meta">{clean(r.get("note"), 60)}</span></li>'
+            f" <strong>{r.get('value')}</strong></li>"
             for r in reversed(series))
-        parts.append('<div class="pub-box"><div class="pub-sub">◆ 市场级新闻情绪指数序列（平台现成因子 · 日频 · 末 10 期）</div>'
-                     f'<ul class="pixel-list">{lis}</ul>'
-                     '<div class="pub-meta">不同接口的指数口径不同（基期 = 1.0 型 vs [-1,1] 情感均值型），'
-                     '跨源不可直接比较；关注度/热度类序列见上方个股热度表。</div></div>')
+        parts.append('<div class="pub-box"><div class="pub-sub">◆ 市场级新闻情绪指数序列</div>'
+                     f'<ul class="pixel-list">{lis}</ul></div>')
     return '\n'.join(parts)
 
 
@@ -1003,56 +910,62 @@ def _esc(t):
 
 
 def build_verdict_html(data, macro_data, community_data):
-    """07 节核心结论（网页版）：逐条挂当次实时行情、当次快讯与实抓社区计数，杜绝写死历史点位或箱体。"""
+    """07 节核心结论（网页版）：仅汇总当次实质读数，无注记/暂缺/未获取说明。"""
     quotes = (data or {}).get('quotes') or {}
     hsi = quotes.get('HSI') or {}
     hstech = quotes.get('HSTECH') or {}
     gold = quotes.get('GOLD') or {}
 
-    if hsi.get('last') is not None:
-        hk_tape = (f"{quote_date_cn(hsi)}恒指 {fmt_last(hsi)}（{fmt_pct(hsi)}），"
-                   f"恒科 {fmt_last(hstech)}（{fmt_pct(hstech)}）")
-    else:
-        hk_tape = "当次恒指与恒科实时行情暂缺（未回填历史点位）"
-
     def top_macro(cat):
         items = (((macro_data or {}).get('categories') or {}).get(cat) or {}).get('items') or []
         if not items:
-            return '当次快讯窗口内没有覆盖该主题的报道（按时效留空，不回填旧闻）'
+            return ''
         it = items[0]
         d = _md_cn(it.get('published_date') or '')
-        return f"[{_esc(d)}] {_esc(it.get('title') or '')}"
+        prefix = f"[{_esc(d)}] " if d else ''
+        return f"{prefix}{_esc(it.get('title') or '')}"
+
+    lis = []
+    hk_bits = []
+    if hsi.get('last') is not None:
+        hk_bits.append(_esc(f"{quote_date_cn(hsi)}恒指 {fmt_last(hsi)}（{fmt_pct(hsi)}），"
+                            f"恒科 {fmt_last(hstech)}（{fmt_pct(hstech)}）"))
+    m_hk = top_macro('hk')
+    if m_hk:
+        hk_bits.append(m_hk)
+    if hk_bits:
+        lis.append(f"        <li><strong>港股盘面</strong>：{'；'.join(hk_bits)}。</li>")
+
+    macro_bits = [x for x in (top_macro('macro'),
+                              f"美联储与汇率面：{top_macro('fed')}" if top_macro('fed') else '') if x]
+    if macro_bits:
+        lis.append(f"        <li><strong>宏观与离岸流动性</strong>：{'；'.join(macro_bits)}。</li>")
+
+    cmdty_bits = []
+    if gold.get('last') is not None:
+        cmdty_bits.append(_esc(f"现货黄金 {fmt_last(gold)}（{fmt_pct(gold)}）"))
+    if top_macro('commodities'):
+        cmdty_bits.append(f"商品面：{top_macro('commodities')}")
+    if top_macro('bank_views'):
+        cmdty_bits.append(f"机构观点：{top_macro('bank_views')}")
+    if cmdty_bits:
+        lis.append(f"        <li><strong>大宗与机构跟踪</strong>：{'；'.join(cmdty_bits)}。</li>")
 
     comms = (community_data or {}).get('communities') or []
-    counts = {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0, 'unavailable': 0}
-    if comms:
-        for c in comms:
-            vc = (c or {}).get('verdict_class') or 'unavailable'
-            if vc in ('bull', 'bear', 'neutral', 'mixed'):
-                counts[vc] += 1
-            else:
-                counts['unavailable'] += 1
-    else:
-        counts['unavailable'] = len(community_mod.COMMUNITIES)
-    live_n = counts['bull'] + counts['bear'] + counts['neutral'] + counts['mixed']
-    total_n = len(comms) if comms else len(community_mod.COMMUNITIES)
+    counts = {'bull': 0, 'bear': 0, 'neutral': 0, 'mixed': 0}
+    for c in comms:
+        vc = (c or {}).get('verdict_class') or 'unavailable'
+        if vc in counts:
+            counts[vc] += 1
+    live_n = sum(counts.values())
     if live_n > 0:
-        comm_line = (f"社区快照实抓 {live_n}/{total_n} 个社区源：偏多 {counts['bull']} 家 · "
-                     f"偏空 {counts['bear']} 家 · 中性 {counts['neutral']} 家 · "
-                     f"多空分歧 {counts['mixed']} 家（其余 {counts['unavailable']} 家未获取，不计入分母）")
-    else:
-        comm_line = f"社区快照中 0/{total_n} 个源有可用片段（全部标注「未获取」，不编造多空家数）"
+        comm_line = (f"偏多 {counts['bull']} 家 · 偏空 {counts['bear']} 家 · "
+                     f"中性 {counts['neutral']} 家 · 多空分歧 {counts['mixed']} 家")
+        lis.append(f"        <li><strong>社区多空分布</strong>：{_esc(comm_line)}。</li>")
 
-    gold_str = f"现货黄金 {fmt_last(gold)}（{fmt_pct(gold)}）" if gold.get('last') is not None else "现货黄金暂缺"
-    return (
-        '      <ul class="pixel-list">\n'
-        f'        <li><strong>港股盘面</strong>：{_esc(hk_tape)}；{top_macro("hk")}；</li>\n'
-        f'        <li><strong>宏观与离岸流动性</strong>：{top_macro("macro")}；美联储与汇率面：{top_macro("fed")}；</li>\n'
-        f'        <li><strong>大宗与机构跟踪</strong>：{_esc(gold_str)}；商品面：{top_macro("commodities")}；机构观点：{top_macro("bank_views")}；</li>\n'
-        f'        <li><strong>社区实抓情绪面</strong>：{_esc(comm_line)}。</li>\n'
-        '      </ul>\n'
-        '      <div class="pub-meta" style="margin-top:6px;">注：本节结论逐条对应当次实时行情、时效窗口内快讯与实抓社区片段，不预设技术箱体或历史均线点位。</div>'
-    )
+    if not lis:
+        return ''
+    return '      <ul class="pixel-list">\n' + '\n'.join(lis) + '\n      </ul>'
 
 
 def inject_verdict(template, verdict_html):

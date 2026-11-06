@@ -334,16 +334,12 @@ class TestWebSection(unittest.TestCase):
         for c in rf.CATALOG:
             self.assertIn(c['name'], html, f'{c["key"]} 必须出现在 05 节')
         self.assertRegex(html, r'\[\d{1,2} 月 \d{1,2} 日\]', '每条应带发布日期')
-        self.assertIn('六大板块', html)
         for label in rf.GROUP_LABELS.values():
             self.assertIn(label, html)
 
     def test_unavailable_degrades_without_backfilling(self):
         html = rf.render_web({})
-        plain = _plain(html)
-        self.assertIn('今日未获取', plain)
-        self.assertIn('rssfeeds_data.json', plain)
-        self.assertIn('不回填历史标题', plain)
+        self.assertEqual('', html)
         for bad in STALE_MARKERS:
             self.assertNotIn(bad, html)
         for c in rf.CATALOG:
@@ -352,7 +348,7 @@ class TestWebSection(unittest.TestCase):
     def test_do_not_show_stale_snapshot_items(self):
         html = rf.render_web(_stale_payload())
         self.assertNotIn('九天前的旧闻 ABCXYZ', html)
-        self.assertIn('旧快照', html)
+        self.assertEqual('', html)
 
     def test_injection_is_idempotent(self):
         with open(os.path.join(REPO_ROOT, 'report.html'), encoding='utf-8') as f:
@@ -415,8 +411,7 @@ class TestWechatSection(unittest.TestCase):
     def test_empty_snapshot_degrades_and_never_backfills(self):
         html = self._render(None)
         rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0]
-        plain = _plain(rss_part)
-        self.assertIn('今日未获取', plain)
+        self.assertEqual('', _plain(rss_part).strip())
         for bad in STALE_MARKERS:
             self.assertNotIn(bad, rss_part)
         self.assertNotIn('Central banks face a harder landing', html,
@@ -426,7 +421,7 @@ class TestWechatSection(unittest.TestCase):
         html = self._render(_stale_payload())
         self.assertNotIn('九天前的旧闻 ABCXYZ', html)
         rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0]
-        self.assertIn('今日未获取', _plain(rss_part))
+        self.assertEqual('', _plain(rss_part).strip())
 
     def test_budget_ladder_keeps_every_source(self):
         data = _mock_data()
@@ -447,7 +442,8 @@ class TestWechatSection(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 html, _t, _tf = wp.build_single_wechat_html(now=NOW)
         fetch.assert_not_called()
-        self.assertIn('今日未获取', _plain(html))
+        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0]
+        self.assertEqual('', _plain(rss_part).strip())
 
 
 class TestRsshubFailover(unittest.TestCase):
@@ -658,7 +654,7 @@ class TestBootstrapAndBuildSite(unittest.TestCase):
         self.assertNotIn('今日未获取', block)
         for c in rf.CATALOG:
             self.assertIn(c['name'], block)
-        self.assertIn('离线回放样本（非实盘）', block)
+        self.assertNotIn('离线回放样本', block)
 
     def test_build_site_check_mode_never_fetches(self):
         missing = os.path.join(self._tmp.name, 'missing.json')
@@ -962,12 +958,19 @@ class TestRssAsFifthDataSource(unittest.TestCase):
                                places=2, msg='RSS 缺失只该扣它自己那一路的权重')
 
     def test_web_section_shows_the_stats_panel(self):
-        html = rf.render_web(self._rss(12, 20))
-        self.assertIn('框架统计', html)
-        self.assertIn('第 5 路数据源', html)
-        self.assertIn('DeepSeek 检索兜底', html)
-        self.assertIn('RSSHub 通道', html)
-        self.assertIn('12/49', html)
+        part = self._rss(12, 20)
+        html = html_mod.unescape(rf.render_web(part))
+        ok_names = [s['name'] for g in part['groups'].values() for s in g['sources']
+                    if s.get('ok') and s.get('items_list')]
+        miss_names = [s['name'] for g in part['groups'].values() for s in g['sources']
+                      if not s.get('ok')]
+        self.assertEqual(len(ok_names), 12)
+        for name in ok_names:
+            self.assertIn(name, html)
+        for name in miss_names:
+            self.assertNotIn(name, html, '未获取的源不再在展示层列出')
+        self.assertNotIn('框架统计', html)
+        self.assertNotIn('12/49', html)
 
     def test_hud_line_reports_coverage_or_honest_fallback(self):
         self.assertIn('12/49', rf.rss_status_line(self._rss(12, 20)))
@@ -1081,9 +1084,11 @@ class TestAiAnalysis(unittest.TestCase):
         with mock.patch.object(rf, '_http_post_json', side_effect=AssertionError('render network')):
             an = rf.analyze(json.loads(json.dumps(data)))
             self.assertEqual(an['engine'], 'deepseek-chat')
-            for output in [rf.render_analysis_web(an), rf.analysis_text(data)] + [
+            self.assertIn('DeepSeek', rf.analysis_text(data))
+            for output in [rf.render_analysis_web(an)] + [
                     rf.render_analysis_wechat(an, level) for level in ('full', 'standard', 'roster', 'compact')]:
-                self.assertIn('DeepSeek', output)
+                self.assertIn('AI 解盘', output)
+                self.assertNotIn('DeepSeek', output)
                 self.assertNotIn('test-only', output)
             self.assertIn('不能判断', an['themes'][0]['pricing'])
         data['groups'] = {}
@@ -1203,16 +1208,14 @@ class TestAiAnalysis(unittest.TestCase):
     def test_web_puts_analysis_at_the_top_of_section_05(self):
         html = html_mod.unescape(rf.render_web(self.data))
         self.assertIn('AI 解盘', html)
-        self.assertLess(html.index('AI 解盘'), html.index('框架统计'),
-                        'AI 解盘必须排在框架统计之前')
         first_source = min(html.index(c['name']) for c in rf.CATALOG)
         self.assertLess(html.index('AI 解盘'), first_source,
                         'AI 解盘必须排在 49 源明细之前（「开头」）')
-        self.assertIn(self.an['headline'], html, '网页结论应与 analyze() 一致')
+        self.assertIn(rf._clean_headline(self.an['headline']), html)
         self.assertIn('说白了：', html)
         self.assertIn('我盯什么：', html)
         self.assertIn('不是投资建议', html)
-        self.assertIn('每源最多 10 条', html)
+        self.assertNotIn('每源最多 10 条', html)
 
     def test_web_renders_ten_items_per_source_with_a_take(self):
         html = html_mod.unescape(rf.render_web(self.data))
@@ -1220,7 +1223,7 @@ class TestAiAnalysis(unittest.TestCase):
                    if len(s['items_list']) == 10)
         for it in src['items_list']:
             self.assertIn(it['title'], html, '每源 10 条要逐条列出')
-        self.assertIn(self.an['per_source'][src['key']]['take'], html,
+        self.assertIn(rf._clean_take(self.an['per_source'][src['key']]['take']), html,
                       '每个有内容的源都应有「🤖 人话」一行')
         self.assertGreaterEqual(html.count('🤖 人话'), 49)
 
@@ -1255,7 +1258,7 @@ class TestAiAnalysis(unittest.TestCase):
 
     def test_wechat_digest_degrades_honestly(self):
         block = html_mod.unescape(rf.render_wechat({}, level='compact'))
-        self.assertIn('今日未获取', block)
+        self.assertEqual('', block)
         self.assertNotIn('AI 解盘', block, '没有读数时不得硬凑解读')
         self.assertNotIn('一句话', block)
         for c in rf.CATALOG:

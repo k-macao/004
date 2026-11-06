@@ -2041,9 +2041,23 @@ def analysis_text(data):
     return '\n'.join(lines)
 
 
+def _clean_headline(text):
+    t = str(text or '')
+    return re.sub(
+        r'^\d+\s*个源(?:全部跑通|里跑通\s*\d+\s*个)、拿到\s*(\d+)\s*条当次条目；',
+        r'共 \1 条资讯；',
+        t,
+    )
+
+
+def _clean_take(text):
+    t = str(text or '')
+    return re.sub(r'（其中\s*\d+\s*条没标日期，我没当它们是新的）$', '', t)
+
+
 def render_analysis_web(an):
-    """网页 05 节开头：AI 解盘面板（结论 → 读法 → 三条主线 → 研究动作）。"""
-    if not an.get('available'):
+    """网页 05 节开头：AI 解盘面板（无状态/生成方式/缺口说明）。"""
+    if not isinstance(an, dict) or not an.get('available'):
         return ''
     tone = an['tone']
     total_tone = max(1, tone['warm'] + tone['cold'] + tone['neutral'])
@@ -2056,12 +2070,16 @@ def render_analysis_web(an):
     cards = []
     for i, t in enumerate(an['themes'], 1):
         th = THEME_BY_KEY.get(t['key'], {})
-        ev = ''.join(
-            f'<li><strong style="color:var(--cyan);">[{_esc(_md_cn(e.get("date")))}]</strong> '
-            f'{_esc(e.get("title"))}'
-            f'<span style="color:var(--muted);font-size:10.5px;"> · {_esc(e.get("source") or "")}'
-            '</span></li>'
-            for e in t.get('evidence') or [])
+        ev_items = []
+        for e in t.get('evidence') or []:
+            d_raw = e.get('date')
+            d_prefix = (f'<strong style="color:var(--cyan);">[{_esc(_md_cn(d_raw))}]</strong> '
+                        if d_raw else '')
+            ev_items.append(
+                f'<li>{d_prefix}{_esc(e.get("title"))}'
+                f'<span style="color:var(--muted);font-size:10.5px;"> · {_esc(e.get("source") or "")}'
+                '</span></li>')
+        ev = ''.join(ev_items)
         cards.append(
             '<article class="pub-card" data-verdict="neutral" style="margin:0 0 8px;">'
             '<div class="pub-card-head" style="margin-bottom:5px;">'
@@ -2077,54 +2095,62 @@ def render_analysis_web(an):
                       f'{_esc(t.get(field) or "")}</p>'
                       for label, field in RESEARCH_SECTIONS)
             + '</article>')
-    actions = ''.join(f'<li>{_esc(a)}</li>' for a in an['actions'])
-    mode_note = ('　·　离线回放样本（非实盘，仅验证链路）' if an.get('mode') == 'mock' else '')
+    clean_actions = [a for a in (an.get('actions') or []) if not str(a).startswith('缺口记账：')]
+    actions_html = (
+        '<div class="pub-meta" style="margin:4px 0 0;font-weight:700;">研究动作：</div>'
+        '<ul class="pixel-list" style="margin:2px 0 8px;font-size:11.5px;">'
+        + ''.join(f'<li>{_esc(a)}</li>' for a in clean_actions)
+        + '</ul>'
+        if clean_actions else ''
+    )
+    reading_raw = str(an.get('reading') or '')
+    reading_html = (
+        f'<p class="pub-quote" style="margin:0 0 10px;font-size:12.5px;">'
+        f'<strong>{_esc(an["reading_label"])}：</strong>{_esc(reading_raw)}</p>'
+        if reading_raw and '个源跑通' not in reading_raw else ''
+    )
     return (
         '<div class="pub-box" style="margin:0 0 16px;border-left:3px solid var(--cyan);">'
-        f'<div class="pub-sub">◆ AI 解盘｜从资讯看机会（{_esc(an["tag"])} · '
-        f'{an["catalog_total"]} 源 × 每源 {an["limit_per_source"]} 条）</div>'
-        f'<div class="pub-meta" style="margin:2px 0 10px;">{_esc(an["engine_note"])}'
-        f'{_esc(mode_note)}</div>'
+        '<div class="pub-sub">◆ AI 解盘｜从资讯看机会</div>'
         f'<p class="pub-quote" style="margin:0 0 6px;font-size:13.5px;font-weight:700;">'
-        f'一句话：{_esc(an["headline"])}</p>'
-        f'<p class="pub-quote" style="margin:0 0 10px;font-size:12.5px;">'
-        f'<strong>{_esc(an["reading_label"])}：</strong>{_esc(an["reading"])}</p>'
-        f'<div style="display:flex;gap:2px;margin:0 0 4px;">{bar}</div>'
-        f'<div class="pub-meta" style="margin:0 0 12px;">标题情绪秤（只数措辞，不代表涨跌）：'
-        f'暖 {tone["warm"]} · 中性 {tone["neutral"]} · 冷 {tone["cold"]}'
-        f'　|　无日期条目 {an["undated"]} 条（未当最新）· 拦截超窗 {an["stale_dropped"]} 条</div>'
+        f'一句话：{_esc(_clean_headline(an["headline"]))}</p>'
+        + reading_html
+        + f'<div style="display:flex;gap:2px;margin:0 0 4px;">{bar}</div>'
+        f'<div class="pub-meta" style="margin:0 0 12px;">标题情绪：'
+        f'暖 {tone["warm"]} · 中性 {tone["neutral"]} · 冷 {tone["cold"]}</div>'
         + ''.join(cards)
-        + f'<div class="pub-meta" style="margin:4px 0 0;font-weight:700;">研究动作'
-          '（不是买卖建议，是把新闻变成可核查的问题）：</div>'
-          f'<ul class="pixel-list" style="margin:2px 0 8px;font-size:11.5px;">{actions}</ul>'
-        f'<div class="pub-meta" style="margin:0;">⚠️ {_esc(an["disclaimer"])}</div>'
+        + actions_html
+        + '<div class="pub-meta" style="margin:0;">⚠️ 不给目标价、不荐股，不是投资建议。</div>'
         '</div>')
 
 
 def render_analysis_wechat(an, level='standard', cyan='#4fe5ff', text='#edf2ff',
                            muted='#9aa6c3', danger='#ff6b7d'):
-    """微信 05 栏开头的 AI 解盘（按预算档收放；任何一档都保留结论与免责声明）。"""
-    if not an.get('available'):
+    """微信 05 栏开头的 AI 解盘（无状态/生成方式/缺口说明，保留结论与免责声明）。"""
+    if not isinstance(an, dict) or not an.get('available'):
         return ''
     compact = level in ('roster', 'compact')
     tone = an['tone']
     head = (f'<div style="color:{cyan};font-weight:700;font-size:12.5px;margin:0 0 3px;">'
-            f'◆ AI 解盘 · {_esc(an["tag"])}　{an["catalog_total"]} 源 × 每源 '
-            f'{an["limit_per_source"]} 条</div>')
+            '◆ AI 解盘</div>')
     body = (f'<div style="color:{text};font-size:11px;line-height:1.8;">'
-            f'<strong>一句话：</strong>{_esc(an["headline"])}</div>')
+            f'<strong>一句话：</strong>{_esc(_clean_headline(an["headline"]))}</div>')
+    reading_raw = str(an.get('reading') or '')
+    has_reading = bool(reading_raw and '个源跑通' not in reading_raw)
     if compact:
-        body += (f'<div style="color:{muted};font-size:10px;line-height:1.7;">'
-                 f'{_esc(an["reading_label"])}：'
-                 f'{_esc(_md_short(an["reading"], 90))}　'
-                 f'（{_esc(an["engine_note"])}；不是投资建议）</div>')
+        if has_reading:
+            body += (f'<div style="color:{muted};font-size:10px;line-height:1.7;">'
+                     f'{_esc(an["reading_label"])}：{_esc(_md_short(reading_raw, 90))}</div>')
+        body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.65;">'
+                 '⚠️ 不给目标价、不荐股，不是投资建议。</div>')
         return head + body
-    body += (f'<div style="color:{text};font-size:11px;line-height:1.8;">'
-             f'<strong style="color:{cyan};">{_esc(an["reading_label"])}：</strong>'
-             f'{_esc(an["reading"])}</div>')
+    if has_reading:
+        body += (f'<div style="color:{text};font-size:11px;line-height:1.8;">'
+                 f'<strong style="color:{cyan};">{_esc(an["reading_label"])}：</strong>'
+                 f'{_esc(reading_raw)}</div>')
     body += (f'<div style="color:{muted};font-size:10px;line-height:1.7;">标题情绪：暖 '
              f'{tone["warm"]} · 中性 {tone["neutral"]} · 冷 '
-             f'<span style="color:{danger};">{tone["cold"]}</span>（只数措辞，不代表涨跌）</div>')
+             f'<span style="color:{danger};">{tone["cold"]}</span></div>')
     for i, t in enumerate(an['themes'], 1):
         th = THEME_BY_KEY.get(t['key'], {})
         body += (f'<div style="color:{text};font-size:10.5px;line-height:1.75;">'
@@ -2135,16 +2161,18 @@ def render_analysis_wechat(an, level='standard', cyan='#4fe5ff', text='#edf2ff',
                      f'{_esc(label)}：{_esc(t.get(field) or "")}</div>')
         if level == 'full' and t.get('evidence'):
             ev = t['evidence'][0]
+            d_raw = ev.get('date')
+            d_txt = f'[{_esc(_md_cn(d_raw))}] ' if d_raw else ''
             body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.6;">　证据 '
-                     f'[{_esc(_md_cn(ev.get("date")))}] '
-                     f'{_esc(_md_short(ev.get("title"), 34))}</div>')
+                     f'{d_txt}{_esc(_md_short(ev.get("title"), 34))}</div>')
     if level == 'full':
-        for a in an['actions']:
+        for a in (an.get('actions') or []):
+            if str(a).startswith('缺口记账：'):
+                continue
             body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.65;">'
                      f'　· {_esc(a)}</div>')
     body += (f'<div style="color:{muted};font-size:9.5px;line-height:1.65;">'
-             f'　{_esc(an["engine_note"])}；'
-             f'不给目标价、不荐股，不是投资建议。</div>')
+             '⚠️ 不给目标价、不荐股，不是投资建议。</div>')
     return head + body
 
 
@@ -2229,185 +2257,113 @@ def rss_status_line(data):
 
 
 def render_web(data):
-    """网页 05 节：六大板块 × 49 源，逐源给状态 + 当次条目（日期 + 标题 + 摘要）。"""
+    """网页 05 节：仅展示有内容的条目与 AI 解盘，不渲染未获取卡片、框架统计或状态说明。"""
     avail = availability(data)
     if not avail['ok']:
-        return build_unavailable_html(avail)
+        return ''
 
-    summ = data.get('summary') or {}
-    win = data.get('window') or {}
     an = analyze(data)
-    note = (f'49 源 · 每源最多 {data.get("limit_per_source") or LIMIT_PER_SOURCE_DEFAULT} 条 · '
-            f'当次可用 {summ.get("ok", 0)}/{summ.get("total", 0)} · '
-            f'入库 {summ.get("items", 0)} 条 · 时效窗口 {win.get("max_age_days", "—")} 天'
-            f'（{win.get("since") or "—"} 起）· 已拦截超窗 {summ.get("stale_dropped", 0)} 条'
-            f' · 抓取于 {data.get("generated_at") or "—"}'
-            + (' · 离线回放样本（非实盘）' if data.get('mode') == 'mock' else ''))
-    parts = ['<div class="pub-box">',
-             render_analysis_web(an),
-             '<div class="pub-sub">◆ 全球 49 大财经 RSS 情报源 · 六大板块 · 逐源核验状态</div>',
-             f'<div class="pub-meta" style="margin:2px 0 10px;">{_esc(note)}</div>',
-             render_stats_web(data),
-             '<div class="pub-meta" style="margin:0 0 10px;">'
-             '口径：原生 RSS / RSSHub 路由（第三方公共实例，失败按目录顺序回退）/ '
-             'Google News 检索载体（站点无公开订阅源时使用，如实标注，不冒充原生源）。'
-             '每条自带发布日期；抓不到的源标「未获取」并给出失败类型，不回填历史标题；'
-             '无日期条目只标注「日期未标注」，永远不排在带日期条目之前。</div>']
+    parts = ['<div class="pub-box">']
+    an_html = render_analysis_web(an)
+    if an_html:
+        parts.append(an_html)
 
     for gkey, group in (data.get('groups') or {}).items():
         srcs = group.get('sources') or []
-        ok_n = sum(1 for s in srcs if s.get('ok'))
-        item_n = sum(len(s.get('items_list') or []) for s in srcs)
+        avail_srcs = [s for s in srcs if s.get('ok') and (s.get('items_list') or [])]
+        if not avail_srcs:
+            continue
         parts.append(
-            f'<div class="pub-sub" style="margin-top:14px;">◆ {_esc(group.get("label") or gkey)}'
-            f' <span style="font-family:var(--mono);font-size:10.5px;color:var(--muted);">'
-            f'可用 {ok_n}/{len(srcs)} 源 · {item_n} 条</span></div>')
-        if group.get('desc'):
-            parts.append(f'<div class="pub-meta" style="margin:0 0 8px;">{_esc(group["desc"])}</div>')
+            f'<div class="pub-sub" style="margin-top:14px;">◆ {_esc(group.get("label") or gkey)}</div>')
         rows = []
-        for s in srcs:
-            badge = KIND_BADGE.get(s.get('kind') or '', '未获取')
+        for s in avail_srcs:
             head = (f'<div class="pub-card-head" style="margin-bottom:4px;">'
-                    f'<span class="pub-name">{s.get("id")}. {_esc(s.get("name"))}</span>'
-                    f'<span class="pub-chip">{_esc(badge)}</span></div>')
-            if s.get('ok'):
-                items = s.get('items_list') or []
-                if not items:
-                    body = ('<p class="pub-quote" style="color:var(--muted);">'
-                            '当次抓取成功，但时效窗口内没有可核验条目（不回填旧标题）。</p>')
-                else:
-                    lis = []
-                    take = (an.get('per_source') or {}).get(s.get('key') or '', {}).get('take')
-                    ai_line = (
-                        '<div class="pub-quote" style="margin:6px 0 2px;font-size:11.5px;'
-                        'line-height:1.75;border-left:2px solid var(--violet);'
-                        'padding-left:8px;">'
-                        '<strong style="color:var(--violet);">🤖 人话</strong> '
-                        f'{_esc(take)}</div>' if take else '')
-                    for idx, it in enumerate(items):
-                        date = it.get('published_date')
-                        date_html = (f'<strong style="color:var(--cyan);">[{_esc(_md_cn(date))}]</strong>'
-                                     if date else
-                                     '<span style="color:var(--muted);">[日期未标注]</span>')
-                        # 全内容隐藏链接：条目标题只作纯文本渲染，不再包 <a href>。
-                        # 条目 URL 仍保留在数据层（sources[].items[].url）供离线核查。
-                        title_html = _esc(it.get('title'))
-                        # 每源只给最新一条配摘要：10 条全带摘要会把 05 节顶到 200KB+，
-                        # 其余 9 条只留标题，扫读更快（正文标题本身就是信息）。
-                        snip = (f' <span style="color:var(--muted);font-size:11px;">'
-                                f'{_esc((it.get("snippet") or "")[:70])}</span>'
-                                if idx == 0 and it.get('snippet') else '')
-                        pub = (f' <span style="color:var(--muted);font-size:10.5px;">'
-                               f'· {_esc(it.get("publisher"))}</span>' if it.get('publisher') else '')
-                        lis.append(f'    <li>{date_html} {title_html}{pub}{snip}</li>')
-                    body = (ai_line + '<ul class="pixel-list" style="margin:4px 0 0;">\n'
-                            + '\n'.join(lis) + '\n  </ul>')
-                meta = (f'<div class="pub-meta">当次实抓 · 端点 {_esc((s.get("endpoint") or "")[:90])}'
-                        f' · {float(s.get("latency_ms") or 0):.0f} ms · {_esc(s.get("note") or "")}</div>')
-            else:
-                body = ('<p class="pub-quote" style="color:var(--muted);">'
-                        '当次未获取 —— 站点风控/实例限流/端点变更均可能导致；'
-                        '本栏不回填历史标题，也不伪造「今日重点」。</p>')
-                meta = (f'<div class="pub-meta">未获取原因：{_esc((s.get("error") or "")[:200])}'
-                        f' · {_esc(s.get("note") or "")}</div>')
-            rows.append(f'<article class="pub-card">{head}{body}{meta}</article>')
+                    f'<span class="pub-name">{s.get("id")}. {_esc(s.get("name"))}</span></div>')
+            items = s.get('items_list') or []
+            lis = []
+            take_raw = (an.get('per_source') or {}).get(s.get('key') or '', {}).get('take')
+            take = _clean_take(take_raw)
+            ai_line = (
+                '<div class="pub-quote" style="margin:6px 0 2px;font-size:11.5px;'
+                'line-height:1.75;border-left:2px solid var(--violet);'
+                'padding-left:8px;">'
+                '<strong style="color:var(--violet);">🤖 人话</strong> '
+                f'{_esc(take)}</div>' if take else '')
+            for idx, it in enumerate(items):
+                date = it.get('published_date')
+                date_html = (f'<strong style="color:var(--cyan);">[{_esc(_md_cn(date))}]</strong> '
+                             if date else '')
+                title_html = _esc(it.get('title'))
+                raw_snip = str(it.get('snippet') or '').strip()
+                snip = (f' <span style="color:var(--muted);font-size:11px;">'
+                        f'{_esc(raw_snip[:70])}</span>'
+                        if idx == 0 and raw_snip and not raw_snip.startswith('离线回放摘要') else '')
+                pub = (f' <span style="color:var(--muted);font-size:10.5px;">'
+                       f'· {_esc(it.get("publisher"))}</span>' if it.get('publisher') else '')
+                lis.append(f'    <li>{date_html}{title_html}{pub}{snip}</li>')
+            body = (ai_line + '<ul class="pixel-list" style="margin:4px 0 0;">\n'
+                    + '\n'.join(lis) + '\n  </ul>')
+            rows.append(f'<article class="pub-card">{head}{body}</article>')
         parts.append('\n'.join(rows))
     parts.append('</div>')
     return '\n'.join(parts)
 
 
 # ---------------------------------------------------------------------------
-# 渲染 · 微信（05 栏，纯内联样式的紧凑清单，按预算逐级收敛且一源不删）
+# 渲染 · 微信（05 栏，纯内联样式的紧凑清单，仅渲染可用条目，无状态/未获取文案）
 # ---------------------------------------------------------------------------
 def wechat_levels(data):
-    """微信 05 栏的候选渲染版本（从详到略）。每一版都保留全部 49 源与可用/未获取标记。"""
+    """微信 05 栏的候选渲染版本（从详到略）。"""
     return [render_wechat(data, level=lvl)
             for lvl in ('full', 'standard', 'roster', 'compact')]
 
 
 def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
                   muted='#9aa6c3', danger='#ff6b7d'):
-    """微信 05 栏：逐源一行（状态 + 最新条目），按 level 决定详略。
-
-    level:
-      full      六大板块分组 + 每源标题 + 摘要 + 另 N 条（最详，网页版信息量的压缩）
-      standard  六大板块分组 + 逐源一行（日期 + 标题 + 载体标记）
-      roster    板块内每源只留「编号 名称 — 日期 标题」（不带载体标记）
-      compact   不分板块、逐源一行（编号 名称 · 日期 标题），正文最短但**一源不删**，
-                供 03/04 栏吃掉预算时兜底
-
-    任何一版都不回填历史标题：未获取源只写「未获取」(+ 一句失败类型)；
-    无日期条目写「日期未标注」，绝不冒充最新。
-    """
+    """微信 05 栏：仅渲染有实际条目的源，按 level 决定详略；缺数据时直接返回空串。"""
     avail = availability(data)
-    an = analyze(data) if avail['ok'] else {'available': False}
-    head = (f'<div style="color:{cyan};font-weight:700;font-size:13px;margin-bottom:4px;">'
-            '◆ 全球 49 大财经 RSS 情报源 · 六大板块</div>')
     if not avail['ok']:
-        return (head + f'<div style="color:{muted};font-size:11px;line-height:1.8;">'
-                f'⚠️ 今日未获取：{_esc(avail.get("detail") or avail.get("reason") or "")}'
-                '　本栏不回填历史标题，也不编造「今日重点」；恢复后每次构建重新抓取。</div>')
-
-    summ = data.get('summary') or {}
-    win = data.get('window') or {}
-    note = (f'<div style="color:{muted};font-size:10px;line-height:1.7;">'
-            f'49 源 · 每源最多 {data.get("limit_per_source") or LIMIT_PER_SOURCE_DEFAULT} 条 · '
-            f'可用 {summ.get("ok", 0)}/{summ.get("total", 0)} · 入库 '
-            f'{summ.get("items", 0)} 条 · 窗口 {win.get("max_age_days", "—")} 天 · '
-            f'抓取于 {_esc(data.get("generated_at") or "—")}'
-            + (' · 离线回放样本' if data.get('mode') == 'mock' else '')
-            + '　逐源核验：原生 RSS / RSSHub 路由 / 检索载体 / DeepSeek 检索兜底；'
-              '失败源如实标「未获取」</div>')
+        return ''
+    an = analyze(data)
     compact = (level == 'compact')
-    rows = [head if not compact else
-            f'<div style="color:{cyan};font-weight:700;font-size:12px;margin-bottom:3px;">'
-            '◆ 49 大财经 RSS 情报源（缩略版）</div>',
-            render_analysis_wechat(an, level=level, cyan=cyan, text=text, muted=muted,
-                                   danger=danger),
-            note]
+    head = (f'<div style="color:{cyan};font-weight:700;font-size:{12 if compact else 13}px;margin-bottom:4px;">'
+            '◆ 全球 49 大财经 RSS 情报源</div>')
+    rows = [head]
+    an_html = render_analysis_wechat(an, level=level, cyan=cyan, text=text, muted=muted,
+                                     danger=danger)
+    if an_html:
+        rows.append(an_html)
     for gkey, group in (data.get('groups') or {}).items():
         srcs = group.get('sources') or []
-        ok_n = sum(1 for s in srcs if s.get('ok'))
+        avail_srcs = [s for s in srcs if s.get('ok') and (s.get('items_list') or [])]
+        if not avail_srcs:
+            continue
         if not compact:
             rows.append(f'<div style="color:{cyan};font-size:11.5px;font-weight:700;'
-                        f'margin:8px 0 2px;">{_esc(group.get("label") or gkey)}'
-                        f'（{ok_n}/{len(srcs)}）</div>')
-        for s in srcs:
+                        f'margin:8px 0 2px;">{_esc(group.get("label") or gkey)}</div>')
+        for s in avail_srcs:
             name = _esc(s.get('name'))
-            if not s.get('ok'):
-                if level in ('roster', 'compact'):
-                    rows.append(f'<div style="color:{muted};font-size:10.5px;line-height:1.65;">'
-                                f'{s.get("id")}. {name} — 未获取</div>')
-                else:
-                    rows.append(f'<div style="color:{muted};font-size:10.5px;line-height:1.7;">'
-                                f'{s.get("id")}. {name} — '
-                                f'<span style="color:{danger};">未获取</span>'
-                                f'（{_esc((s.get("error") or "")[:60])}）</div>')
-                continue
             items = s.get('items_list') or []
-            top = items[0] if items else None
-            if not top:
-                rows.append(f'<div style="color:{muted};font-size:10.5px;line-height:1.65;">'
-                            f'{s.get("id")}. {name} — 抓取成功但窗口内 0 条</div>')
-                continue
+            top = items[0]
             d = top.get('published_date')
-            date_txt = _md_cn(d) if d else '日期未标注'
+            date_chip = f'<span style="color:{cyan};">[{_esc(_md_cn(d))}]</span> ' if d else ''
+            date_inline = f' · {_esc(_md_cn(d))}' if d else ''
             if compact:
                 rows.append(f'<div style="color:{text};font-size:10px;line-height:1.6;">'
-                            f'{s.get("id")}. {name} · {_esc(date_txt)} · '
+                            f'{s.get("id")}. {name}{date_inline} · '
                             f'{_esc((top.get("title") or "")[:26])}</div>')
                 continue
             if level == 'roster':
                 title = _esc((top.get('title') or '')[:34])
                 rows.append(f'<div style="color:{text};font-size:10.5px;line-height:1.65;">'
-                            f'{s.get("id")}. {name} <span style="color:{cyan};">[{_esc(date_txt)}]</span> '
-                            f'{title}</div>')
+                            f'{s.get("id")}. {name} {date_chip}{title}</div>')
                 continue
             extra = ''
             if level == 'full':
+                raw_snip = str(top.get('snippet') or '').strip()
                 extra = (f'<br/><span style="color:{muted};font-size:9.5px;">　'
-                         f'{_esc((top.get("snippet") or "")[:56])}</span>'
-                         if top.get('snippet') else '')
+                         f'{_esc(raw_snip[:56])}</span>'
+                         if raw_snip and not raw_snip.startswith('离线回放摘要') else '')
                 if len(items) > 1:
                     shown = items[1:3]
                     extra += (f'<br/><span style="color:{muted};font-size:9.5px;">　另 '
@@ -2416,13 +2372,11 @@ def render_wechat(data, level='standard', cyan='#4fe5ff', text='#edf2ff',
                               + (' …' if len(items) - 1 > len(shown) else '')
                               + '</span>')
             rows.append(f'<div style="color:{text};font-size:10.5px;line-height:1.7;">'
-                        f'{s.get("id")}. {name} '
-                        f'<span style="color:{cyan};">[{_esc(date_txt)}]</span> '
-                        f'{_esc((top.get("title") or "")[:40])}'
-                        f'<span style="color:{muted};font-size:9.5px;"> · '
-                        f'{_esc(KIND_BADGE.get(s.get("kind") or "", "未获取"))}</span>{extra}</div>')
+                        f'{s.get("id")}. {name} {date_chip}'
+                        f'{_esc((top.get("title") or "")[:40])}{extra}</div>')
             if level == 'full':
-                take = (an.get('per_source') or {}).get(s.get('key') or '', {}).get('take')
+                take_raw = (an.get('per_source') or {}).get(s.get('key') or '', {}).get('take')
+                take = _clean_take(take_raw)
                 if take:
                     rows.append(f'<div style="color:{muted};font-size:9.5px;line-height:1.6;">'
                                 f'　🤖 人话：{_esc(take)}</div>')
@@ -2471,10 +2425,10 @@ def self_test():
         problems.append('时效过滤/无日期垫底排序异常')
     if dropped != {'stale_dropped': 1, 'undated_kept': 1}:
         problems.append('时效过滤计数异常')
-    # 渲染：缺产物 → 兜底，且不出现任何历史标题
+    # 渲染：缺产物 → 直接留空，不出现任何报错/状态或历史标题
     html = render_web({})
-    if '今日未获取' not in html or 'rssfeeds_data.json' not in html:
-        problems.append('缺产物时 05 节兜底文案异常')
+    if html != '' or render_wechat({}) != '':
+        problems.append('缺产物时 05 节应直接留空')
     # 可用性判定：四种形态
     if availability({})['reason'] != 'no_file':
         problems.append('availability(no_file) 判定异常')
@@ -2504,8 +2458,6 @@ def self_test():
         web = render_web(mock)
         if 'AI 解盘' not in web:
             problems.append('网页 05 节：开头缺 AI 解盘面板')
-        elif web.index('AI 解盘') > web.index('框架统计'):
-            problems.append('网页 05 节：AI 解盘不在开头（应排在框架统计之前）')
         if '一句话' not in render_wechat(mock, level='compact'):
             problems.append('微信 05 栏：缩略版丢了 AI 结论')
     if analyze({}).get('available'):
@@ -2517,7 +2469,7 @@ def self_test():
         return 1
     print(f'✅ 自检通过：目录 {len(CATALOG)} 源 / {len(GROUPS)} 板块 '
           f'（{", ".join(f"{k}:{v}" for k, v in GROUP_EXPECTED.items())}）· '
-          f'解析 3 种报文 · 时效与无日期垫底 · 05 节兜底 · 可用性四态 · '
+          f'解析 3 种报文 · 时效与无日期垫底 · 05 节纯净渲染 · 可用性四态 · '
           f'AI 解盘（每源 {LIMIT_PER_SOURCE_DEFAULT} 条 / 确定性 / 开头位）')
     return 0
 
