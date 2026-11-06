@@ -591,7 +591,8 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
                              backend: str = 'auto', limit: int = 0, session=None,
                              verbose: bool = True, autothrottle: bool = True,
                              max_blocked_retries: int = 2, download_delay: float = 0.15,
-                             comment_strategies: bool = True, post_limiter=None) -> dict:
+                             comment_strategies: bool = True, plan_strategies: bool = True,
+                             post_limiter=None) -> dict:
     """运行 49 源抓取并构建完整 community_data 数据集（实抓入库，失败诚实降级为 unavailable）。"""
     now = now or datetime.now(timezone.utc)
     if market is None:
@@ -642,7 +643,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         crawldir=crawldir, session=session, verbose=verbose, backend=backend,
         autothrottle=autothrottle, max_blocked_retries=max_blocked_retries,
         download_delay=download_delay, now=now, comment_strategies=comment_strategies,
-        post_limiter=post_limiter)
+        plan_strategies=plan_strategies, post_limiter=post_limiter)
 
     live_snippets = [
         spider_mod.strip_noise((results.get(c["key"]) or {}).get("snippet") or "")[:300]
@@ -778,6 +779,8 @@ def main():
     ap.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling'),
                     help='传输层：auto=装了 scrapling 包就用真包，否则用标准库移植层')
     ap.add_argument('--no-comments', action='store_true', help='关闭多方案评论采样，仅保留公开页摘录')
+    ap.add_argument('--no-plans', action='store_true',
+                    help='关闭逐源独立抓取方案链（community_plans），仅保留 RSS 优先/适配器/通用摘录')
     ap.add_argument('--demo', action='store_true', help='写入显式标注的本地演示数据（非实盘抓取）')
     ap.add_argument('--offline', action='store_true', help='断网降级：写出诚实「未获取」结构，不篡改旧日期')
     args = ap.parse_args()
@@ -797,7 +800,8 @@ def main():
         timeout=args.timeout, retries=args.retries, concurrency=args.concurrency,
         adaptive=not args.no_adaptive, storage_file=args.adaptive_db,
         obey_robots=args.robots, crawldir=args.crawl_dir or None,
-        backend=args.backend, limit=args.limit, verbose=True, comment_strategies=not args.no_comments)
+        backend=args.backend, limit=args.limit, verbose=True,
+        comment_strategies=not args.no_comments, plan_strategies=not args.no_plans)
 
     with open(args.json, 'w', encoding='utf-8') as f:
         json.dump(out, f, ensure_ascii=False, indent=2)

@@ -64,6 +64,86 @@ Scrapling 公开页抓取组合：优先使用可核验的评论或热帖回复�
 - RSS 成功的源不再触发 HTML 页面抓取与评论采样，直接使用 RSS 条目作为该源的实抓片段（`content_kind` 为 `thread_reply`，`strategy` 为 `rss_feed`）。
 - 同一采集进程内，RSS 请求与 PTT/LIHKG 的帖子详情读取共享串行限速器：上一次帖子/源读取结束后至少等待 10 秒才开始下一次。
 
+## 逐源独立抓取方案（49 源各一条端点链）
+
+`community_plans.py` 的 `PLANS` 是 49 源逐源方案的唯一事实源。它解决的是「共用一条通用阶梯」
+带来的问题：以前只有 5 类源有专用采样、7 源配了 RSS，其余 40 多个源共用 CSS 选择器 + 通用片段
+回捞，失败时日志只有 `status=0`，看不出该源到底该走哪个端点、还有没有别的路。
+
+每份方案是一条**有序端点链**，第一个产出合格证据的步骤胜出，其余不再发请求：
+
+`adapter`（已有专用适配器，只登记不重复打）→ `rss`（站点官方订阅）→ `json_api`（站点公开接口）→
+`rsshub`（RSSHub 路由，按实例链轮换）→ `html`（公开页面结构化摘录，可多候选 URL）→
+`carrier`（Google News 检索载体）。
+
+### 执行与预算
+
+- 每源最多尝试 `PLAN_MAX_STEPS`（默认 3）个步骤；整轮请求预算 `PLAN_REQUEST_BUDGET`（默认 90）、
+  墙钟预算 `PLAN_WALL_BUDGET`（默认 420 秒），可用 `COMMUNITY_PLAN_MAX_STEPS` /
+  `COMMUNITY_PLAN_REQUESTS` / `COMMUNITY_PLAN_BUDGET` / `COMMUNITY_PLAN_DELAY` 覆盖。
+  预算耗尽时该源记 `budget_exhausted`，**不是**「抓不到」，两者在诊断里分开。
+- 步骤之间的间隔**沿用调用方的 `download_delay`**（默认 0.15 秒，`COMMUNITY_PLAN_DELAY` 可覆盖）。
+  这一层发的是**源级列表/订阅请求**，与既有爬虫同一套礼貌口径；它与「帖详情读取至少间隔 10 秒」的
+  帖子限速器不是同一口径（同上文「来源列表页…不受这一帖子间隔约束」），
+  `adapter` 步骤由 `collect_comments` 执行，仍走原有 10 秒帖子间隔。
+- 开关：`fetch_live_snippets(..., plan_strategies=False)` 或 `community_data.py --no-plans`
+  可整层关闭（与 `--no-comments` 对称），关闭后回到「RSS 优先 + 专用适配器 + 通用摘录」的原有行为。
+- **只补强，不降级**：`should_run_plan()` 决定要不要跑方案链 —— 未获取的源跑；只有通用页面摘录
+  （`page_excerpt`）而方案里有更强的路（`rss` / `json_api` / `rsshub`）时跑，成功则升级证据；
+  已经有评论或热帖回复（`comment` / `thread_reply`）时**不跑也不覆盖**。
+- 单步异常只影响这一步，单源异常只影响这一源；方案层整体异常时保留既有结果并记
+  `plan_fetch.error`，不打断整轮采集。
+
+### 端点核验口径（未做在线实测）
+
+本项目的执行环境只能出网到 GitHub / PyPI / npm，**不能直连目标站点**，因此端点是这样核对的：
+用 GitHub API 取 `DIYgod/RSSHub` 全量路由树，再逐条读取路由源码的 `export const route` 块
+（`path` / `example` / `parameters` / `features.requireConfig` / `features.antiCrawler`），
+基准 commit 钉在 `RSSHUB_UPSTREAM`。核验状态如实分级：
+
+| 状态 | 含义 |
+|---|---|
+| `native` | 站点官方订阅出口 |
+| `api_public` | 站点公开接口，且**响应结构对着上游调用源码核对过** |
+| `rsshub_doc` | RSSHub 路由存在，参数与是否需要配置已核对 |
+| `needs_check` | 地址来自公开资料或上游源码，但未在线实测，可能已失效 |
+| `carrier` | Google News 检索载体，明确是聚合检索，不是站点原生源 |
+| `adapter` | 本项目自有适配器（见上文各专用采样口径） |
+
+`needs_check` 不是免责声明，而是**待实测清单**：在有外网的环境跑一次真实采集，
+把状态改成 `native` / `api_public` 或把端点换掉，都应当同步更新 `PLANS` 与生成文档。
+
+三条已核对出来的硬结论（写进方案，不靠猜）：
+
+1. `RSSHUB_ABSENT` 里的 20 个站点在全量路由树与全文检索里都没有命中，方案里**不写 RSSHub 步骤**；
+   `tests/test_community_plans.py` 钉住 25 个源不得出现 `rsshub` 步骤，防止凭印象写出不存在的路由。
+2. 需要 Cookie/Token 的路由（X / 知乎 / 微博 / 小红书 / 抖音）显式 `needs_config`，
+   排在免密钥的检索载体之后，且**绝不作为链条最后一步**；未配置时记 `not_configured` 且不发请求。
+   `plan_strength()` 也只统计不需要密钥的步骤，因此这 5 源在默认配置下如实归为 `excerpt_only`。
+3. 只有 `html` + `carrier` 两级的源必须显式标 `no_public_feed=True`（构造期强校验），
+   避免「看起来有方案、其实只能靠摘录」被含糊过去。
+
+### 诊断字段
+
+- 各源 `plan_attempt`：`status`（`ok` / `unavailable` / `budget_exhausted` / `error_*`）、
+  胜出的 `strategy` 与 `endpoint`、`content_kind`、`verified`、`step_kind`，以及 `plan_steps[]`
+  ——每一步的 `index` / `kind` / `strategy` / `verified` / `status` / `endpoint` / `candidates`。
+  失败源因此有名字、有原因、有「试到哪一级」，可逐源排查。
+- `fetch_engine.plan_fetch`：`attempted_sources`、`plan_sources`（方案链救回的源数）、
+  `matched_comments`、`requests_count` 与 `budget`（用量、预算、是否耗尽、步骤间隔）。
+- `plan_fetch` 的请求数已并入 `fetch_engine.requests_count`。
+
+```bash
+python3 community_plans.py --self-test                          # 覆盖率 + 逐源端点链 + 强度（离线）
+python3 community_plans.py --only XUEQIU                        # 单个源的完整方案
+python3 community_plans.py --plans-md docs/community-49-plans.md # 重新生成逐源核对表
+python3 community_plans.py --routes-md docs/community-49-routes.md
+python3 -m unittest tests.test_community_plans                  # 47 项回归，零联网
+```
+
+`docs/community-49-plans.md` 与 `docs/community-49-routes.md` 都由代码生成，**禁止手改**；
+测试会断言文档与 `PLANS` 注册表逐字一致，改了方案忘了重新生成就会红。
+
 ## 3. 四小时快照、帖子间隔与重新分析
 
 - `community_snapshot.py` 是常规入口：首次采集后，把 49 源结果分别写入各自的 SQLite 数据库
