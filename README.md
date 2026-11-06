@@ -789,8 +789,8 @@ Secrets（仓库 Settings → Secrets and variables → Actions）：
 
 ## ⏰ 自动采集与推送
 
-`.github/workflows/m.yml` 保留北京时间每天 09:00 与每五分钟的报告/微信触发，并有独立的每四小时社区采集触发。
-同一时刻的四小时触发只检查/更新社区快照，不额外推送；报告任务读取该快照后重新分析并部署或推送。
+`.github/workflows/m.yml` 配置每天北京时间 09:00、每 4 小时、每 2 小时错峰与每 5 分钟四组定时触发。
+每次定时运行都会先由 `community_snapshot` 检查 4 小时快照时效（未到期直接复用缓存，到期才联网抓 49 源），随后**无条件执行 `deploy` 与 `daily`** 重抓最新行情与 RSS、重建并发布 GitHub Pages 公开报告（刷新 `扫描时间` / `data_time`）并推送微信；所有 `schedule` 统一归入 `pages-schedule-loop` 串行排队，不会因 GitHub Actions 限流 `*/5` 而把 `0 */4` 运行跳过构建。
 
 > GitHub Actions 的定时任务可能延迟或漏跑，并发排队和缓存失效也会影响实际时间，不保证精确到秒。
 

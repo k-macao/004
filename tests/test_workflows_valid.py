@@ -231,7 +231,7 @@ class TestWorkflowStillDoesItsJob(unittest.TestCase):
         self.assertIn('actions/download-artifact@v4', daily)
         self.assertIn('name: community-snapshot', daily)
         self.assertIn('needs: community_snapshot', daily)
-        self.assertIn("github.event.schedule != '0 */4 * * *'", daily)
+        self.assertIn("if: ${{ github.event_name == 'schedule' }}", daily)
 
     def test_triggers_and_jobs_intact(self):
         lines = read_lines(WORKFLOW)
@@ -243,7 +243,8 @@ class TestWorkflowStillDoesItsJob(unittest.TestCase):
             self.assertIn('\n  ' + job + ':', text)
         for step_owner, chunk in zip(jobs, re.split(r'\n  (?:community_snapshot|deploy|wechat|daily):', text)[1:]):
             self.assertIn('runs-on:', chunk, '%s 缺 runs-on' % step_owner)
-        self.assertIn("cron: '0 */4 * * *'", text)
+        for cron in ("'0 1 * * *'", "'0 */4 * * *'", "'17 */2 * * *'", "'*/5 * * * *'"):
+            self.assertIn('cron: ' + cron, text)
 
     def test_single_collector_and_shared_snapshot(self):
         text = ''.join(read_lines(WORKFLOW))
@@ -259,8 +260,7 @@ class TestWorkflowStillDoesItsJob(unittest.TestCase):
         self.assertIn('actions/cache/save@v4', collector)
         self.assertIn('actions/upload-artifact@v4', collector)
         self.assertIn('needs: community_snapshot', deploy)
-        self.assertIn("github.event.schedule != '0 */4 * * *'", deploy)
-        self.assertIn("github.event.schedule == '0 */4 * * *' && 'community-four-hour-trigger'", text)
+        self.assertIn("group: ${{ github.event_name == 'schedule' && 'pages-schedule-loop' || 'pages' }}", text)
         self.assertIn("cron: '*/5 * * * *'", text)
         for chunk in (deploy, wechat, daily):
             self.assertIn('actions/download-artifact@v4', chunk)
@@ -273,6 +273,67 @@ class TestWorkflowStillDoesItsJob(unittest.TestCase):
         self.assertEqual(3, text.count('读取社区快照（49 源）'), '三个构建/推送 job 均读取 49 源快照')
         self.assertNotIn('34 源', text)
         self.assertNotIn('34 大社区', text)
+
+
+class TestScheduledRunsNeverSkipBuild(unittest.TestCase):
+    """回归防线（2026-11-06）：任何 schedule 触发都必须真正构建并发布新报告。
+
+    线上事故（run 42138849627 / 42093752563 / 42022119408 等）：
+    原工作流假设 `0 */4 * * *` 与 `*/5 * * * *` 会在同一分钟双触发，因而在
+    `deploy` 与 `daily` 上加了 `github.event.schedule != '0 */4 * * *'`。
+    实际 GitHub Actions 对公共仓库的 `*/5 * * * *` 大幅限流/丢弃，并不会在
+    `0 */4 * * *` 触发时刻补跑 `*/5`，导致约四成定时运行只跑 13s–86s 的
+    `community_snapshot` 就把 `deploy` 和 `daily` 双双标为 `skipped`，公开页
+    `扫描时间`（`data_time`）长达数小时不刷新，下游 04-kindle 也拿不到新报告。
+    """
+
+    def _job_headers(self, path):
+        text = ''.join(read_lines(path))
+        jobs = ('community_snapshot', 'deploy', 'wechat', 'daily')
+        chunks = re.split(r'\n  (?:community_snapshot|deploy|wechat|daily):', text)[1:]
+        self.assertEqual(4, len(chunks), path)
+        headers = {}
+        for name, chunk in zip(jobs, chunks):
+            headers[name] = chunk.split('\n    steps:\n', 1)[0]
+        return text, headers
+
+    def test_deploy_has_no_job_level_if_gate(self):
+        for path in (WORKFLOW, CANONICAL):
+            _, headers = self._job_headers(path)
+            deploy_header = headers['deploy']
+            for raw in deploy_header.splitlines():
+                stripped = raw.strip()
+                if stripped and not stripped.startswith('#'):
+                    self.assertFalse(
+                        stripped.startswith('if:'),
+                        f'{path}: deploy 不得加 job 级 if 条件跳过定时构建: {stripped}',
+                    )
+
+    def test_daily_runs_on_all_schedule_events_without_cron_exclusion(self):
+        for path in (WORKFLOW, CANONICAL):
+            text, headers = self._job_headers(path)
+            daily_header = headers['daily']
+            if_lines = [
+                line.strip() for line in daily_header.splitlines()
+                if line.strip().startswith('if:')
+            ]
+            self.assertEqual(
+                ["if: ${{ github.event_name == 'schedule' }}"],
+                if_lines,
+                f'{path}: daily 必须对全部 schedule 事件运行，不能按 cron 字符串排除',
+            )
+            self.assertNotIn('github.event.schedule', text)
+            self.assertNotIn('community-four-hour-trigger', text)
+
+    def test_all_schedule_runs_serialize_in_pages_schedule_loop(self):
+        for path in (WORKFLOW, CANONICAL):
+            text = ''.join(read_lines(path))
+            top = text.split('\njobs:\n', 1)[0]
+            self.assertIn(
+                "group: ${{ github.event_name == 'schedule' && 'pages-schedule-loop' || 'pages' }}",
+                top,
+            )
+            self.assertIn('cancel-in-progress: false', top)
 
 
 if __name__ == '__main__':

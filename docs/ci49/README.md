@@ -38,3 +38,14 @@ python3 -m unittest tests.test_workflows_valid -v
 - 报告生成时间来自本次构建，原始抓取/行情日期不被改写；公开链接指向本仓库的 `/004/`。
 
 合并修复后，需要一次成功的 `main` 工作流运行才会替换线上旧产物。GitHub 的 `schedule` 是尽力触发，不保证标称的五分钟间隔；可在 Actions 手动运行工作流恢复发布，是否推送微信由 `wechat_push` 输入控制。
+
+## 2026-11-06 定时运行跳过构建修复
+
+线上排查（如运行 `42138849627`、`42093752563`、`42022119408`）发现：原工作流假设 `0 */4 * * *` 与 `*/5 * * * *` 会在同一分钟双触发，因而在 `deploy` 与 `daily` 上加了 `github.event.schedule != '0 */4 * * *'`。实际 GitHub Actions 对公共仓库高频 `*/5 * * * *` 大幅限流，并不会在 `0 */4 * * *` 触发时刻同时跑 `*/5`，导致约四成定时运行只跑 `community_snapshot` 就将 `deploy` 和 `daily` 标为 `skipped`（即使当次刚抓完 49 源新社区数据也不发布），公开页 `扫描时间`（`data_time`）数小时不更新。
+
+修复内容：
+
+- 移除 `deploy` 与 `daily` 上排除 `0 */4 * * *` 的 `if` 条件，任何 `schedule` 触发均完整执行构建、Pages 部署与定时推送；
+- 新增 `17 */2 * * *` 错峰定时兜底，避免整点拥堵并缩短 `*/5` 被限流时的最大刷新间隔；
+- 所有 `schedule` 事件统一归入 `pages-schedule-loop` 并发组（`cancel-in-progress: false`），串行排队不撞车 Pages 环境；
+- 同步 `docs/ci49/m.yml` 并新增 `TestScheduledRunsNeverSkipBuild` 回归测试。
