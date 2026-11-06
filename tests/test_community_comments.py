@@ -280,12 +280,17 @@ class TestPipeline(unittest.TestCase):
                             for u, h in calls))
         web = bs.build_community_html(data['communities'])
         for phrase in ('采样评论', '热帖回复', '非回复点赞', '评论点赞 35',
-                       '其他采样回复', '2026-10-30T02:59:00Z', '查看原帖/原页'):
+                       '其他采样回复', '2026-10-30T02:59:00Z'):
             self.assertIn(phrase, web)
         wechat = wp.community_card(lihkg, level='standard')
-        for phrase in ('采样评论', '评论点赞 35', '评论点赞 12', '原帖/原页'):
+        for phrase in ('采样评论', '评论点赞 35', '评论点赞 12'):
             self.assertIn(phrase, wechat)
         self.assertNotIn('secret-user', web + wechat)
+        # 全内容隐藏链接：出处 URL 只留在数据层（上面已断言 source_url），内容层不渲染链接。
+        for rendered in (web, wechat):
+            self.assertNotIn('href', rendered)
+            self.assertNotIn('原帖', rendered)
+            self.assertNotIn('lihkg.com', rendered)
 
     def test_praw_success_survives_blocked_base_page_and_reaches_renderers(self):
         submission = FakeSubmission('Stock market discussion', [
@@ -310,7 +315,12 @@ class TestPipeline(unittest.TestCase):
         self.assertIn('本条采样评论', record['verdict'])
         self.assertNotIn('公开页摘录', record['verdict'])
         self.assertIn('评论站内得分 22', record['meta'])
-        self.assertIn('reddit.com/r/investing/comments/', bs.build_community_html([record]))
+        # 全内容隐藏链接：PRAW 的 permalink 落到数据层供核查，但绝不渲染进内容。
+        self.assertIn('reddit.com/r/investing/comments/',
+                      ' '.join(str(c.get('url') or '') for c in record['comments']))
+        web = bs.build_community_html([record])
+        self.assertNotIn('href', web)
+        self.assertNotIn('reddit.com/r/investing', web)
         self.assertIn('评论站内得分 4', wp.community_card(record, level='full'))
         self.assertEqual(data['fetch_engine']['comment_fetch']['attempts']['RINVESTING']['status'], 'ok')
 
@@ -434,9 +444,13 @@ class TestPipeline(unittest.TestCase):
         for rendered in (bs.build_community_html([comm]), wp.community_card(comm, level='full')):
             self.assertNotIn('<script>', rendered)
             self.assertNotIn('<img src=x', rendered)
-            self.assertNotIn('href="javascript:', rendered)
             self.assertIn('&lt;img', rendered)
-            self.assertIn('&quot;bad', rendered)
+            # 全内容隐藏链接：内容层不再渲染任何链接，因此不安全 URL 连转义形态都不会出现。
+            # 这比原先「不得出现 href="javascript:"」更强：根本不存在 href。
+            self.assertNotIn('href', rendered)
+            self.assertNotIn('javascript:', rendered)
+            self.assertNotIn('example.com', rendered)
+            self.assertNotIn('&quot;bad', rendered)
 
 
 if __name__ == '__main__':

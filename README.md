@@ -420,8 +420,16 @@ python3 -m unittest tests.test_rss_feeds  # 回归（零联网）
 | [PRAW](https://github.com/praw-dev/praw) | 4 个 Reddit 社区 | 可选官方只读 OAuth；热门帖前 3 个的顶层评论按得分排序 |
 | [Scrapling](https://github.com/D4Vinci/Scrapling) 框架模型 | 原有 49 源 | 通用公开页摘录回退，**不声称是评论或热评** |
 
-评论有来源链接、热度口径及真实发布时间；LIHKG / Reddit 仅保留 7 天内的有时间回复，PTT
+评论有热度口径及真实发布时间；LIHKG / Reddit 仅保留 7 天内的有时间回复，PTT
 缺年份时如实显示未知。网页与微信均显示采样范围；排序只在单站样本内进行，不代表全站排行。
+
+**全内容隐藏链接**：网页与微信的内容层**不渲染任何外链**——社区卡片不再出现「查看原帖/原页」
+「原帖」字样，05 节 RSS 条目标题只作纯文本、不再包 `<a href>`。出处 URL 仍完整保留在**数据层**
+（`community_data.json` 的 `source_url` / `comments[].url`、`rssfeeds_data.json` 的
+`items_list[].url`），因此隐藏链接不牺牲可核查性与溯源能力。页内导航锚点（`#vix` / `#rss` …）
+与字体资源 `<link>` 属于导航与资源，不在隐藏范围内，照常保留。
+回归防线：`tests/test_content_links_hidden.py`。
+
 详细数据契约、仓库版本与许可证、失败状态及权限配置见
 [docs/community-comment-strategies.md](docs/community-comment-strategies.md)。
 
@@ -746,7 +754,8 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `docs/community-49-plans.md` | **49 源逐源方案核对表**（`python3 community_plans.py --plans-md …` 生成，禁止手改）：每源列目录 URL / 一句话方案 / 强度 / 限制，以及逐步的类型、核验状态、端点与口径说明；末尾附 RSSHub 路由证据表与「已核对无路由的站点」清单 |
 | `docs/community-49-routes.md` | **RSSHub 路由核对快照**（同由代码生成）：路由 → 上游文件（`lib/routes/`）→ 用在哪些源；上游基准 commit 与核对方式写在文件头，未被任何源使用的证据行如实标「—」 |
 | `tests/test_community_plans.py` | **逐源方案回归（47 项，零联网）**：49 源一一对应且每源 ≥2 级路、端点必须是可解析绝对目标（禁裸域名/占位域名/本机/凭据）、最后一步不得依赖密钥、检索载体永不冒充评论、`no_public_feed` 标记与步骤类型一致、已核对无路由的 25 源绝不出现 RSSHub 步骤、路由必须能还原到已核对的上游模式（最长前缀匹配）、适配器只登记给真有适配器的 8 源、方案强度忽略 `needs_config` 步骤、逐级降级与端点内回退、超窗/未来/非财经条目一律拒绝、未配置密钥的步骤不发请求、预算与步数上限、失败即「未获取」而非编造、导入与目录/渲染路径零联网、生成文档与注册表不漂移、管线只补强不降级 |
-| `tests/test_community_comments.py` | **离线回归**：三种方案、登录/限流与 robots 降级、排序、时效、样本口径、原帖链接与网页/微信渲染。 |
+| `tests/test_community_comments.py` | **离线回归**：三种方案、登录/限流与 robots 降级、排序、时效、样本口径、网页/微信渲染（内容层零链接）。 |
+| `tests/test_content_links_hidden.py` | **全内容隐藏链接回归（14 项，零联网）**：网页与微信两端同源零 `<a href>`、零「原帖/原页」字样、出处 URL 连纯文本与转义残片都不漏进内容层；05 节 RSS 标题只作纯文本且条目 URL 不出现；隐藏链接不删证据（摘录/热度/时间/标题照常显示）；数据层仍保留 `source_url` / `comments[].url` / `items_list[].url` 且 `safe_source_url` 校验不放松；页内导航锚点与 3 个字体 `<link>` 必须保留 |
 | `tests/test_sentiment.py` | 舆情层测试（38 项，零联网）：`python3 -m unittest discover -s tests`；含「03B 对外输出不得出现任何来源痕迹」与「采集结果必须匹配到日报标的」两类回归 |
 | `char_charts.py` | **微信字符配图**：把力量分、涨跌幅、社区构成、舆情读数、**AI 预测（预期涨跌幅发散柱 + 置信度柱）与预测命中率回看**画成 matplotlib 同款的柱状/发散/堆叠字符图。缺数据不编柱。`python3 char_charts.py --self-test` |
 | `forecast.py` | **04 栏「AI 预测 · 未来函数」推理引擎**：四路当次数据 → 下一交易日逐标的预测（方向 / 预期涨跌幅 / 预测区间 / 点位区间 / 置信度 / 驱动拆解）+ 明日盘面倾向 + 历史命中率回看；「未来函数」只取「预测未来」之义，目标日严格晚于行情基准日、预测**先落盘后结算**，当次行情结构上不可能结算当次预测（杜绝 look-ahead bias）。纯标准库纯函数、不联网，构建期由 `build_site.py` 与 `tools/wechat_push.py` 直接调用（**无需改 CI workflow**）。`python3 forecast.py` 文本摘要、`--json` 导出、`--history` 落盘+结算、`--review` 只看回看、`--self-test` 规则自检 |

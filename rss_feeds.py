@@ -2289,10 +2289,9 @@ def render_web(data):
                         date_html = (f'<strong style="color:var(--cyan);">[{_esc(_md_cn(date))}]</strong>'
                                      if date else
                                      '<span style="color:var(--muted);">[日期未标注]</span>')
-                        title = _esc(it.get('title'))
-                        url = it.get('url') or ''
-                        title_html = (f'<a href="{_esc(url)}" target="_blank" '
-                                      f'rel="noopener noreferrer">{title}</a>') if url.startswith('http') else title
+                        # 全内容隐藏链接：条目标题只作纯文本渲染，不再包 <a href>。
+                        # 条目 URL 仍保留在数据层（sources[].items[].url）供离线核查。
+                        title_html = _esc(it.get('title'))
                         # 每源只给最新一条配摘要：10 条全带摘要会把 05 节顶到 200KB+，
                         # 其余 9 条只留标题，扫读更快（正文标题本身就是信息）。
                         snip = (f' <span style="color:var(--muted);font-size:11px;">'

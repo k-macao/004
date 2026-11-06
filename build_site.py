@@ -65,7 +65,6 @@ AI 预测注入 (04 节):
       若本地误提交了构建产物，构建会明确报错，恢复: git checkout -- report.html
 """
 import argparse
-import html as html_mod
 import json
 import os
 import re
@@ -408,19 +407,21 @@ def build_quant_html(quant):
 
 
 def community_evidence_html(c):
-    """Render bounded comment samples and safe provenance links (never HTML from the source)."""
+    """Render bounded comment samples with no hyperlink (never HTML from the source).
+
+    全内容隐藏链接：内容层不渲染任何外链，也不再出现「查看原帖/原页」「原帖」字样。
+    出处 URL 只保留在数据层（`source_url` / `comments[].url`），供离线核查与追溯，
+    因此隐藏链接不牺牲可核查性，也不改变任何抓取或真实性口径。
+    """
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
-    url = community_mod.safe_source_url(c.get('source_url'))
-    link = (f'<a href="{html_mod.escape(url, quote=True)}" target="_blank" '
-            f'rel="noopener noreferrer">查看原帖/原页</a>') if url else ''
     if not comments:
-        return f'  <div class="pub-meta">{link}</div>\n' if link else ''
+        return ''
     first = comments[0]
     details = [first.get('published_label') or '发布时间未知', first.get('scope') or '有限样本']
     if c.get('matched_comments') is not None:
         details.append(f"本次匹配 {c.get('matched_comments')} 条，展示 {len(comments)} 条")
     detail_html = _esc(' · '.join(str(x) for x in details if x))
-    parts = [f'  <div class="pub-meta">{detail_html}{" · " + link if link else ""}</div>\n']
+    parts = [f'  <div class="pub-meta">{detail_html}</div>\n']
     if len(comments) > 1:
         parts.append('  <div class="pub-meta">其他采样回复：</div>\n  <ul class="pixel-list">\n')
         for item in comments[1:]:
@@ -428,11 +429,8 @@ def community_evidence_html(c):
             title = _esc(item.get('post_title') or '')
             metric = _esc((item.get('metric') or {}).get('label') or '热度未知')
             published = _esc(item.get('published_label') or '发布时间未知')
-            item_url = community_mod.safe_source_url(item.get('url'))
-            item_link = (f' · <a href="{html_mod.escape(item_url, quote=True)}" target="_blank" '
-                         f'rel="noopener noreferrer">原帖</a>') if item_url else ''
             parts.append(f'    <li>【{title}】{text} <span class="pub-meta">'
-                         f'{metric} · {published}{item_link}</span></li>\n')
+                         f'{metric} · {published}</span></li>\n')
         parts.append('  </ul>\n')
     return ''.join(parts)
 
