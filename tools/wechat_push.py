@@ -305,20 +305,21 @@ def _clip_text(text, limit):
 
 
 def community_evidence_wechat(c, level='full'):
-    """Compact, escaped provenance; longer tiers also retain additional sample replies."""
+    """Compact, escaped provenance with no hyperlink; longer tiers retain extra sample replies.
+
+    全内容隐藏链接：微信页与网页口径一致，不渲染外链，也不出现「原帖/原页」「原帖」字样。
+    出处 URL 只保留在数据层，供离线核查。
+    """
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
-    url = community_mod.safe_source_url(c.get('source_url'))
-    link = (f'<a href="{html_mod.escape(url, quote=True)}" style="color:{WECHAT_CYAN};">原帖/原页</a>'
-            if url else '')
     if not comments:
-        return f'<div style="font-size:10px">{link}</div>' if link else ''
+        return ''
     first = comments[0]
     details = [first.get('published_label') or '发布时间未知', first.get('scope') or '有限样本']
     if c.get('matched_comments') is not None:
         visible = len(comments) if level in ('full', 'standard') else 1
         details.append(f"匹配 {c.get('matched_comments')} 条，展示 {visible} 条")
     line = _esc_w(' · '.join(str(x) for x in details if x))
-    result = f'<div style="color:{WECHAT_MUTED};font-size:10px;">{line}{" · " + link if link else ""}</div>'
+    result = f'<div style="color:{WECHAT_MUTED};font-size:10px;">{line}</div>'
     if level in ('full', 'standard'):
         for item in comments[1:]:
             metric = (item.get('metric') or {}).get('label') or '热度未知'
@@ -327,11 +328,8 @@ def community_evidence_wechat(c, level='full'):
                 text += '…'
             title = _clip_text(item.get('post_title') or '', 60)
             published = item.get('published_label') or '发布时间未知'
-            item_url = community_mod.safe_source_url(item.get('url'))
-            item_link = (f' · <a href="{html_mod.escape(item_url, quote=True)}" '
-                         f'style="color:{WECHAT_CYAN};">原帖</a>') if item_url else ''
             result += (f'<div style="font-size:10.5px;line-height:1.7">· 【{_esc_w(title)}】{_esc_w(text)} '
-                       f'<span style="color:{WECHAT_MUTED};">{_esc_w(metric)} · {_esc_w(published)}{item_link}</span></div>')
+                       f'<span style="color:{WECHAT_MUTED};">{_esc_w(metric)} · {_esc_w(published)}</span></div>')
     return result
 
 
