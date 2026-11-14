@@ -385,6 +385,7 @@ def analyze_live_snippet(snippet: str, title: str = '', ctype: str = '', peer_sn
     if neg_hits:
         evidence_parts.append(f"负向词「{'、'.join(neg_hits[:3])}」")
     sample_label = {'comment': '本条采样评论', 'thread_reply': '本条热帖回复',
+                    'feed_item': '本条订阅条目',
                     'demo': '演示文本'}.get(content_kind, '本次公开页摘录')
     limitation = '仅用于演示，不代表实盘抓取。' if content_kind == 'demo' else '仅反映局部信息，不外推全站共识。'
     if evidence_parts:
@@ -412,6 +413,8 @@ def format_unavailable_reason(hit: dict | None) -> str:
         return f"站点返回 HTTP {status}"
     if err == 'robots_disallowed':
         return "robots.txt 不允许抓取"
+    if err == 'shell_content':
+        return "公开页只有导航/登录/版权等页面外壳文字，没有正文"
     if err == 'no_topic_snippet':
         return "公开页未检出财经讨论正文（动态渲染空壳或登录墙）"
     if err and err != 'no_response':
@@ -479,7 +482,8 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
     kind = evidence.get('content_kind') or ('demo' if source == 'demo' else 'page_excerpt')
     # A parent headline can provide topic context, but must not vote on behalf
     # of the author of the sampled reply. For comments score only their text.
-    analysis_title = '' if kind in ('comment', 'thread_reply') else clean_title
+    # 订阅条目的正文已含标题，同样不再把标题重复计入。
+    analysis_title = '' if kind in ('comment', 'thread_reply', 'feed_item') else clean_title
     analysis = analyze_live_snippet(clean_snip, title=analysis_title,
                                     ctype=comm.get('ctype', ''), peer_snippets=peer_snippets,
                                     content_kind=kind)
@@ -492,8 +496,9 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
         meta = f"演示样本（非实盘抓取 · {len(clean_snip)} 字）· {ctype} · 样本生成 {fetch_date}"
     else:
         adapt_note = " · 指纹自适应回捞" if adaptive else ""
-        if kind in ('comment', 'thread_reply') and first:
-            label = '实抓采样评论' if kind == 'comment' else '实抓热帖回复'
+        if kind in ('comment', 'thread_reply', 'feed_item') and first:
+            label = {'comment': '实抓采样评论', 'thread_reply': '实抓热帖回复',
+                     'feed_item': '实抓订阅条目'}[kind]
             metric = (first.get('metric') or {}).get('label') or '热度未知'
             meta = (f"{label}（{len(clean_snip)} 字 · {metric}）"
                     f"· {ctype} · 抓取核验 {fetch_date}")
@@ -548,6 +553,10 @@ def reanalyze_snapshot(data, now=None):
     peers = [c['analysis_input']['snippet'] for c in records
              if isinstance(c, dict) and c.get('available') and isinstance(c.get('analysis_input'), dict)
              and isinstance(c['analysis_input'].get('snippet'), str) and c['analysis_input']['snippet'].strip()]
+    # 先把「页面外壳 / 过短片段」移出展示与多空计数：引文不可用时提一条可用样本顶上，
+    # 整源都不可用则隐藏。必须在重算立场之前做，因为引文可能换了。
+    import community_judge
+    filter_stats = community_judge.filter_dataset(result)
     reanalyzed = legacy = 0
     for record in records:
         if not isinstance(record, dict) or not record.get('available'):
@@ -559,15 +568,27 @@ def reanalyze_snapshot(data, now=None):
         kind = record.get('content_kind') or 'page_excerpt'
         # Headline text must not vote on behalf of a sampled comment author.
         title = inputs.get('title') if isinstance(inputs.get('title'), str) else ''
-        if kind in ('comment', 'thread_reply'):
+        if kind in ('comment', 'thread_reply', 'feed_item'):
             title = ''
         analysis = analyze_live_snippet(inputs['snippet'], title=title, ctype=record.get('ctype', ''),
                                         peer_snippets=peers, content_kind=kind)
         record.update(analysis)
         reanalyzed += 1
     # 旧快照没有逐条判定，或规则更新后需要重判：每次渲染前按保存的原文重算（不联网）。
-    import community_judge
-    community_judge.judge_dataset(result)
+    judge_summary = community_judge.judge_dataset(result)
+    judge_summary['filtered'] = filter_stats
+    hidden = filter_stats['hidden_sources']
+    if hidden and isinstance(result.get('summary'), dict):
+        # 展示口径的可用源数同步扣掉被隐藏的源；live_ok 保留采集时的原始数。
+        summary = dict(result['summary'])
+        if isinstance(summary.get('ok'), int):
+            summary['ok'] = max(0, summary['ok'] - len(hidden))
+        if isinstance(summary.get('unavailable'), int):
+            summary['unavailable'] += len(hidden)
+        names = {r.get('key'): r.get('name') for r in records if isinstance(r, dict)}
+        summary['failed'] = list(summary.get('failed') or []) + [names.get(k, k) for k in hidden]
+        summary['filtered_sources'] = len(hidden)
+        result['summary'] = summary
     result['counts'] = count_verdicts([r for r in records if isinstance(r, dict)])
     result['analysis_stats'] = {'reanalyzed': reanalyzed, 'legacy_retained': legacy}
     if reanalyzed:
@@ -713,6 +734,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
             "ok": ok_count,
             "live_ok": ok_count,
             "comment_sources": sum(c.get('content_kind') in ('comment', 'thread_reply') for c in communities_out),
+            "feed_sources": sum(c.get('content_kind') == 'feed_item' for c in communities_out),
             "page_excerpt_sources": sum(c.get('available') and c.get('content_kind') == 'page_excerpt'
                                         for c in communities_out),
             "unavailable": len(COMMUNITIES) - ok_count,

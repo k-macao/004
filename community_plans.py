@@ -142,13 +142,20 @@ VERIFIED = ('native', 'rsshub_doc', 'api_public', 'needs_check', 'carrier', 'ada
 
 KIND_COMMENT = 'comment'
 KIND_REPLY = 'thread_reply'
+KIND_FEED = 'feed_item'      # 订阅源条目（帖子/文章标题 + 摘要），不是评论也不是回复
 KIND_EXCERPT = 'page_excerpt'
-CONTENT_KINDS = (KIND_COMMENT, KIND_REPLY, KIND_EXCERPT)
+CONTENT_KINDS = (KIND_COMMENT, KIND_REPLY, KIND_FEED, KIND_EXCERPT)
 
 # 每源最多尝试几个步骤、整轮最多发多少请求、整轮墙钟预算。
 # 预算是硬的：49 源 × 多步链如果不设上限，一次采集能把 CI 的社区 job 拖到超时。
 PLAN_MAX_STEPS = int(os.environ.get('COMMUNITY_PLAN_MAX_STEPS', '3'))
-PLAN_REQUEST_BUDGET = int(os.environ.get('COMMUNITY_PLAN_REQUESTS', '90'))
+PLAN_REQUEST_BUDGET = int(os.environ.get('COMMUNITY_PLAN_REQUESTS', '400'))
+# 每源定额：一个源最多花这么多次请求，花完就轮到下一个源——排在后面的源不会被前面的源饿死。
+PLAN_SOURCE_REQUESTS = int(os.environ.get('COMMUNITY_PLAN_SOURCE_REQUESTS', '8'))
+# 单个步骤最多展开多少个 URL（RSSHub 步骤 = 路由 × 实例，不设上限会一步吃光整源定额）。
+PLAN_STEP_URLS = int(os.environ.get('COMMUNITY_PLAN_STEP_URLS', '4'))
+# 每条 RSSHub 路由只试实例链里最健康的前 N 个实例。
+RSSHUB_INSTANCES_PER_ROUTE = int(os.environ.get('COMMUNITY_RSSHUB_INSTANCES', '2'))
 PLAN_WALL_BUDGET = float(os.environ.get('COMMUNITY_PLAN_BUDGET', '420'))
 # 步骤间隔与项目既有的 download_delay 同一口径：方案层发的是**源级列表/订阅请求**，
 # 不是帖详情读取（后者另有 10 秒帖子限速器）。调用方可以按自己的 download_delay 覆盖。
@@ -220,7 +227,7 @@ def adapter(strategy, note, content_kind=KIND_COMMENT):
                 content_kind=content_kind)
 
 
-def rss(urls, note, verified='native', content_kind=KIND_REPLY, strategy='rss_feed',
+def rss(urls, note, verified='native', content_kind=KIND_FEED, strategy='rss_feed',
         scope='站点官方订阅源最新条目，命中财经主题词且在时间窗内方入库，不代表全站排行'):
     return step(STEP_RSS, urls, verified=verified, note=note, strategy=strategy,
                 content_kind=content_kind, scope=scope)
@@ -676,7 +683,7 @@ _register(
                             '只保留 PTT 给出的月日与时间，不推算年份。'),
         rss(['https://www.ptt.cc/atom/Stock.xml', 'https://www.ptt.cc/rss/Stock.xml'],
             'PTT 板级 Atom/RSS 出口（同板文章列表，不含推噓明细）；未在线实测，标 needs_check。',
-            verified='needs_check', content_kind=KIND_REPLY,
+            verified='needs_check', content_kind=KIND_FEED,
             scope='PTT Stock 板订阅条目（只有标题与链接，没有推噓明细），不代表热帖排行'),
         html(['https://www.ptt.cc/bbs/Stock/index.html'], '列表页静态摘录（.r-ent .title）。',
              selectors=('.r-ent .title', '#main-content h1', 'h1')),
@@ -1043,15 +1050,41 @@ def config_gated_steps(spec):
 # ---------------------------------------------------------------------------
 
 class PlanBudget:
-    """整轮方案执行的请求数与墙钟预算（防止 49 源 × 多步链把 CI 拖死）。"""
+    """整轮方案执行的请求数与墙钟预算（防止 49 源 × 多步链把 CI 拖死）。
 
-    def __init__(self, requests=None, seconds=None, step_delay=None, now=None):
+    两级预算：整轮总额 + **每源定额**。`begin_source()` 按「剩余预算 ÷ 剩余源数」给当前源
+    分一份请求数与时间（请求数再封顶 `source_requests`），没花完的自动留给后面的源。
+    这样即使前面的源全部失败，后面的源也一定轮得到，结果不取决于目录排序。
+    """
+
+    def __init__(self, requests=None, seconds=None, step_delay=None, now=None, source_requests=None):
         self.requests = PLAN_REQUEST_BUDGET if requests is None else int(requests)
         self.seconds = PLAN_WALL_BUDGET if seconds is None else float(seconds)
         self.step_delay = PLAN_STEP_DELAY if step_delay is None else float(step_delay)
+        self.source_requests = (PLAN_SOURCE_REQUESTS if source_requests is None
+                                else int(source_requests))
         self.used_requests = 0
         self.started = time.time() if now is None else float(now)
         self.exhausted = False
+        self.source_quota = None       # None = 不在逐源模式（直接调用 run_plan 时）
+        self.source_used = 0
+        self.source_deadline = None
+        self.source_exhausted = False
+
+    def begin_source(self, remaining_sources=1):
+        """开始处理一个源：按公平份额分配这一源的请求数与时间。"""
+        remaining_sources = max(1, int(remaining_sources))
+        left = max(0, self.requests - self.used_requests)
+        self.source_quota = min(self.source_requests, max(1, left // remaining_sources)) if left else 0
+        seconds_left = max(0.0, self.seconds - (time.time() - self.started))
+        self.source_deadline = time.time() + seconds_left / remaining_sources
+        self.source_used = 0
+        self.source_exhausted = False
+
+    def end_source(self):
+        self.source_quota = None
+        self.source_deadline = None
+        self.source_exhausted = False
 
     def allow(self):
         if self.exhausted:
@@ -1062,15 +1095,27 @@ class PlanBudget:
         if time.time() - self.started > self.seconds:
             self.exhausted = True
             return False
+        if self.source_quota is not None and (
+                self.source_used >= self.source_quota or time.time() > self.source_deadline):
+            self.source_exhausted = True     # 只是这一源的份额用完，不影响后面的源
+            return False
         return True
+
+    def clip_timeout(self, timeout):
+        """单请求超时不超过当前源剩余的时间份额（至少留 2 秒）。"""
+        if self.source_deadline is None:
+            return timeout
+        return max(2.0, min(float(timeout), self.source_deadline - time.time()))
 
     def charge(self, count=1):
         self.used_requests += int(count)
+        self.source_used += int(count)
 
     def to_dict(self):
         return {'requests_used': self.used_requests, 'requests_budget': self.requests,
                 'seconds_budget': self.seconds, 'exhausted': self.exhausted,
-                'step_delay_seconds': self.step_delay}
+                'step_delay_seconds': self.step_delay,
+                'source_requests': self.source_requests}
 
 
 def rsshub_bases():
@@ -1085,10 +1130,34 @@ def rsshub_bases():
     return [b.strip().rstrip('/') for b in raw.split(',') if b.strip()]
 
 
+_RSSHUB_HEALTH = {}   # {实例: [成功次数, 失败次数]}，进程内记忆：坏实例往后排，好实例优先
+
+
+def reset_rsshub_health():
+    _RSSHUB_HEALTH.clear()
+
+
+def note_rsshub(url, ok):
+    """记录一次 RSSHub 实例的表现（ok=True 实例活着并返回了可解析订阅；False 网络失败/被拦截）。"""
+    for base in rsshub_bases():
+        if str(url).startswith(base + '/'):
+            record = _RSSHUB_HEALTH.setdefault(base, [0, 0])
+            record[0 if ok else 1] += 1
+            return
+
+
+def ranked_rsshub_bases():
+    """实例链按健康度排序：成功过的在前，连续失败两次且从未成功的排到最后；其余保持配置顺序。"""
+    def rank(base):
+        ok, fail = _RSSHUB_HEALTH.get(base, (0, 0))
+        return 0 if ok else (2 if fail >= 2 else 1)
+    return sorted(rsshub_bases(), key=rank)
+
+
 def expand_endpoint(endpoint, lang=None):
     """把方案里的端点占位展开成可请求 URL 列表。
 
-    `rsshub:/path` → 按实例链展开（同一路线在多个实例上依次尝试）；
+    `rsshub:/path` → 实例链里最健康的前 `RSSHUB_INSTANCES_PER_ROUTE` 个实例；
     `gnews:query`  → Google News 检索载体端点；
     其余原样返回（必须是绝对 http/https）。
     """
@@ -1097,10 +1166,46 @@ def expand_endpoint(endpoint, lang=None):
         path = text[len('rsshub:'):]
         if not path.startswith('/'):
             path = '/' + path
-        return [f'{base}{path}' for base in rsshub_bases()]
+        bases = ranked_rsshub_bases()[:max(1, RSSHUB_INSTANCES_PER_ROUTE)]
+        return [f'{base}{path}' for base in bases]
     if text.startswith('gnews:'):
         return [gnews_url(text[len('gnews:'):], lang or 'zh-CN')]
     return [text] if text else []
+
+
+def step_urls(step_record):
+    """一个步骤要请求的 URL（已展开、去空、封顶 `PLAN_STEP_URLS`）。"""
+    urls = []
+    for endpoint in step_record['endpoints']:
+        urls.extend(expand_endpoint(endpoint, step_record.get('lang')))
+    return [u for u in urls if u][:max(1, PLAN_STEP_URLS)]
+
+
+def robots_filter(step_record, urls, robots=None, site_denied=False, source_url=''):
+    """按 robots 规则筛掉不该请求的 URL，返回 (可请求的 URL, 是否有被拒的)。
+
+    - `robots` 为 None（调用方没要求遵守 robots）→ 原样放行；
+    - 检索载体（Google/Bing 新闻检索）不访问目标站点，始终放行；
+    - 目录 URL 已被该站 robots 拒绝的源（`site_denied`）→ 只剩检索载体可用：
+      RSSHub 与阅读器代理是替我们去抓同一个站点，同样不走；
+    - 其余直连目标站点的 URL 逐条按该站 robots.txt 判定；阅读器代理按**原站 URL** 判定。
+    """
+    if robots is None or step_record['kind'] == STEP_CARRIER:
+        return list(urls), False
+    if site_denied:
+        return [], True
+    if step_record['kind'] == STEP_RSSHUB:
+        return list(urls), False
+    allowed = []
+    for url in urls:
+        target = source_url if step_record.get('via_proxy') else url
+        try:
+            ok = robots.can_fetch(target)
+        except Exception:      # robots 取不到按「未声明限制」处理，与基础爬虫一致
+            ok = True
+        if ok:
+            allowed.append(url)
+    return allowed, len(allowed) != len(urls)
 
 
 def _transport_of(session):
@@ -1116,6 +1221,8 @@ def _fetch(session, url, timeout, headers=None, budget=None, delay=0.0):
         return None
     if delay:
         time.sleep(delay)
+    if budget is not None:
+        timeout = budget.clip_timeout(timeout)
     transport = _transport_of(session)
     try:
         status, _reason, _headers, body, final_url = transport('GET', url, dict(headers or {}), timeout)
@@ -1140,6 +1247,13 @@ def _candidate(text, title, url, published, now, max_age_days, step, metric_valu
     text = common.strip_noise(str(text or ''))
     if not cc._useful_comment(text, title):
         return None
+    if step['content_kind'] == KIND_EXCERPT:
+        # 页面摘录先过「是否正文」判定：导航/登录/版权这类页面外壳和过短片段不入库，
+        # 这一步判无效后会自动落到该源的下一套方案。
+        import community_judge
+        if community_judge.judge_content(text, title=title, kind=KIND_EXCERPT,
+                                         strategy=step['strategy'])[0] in community_judge.DROP_CONTENT:
+            return None
     published_at, published_label = '', '时间未知'
     if published is not None:
         when = published if isinstance(published, datetime) else _epoch_or_iso(published)
@@ -1222,16 +1336,19 @@ def _run_feed_step(step_record, urls, session, timeout, now, max_age_days, budge
         if got is None:
             return [], 'budget_exhausted', url
         status, body, final_url = got
-        if not body:
-            continue
-        if status in (403, 429):
-            # RSSHub 边缘按 IP 拦截 → 换下一个实例；其它站点则如实记状态。
+        is_hub = step_record['kind'] == STEP_RSSHUB
+        if not body or status in (403, 429) or status >= 500:
+            # RSSHub 边缘按 IP 拦截/实例宕机 → 记一次失败并换下一个实例；其它站点如实记状态。
+            if is_hub:
+                note_rsshub(url, False)
             continue
         if not (200 <= status < 300):
-            continue
+            continue      # 404 等多半是这条路由的问题，不算实例坏
         entries = _parse_feed_items(body, now, max_age_days)
         if entries is None:
             continue
+        if is_hub:
+            note_rsshub(url, True)
         candidates = []
         for title, text, link, published in entries[:MAX_ITEMS_PER_STEP]:
             item = _candidate(text or title, title, _safe_url(link, None), published, now,
@@ -1328,7 +1445,7 @@ STEP_RUNNERS = {
 
 
 def run_plan(comm, session, timeout=10.0, now=None, max_age_days=None, budget=None,
-             max_steps=None, skip_kinds=()):
+             max_steps=None, skip_kinds=(), robots=None, site_denied=False):
     """按方案逐级尝试，返回与 collect_comments 同构的 {comments, attempt}。
 
     - 第一个产出合格证据的步骤胜出，后续步骤不再发请求；
@@ -1369,13 +1486,16 @@ def run_plan(comm, session, timeout=10.0, now=None, max_age_days=None, budget=No
             attempt['plan_steps'].append(record)
             continue
 
-        urls = []
-        for endpoint in step_record['endpoints']:
-            urls.extend(expand_endpoint(endpoint, step_record.get('lang')))
-        urls = [u for u in urls if u]
+        urls = step_urls(step_record)
         runner = STEP_RUNNERS.get(kind)
         if runner is None or not urls:
             record['status'] = 'unsupported'
+            attempt['plan_steps'].append(record)
+            continue
+        urls, _blocked = robots_filter(step_record, urls, robots, site_denied, comm.get('url'))
+        if not urls:
+            # robots.txt 不允许：这一步不发请求，也不占步数名额。
+            record['status'] = 'robots_disallowed'
             attempt['plan_steps'].append(record)
             continue
 
@@ -1386,11 +1506,13 @@ def run_plan(comm, session, timeout=10.0, now=None, max_age_days=None, budget=No
                                                   max_age_days, budget, delay)
         except Exception as exc:  # 单步异常只影响这一步，不影响其它源
             candidates, status, endpoint = [], f'error_{type(exc).__name__}', (urls[0] if urls else '')
+        if status == 'budget_exhausted' and not budget.exhausted:
+            status = 'source_budget'     # 只是这一源的定额用完；剩余步骤留给备选层
         record['status'] = status
         record['endpoint'] = endpoint
         record['candidates'] = len(candidates)
         attempt['plan_steps'].append(record)
-        if status == 'budget_exhausted':
+        if status in ('budget_exhausted', 'source_budget'):
             break
         if candidates:
             comments, matched = _finish(candidates)
@@ -1413,7 +1535,8 @@ def _config_present(names):
 
 
 def run_plans(communities, session, timeout=10.0, now=None, max_age_days=None, budget=None,
-              max_steps=None, skip_keys=(), skip_kinds=(), verbose=False):
+              max_steps=None, skip_keys=(), skip_kinds=(), verbose=False, robots=None,
+              denied_keys=()):
     """逐源执行方案；单源失败不影响其它源。返回 (outcomes, stats)。
 
     `skip_kinds` 用于「这一类步骤已经由别的层执行过」的场景：社区管线传入
@@ -1423,25 +1546,28 @@ def run_plans(communities, session, timeout=10.0, now=None, max_age_days=None, b
     budget = budget or PlanBudget()
     skip_kinds = tuple(skip_kinds or ())
     outcomes = {}
-    for comm in communities:
+    denied_keys = set(denied_keys or ())
+    todo = [c for c in communities
+            if c.get('key') and c.get('key') not in set(skip_keys or ()) and c.get('key') in PLANS]
+    for position, comm in enumerate(todo):
         key = comm.get('key')
-        if not key or key in set(skip_keys or ()):
-            continue
-        if key not in PLANS:
-            continue
         if not budget.allow():
             outcomes[key] = {'comments': [], 'attempt': {
                 'strategy': 'plan_chain', 'status': 'budget_exhausted', 'matched_comments': 0,
                 'plan_steps': []}}
             continue
+        budget.begin_source(len(todo) - position)
         try:
             outcome = run_plan(comm, session, timeout=timeout, now=now,
                                max_age_days=max_age_days, budget=budget, max_steps=max_steps,
-                               skip_kinds=skip_kinds)
+                               skip_kinds=skip_kinds, robots=robots,
+                               site_denied=key in denied_keys)
         except Exception as exc:
             outcome = {'comments': [], 'attempt': {
                 'strategy': 'plan_chain', 'status': f'error_{type(exc).__name__}',
                 'matched_comments': 0, 'plan_steps': []}}
+        finally:
+            budget.end_source()
         outcomes[key] = outcome
         if verbose:
             status = outcome['attempt'].get('status')

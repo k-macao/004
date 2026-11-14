@@ -79,6 +79,16 @@ python3 community_judge.py --text "恒指放量上涨 2%，南向资金净流入
 python3 -m unittest tests.test_community_judge -v
 ```
 
+## ⚖️ 抓取公平性与内容合理性（49 源）
+
+- **每源定额预算**：方案链 400 次 / 每源 8 次，备选层 300 次 / 每源 6 次，按剩余源数均分；49 源全部失败时每个源也都试得到，不再出现排在后面的源一步都轮不到。每条 RSSHub 路由只试最健康的 2 个实例。
+- **备选顺序**：先 4 套各 1 次请求的通用方案（阅读器代理 → 两路新闻检索 → 名称检索），再试方案链剩余步骤。
+- **robots 一致**：RSS 优先、方案链、备选层与基础爬虫共用同一套 robots 判定；被拒绝的站点只走检索载体。
+- **订阅条目不冒充回复**：订阅源条目标为 `feed_item`（订阅条目），与评论 / 回复分开统计（`summary.feed_sources`）。
+- **外壳不展示**：判为页面外壳或过短片段的内容不进卡片、不计入多空；采集时继续走后面的方案。
+
+细节见 `docs/community-comment-strategies.md`，回归测试 `python3 -m unittest tests.test_community_fairness -v`。
+
 ## 🛟 未获取源多方案备选提取 + 🈶 英文内容中文备注
 
 - **多方案备选提取**：49 个社区源里当次没抓到内容的，由 `community_rescue.py` 逐源再试一条备选链

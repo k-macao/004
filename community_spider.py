@@ -467,13 +467,28 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                                     retry_delay=0.5, respect_retry_after=True)
     # RSS 优先：有公开 RSS 地址的源先尝试订阅源，成功则跳过网页/APP 公开信息流；
     # 不可用或无 RSS 的源留在 spider_communities 中，由下方的网页爬虫与评论策略处理。
+    # robots：调用方要求遵守 robots.txt 时，RSS 优先、逐源方案链与备选层都用同一个判定器
+    # （与基础爬虫同一套解析，按主机缓存）；不要求时为 None，各层原样放行。
+    robots = (sc.RobotsTxtManager(lambda url: session.get(url, timeout=5, retries=1))
+              if obey_robots else None)
     rss_outcomes = {}
     rss_ok_keys = set()
     if comment_strategies:
         import community_comments as comment_mod
         for community in communities:
-            if not comment_mod._rss_feed_url(community):
+            feed_url = comment_mod._rss_feed_url(community)
+            if not feed_url:
                 continue
+            if robots is not None:
+                try:
+                    feed_allowed = robots.can_fetch(feed_url)
+                except Exception:
+                    feed_allowed = True
+                if not feed_allowed:
+                    rss_outcomes[community.get('key')] = {'comments': [], 'attempt': {
+                        'strategy': 'rss_feed', 'status': 'robots_disallowed',
+                        'matched_comments': 0}}
+                    continue
             outcome = comment_mod.fetch_rss_feed(
                 community, session=session, timeout=timeout, now=now,
                 post_limiter=post_limiter)
@@ -562,11 +577,33 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
             'topic_hits': count_topic_hits(first.get('post_title', '') + ' ' + first.get('text', '')),
             'title': first.get('post_title', ''), 'snippet': first.get('text', ''),
             'selector': '', 'adaptive': False, 'bytes': first.get('response_bytes', 0),
-            'error': '', 'content_kind': 'thread_reply', 'strategy': 'rss_feed',
+            'error': '', 'content_kind': 'feed_item', 'strategy': 'rss_feed',
             'comments': outcome['comments'],
             'matched_comments': outcome['attempt']['matched_comments'],
             'comment_attempt': outcome['attempt'],
         }
+
+    # 页面摘录先过「是否正文」判定：只抓到导航/登录/版权这类页面外壳或过短片段的源，
+    # 不算拿到内容——降回未获取，交给下面的方案链与备选层继续找正文。
+    try:
+        import community_judge as judge_mod
+        for item in spider.results.values():
+            if not item.get('ok') or item.get('content_kind') not in (None, '', 'page_excerpt'):
+                continue
+            content, reasons = judge_mod.judge_content(
+                item.get('snippet') or '', title=item.get('title') or '', kind='page_excerpt',
+                strategy=item.get('strategy') or '')
+            if content in judge_mod.DROP_CONTENT:
+                item.update({'ok': False, 'error': 'shell_content',
+                             'rejected_snippet': (item.get('snippet') or '')[:120],
+                             'rejected_reason': '；'.join(reasons), 'snippet': ''})
+    except Exception as exc:  # 判定是把关项，异常时保留原结果
+        if verbose:
+            print(f'  ⚠️ 正文判定失败（{type(exc).__name__}），保留原始摘录', file=sys.stderr)
+
+    # 被该站 robots.txt 拒绝的源：后续各层只允许走检索载体。
+    denied_keys = {key for key, item in spider.results.items()
+                   if str(item.get('error') or '').startswith('robots_disallowed')}
 
     # 逐源独立方案（community_plans）：RSS 优先、专用适配器与通用摘录都没拿到合格证据的源，
     # 按该源自己的端点链逐级再试一遍。已经有评论/热帖回复的源不覆盖——方案只补强，不降级。
@@ -588,7 +625,8 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                 outcomes, plan_stats = plans_mod.run_plans(
                     targets, session, timeout=timeout, now=now,
                     budget=plans_mod.PlanBudget(step_delay=download_delay),
-                    skip_kinds=(plans_mod.STEP_ADAPTER,), verbose=verbose)
+                    skip_kinds=(plans_mod.STEP_ADAPTER,), verbose=verbose,
+                    robots=robots, denied_keys=denied_keys)
                 for key, outcome in outcomes.items():
                     item = spider.results.get(key)
                     if item is None:
@@ -635,11 +673,9 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                     import community_plans as plans_mod
                     outcomes, rescue_stats = rescue_mod.run_rescue(
                         targets, session, timeout=min(timeout, rescue_mod.RESCUE_TIMEOUT), now=now,
-                        budget=plans_mod.PlanBudget(
-                            requests=rescue_mod.RESCUE_REQUEST_BUDGET,
-                            seconds=rescue_mod.RESCUE_WALL_BUDGET, step_delay=download_delay),
+                        budget=rescue_mod.new_budget(step_delay=download_delay),
                         plan_attempts=plan_stats.get('attempts') or {}, verbose=verbose,
-                        plan_rest=plan_strategies)
+                        plan_rest=plan_strategies, robots=robots, denied_keys=denied_keys)
                     for key, outcome in outcomes.items():
                         item = spider.results.get(key)
                         if item is None:

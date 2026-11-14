@@ -5,11 +5,15 @@
 前面三层（RSS 优先 → 专用适配器/通用摘录 → `community_plans` 逐源方案链）都没拿到内容的源，
 在这里**逐源再走一条备选链**，第一个产出合格证据的方案胜出：
 
-1. `plan_rest`     —— 该源方案链里因 `PLAN_MAX_STEPS` 没轮到的剩余步骤（不重复已试过的步骤）；
-2. `reader_excerpt`—— 公开阅读器代理（r.jina.ai）渲染该源页面后的正文摘录，针对 JS 空壳页；
-3. `gnews_site_carrier` —— Google News `site:` 检索载体；
-4. `bing_news_carrier`  —— Bing 新闻 RSS `site:` 检索载体（与 Google 互为备份）；
-5. `gnews_name_carrier` —— Google News 按社区名称检索载体。
+1. `reader_excerpt`—— 公开阅读器代理（r.jina.ai）渲染该源页面后的正文摘录，针对 JS 空壳页；
+2. `gnews_site_carrier` —— Google News `site:` 检索载体；
+3. `bing_news_carrier`  —— Bing 新闻 RSS `site:` 检索载体（与 Google 互为备份）；
+4. `gnews_name_carrier` —— Google News 按社区名称检索载体；
+5. `plan_rest`     —— 该源方案链里因步数上限/每源定额没轮到的剩余步骤（不重复已试过的步骤）。
+
+预算是**每源定额**（默认每源 6 次请求、时间按剩余源数均分）：前 4 套各花 1 次请求，
+所以任何一个源都一定能把通用备选试完，不会因为排在目录后面而被饿死。
+遵守 robots 时：被该站 robots 拒绝的源只走检索载体，阅读器代理按原站 URL 判定。
 
 口径与方案层完全一致，绝不放宽：
 - 条目必须命中财经主题词；带时间的条目必须落在时间窗内；链接必须是 http(s)；
@@ -27,7 +31,8 @@ import urllib.parse
 
 import community_plans as p
 
-RESCUE_REQUEST_BUDGET = int(os.environ.get('COMMUNITY_RESCUE_REQUESTS', '150'))
+RESCUE_REQUEST_BUDGET = int(os.environ.get('COMMUNITY_RESCUE_REQUESTS', '300'))
+RESCUE_SOURCE_REQUESTS = int(os.environ.get('COMMUNITY_RESCUE_SOURCE_REQUESTS', '6'))
 RESCUE_WALL_BUDGET = float(os.environ.get('COMMUNITY_RESCUE_BUDGET', '300'))
 RESCUE_TIMEOUT = float(os.environ.get('COMMUNITY_RESCUE_TIMEOUT', '8'))
 READER_BASE = os.environ.get('COMMUNITY_READER_BASE', 'https://r.jina.ai/').strip()
@@ -108,10 +113,12 @@ def generic_steps(comm):
     url = str(comm.get('url') or '').strip()
     steps = []
     if url.lower().startswith(('http://', 'https://')) and READER_BASE:
-        steps.append(p.step(
+        reader = p.step(
             p.STEP_HTML, (reader_url(url),), verified='needs_check', strategy=STRATEGY_READER,
             note='公开阅读器代理渲染后的页面正文，针对 JS 渲染空壳页',
-            scope='第三方阅读器代理渲染的公开页面摘录（未核验为评论），命中财经主题词方入库'))
+            scope='第三方阅读器代理渲染的公开页面摘录（未核验为评论），命中财经主题词方入库')
+        reader['via_proxy'] = True     # robots 按原站 URL 判定：代理是替我们去抓同一个页面
+        steps.append(reader)
     if target:
         steps.append(p.step(
             p.STEP_CARRIER, (f'gnews:site:{target}',), verified='carrier', lang=lang,
@@ -146,7 +153,8 @@ def _pending_plan_steps(comm, plan_attempt):
         if step_record.get('needs_config') and not p._config_present(step_record['needs_config']):
             continue
         # 未登记（方案层没跑/预算耗尽）或因步数上限没轮到 → 待试；其余状态说明已经试过。
-        if done.get(index, 'step_budget') in ('step_budget', 'skipped', 'budget_exhausted'):
+        if done.get(index, 'step_budget') in ('step_budget', 'skipped', 'budget_exhausted',
+                                              'source_budget'):
             pending.append(step_record)
     return pending
 
@@ -221,13 +229,14 @@ def _run_reader_step(step_record, urls, session, timeout, now, max_age_days, bud
     return [], 'no_valid_items', urls[0] if urls else ''
 
 
-def _run_step(step_record, comm, session, timeout, now, max_age_days, budget, tried):
-    urls = []
-    for endpoint in step_record['endpoints']:
-        urls.extend(p.expand_endpoint(endpoint, step_record.get('lang')))
-    urls = [u for u in urls if u and u not in tried]
+def _run_step(step_record, comm, session, timeout, now, max_age_days, budget, tried,
+              robots=None, site_denied=False):
+    urls = [u for u in p.step_urls(step_record) if u not in tried]
     if not urls:
         return [], 'already_tried', ''
+    urls, _blocked = p.robots_filter(step_record, urls, robots, site_denied, comm.get('url'))
+    if not urls:
+        return [], 'robots_disallowed', ''
     tried.update(urls)
     delay = budget.step_delay
     if step_record['strategy'] == STRATEGY_READER:
@@ -239,31 +248,44 @@ def _run_step(step_record, comm, session, timeout, now, max_age_days, budget, tr
     return runner(step_record, urls, session, timeout, now, max_age_days, budget, delay)
 
 
+def new_budget(step_delay=None):
+    return p.PlanBudget(requests=RESCUE_REQUEST_BUDGET, seconds=RESCUE_WALL_BUDGET,
+                        step_delay=step_delay, source_requests=RESCUE_SOURCE_REQUESTS)
+
+
 def rescue_source(comm, session, timeout=RESCUE_TIMEOUT, now=None, max_age_days=None,
-                  budget=None, plan_attempt=None, plan_rest=True):
+                  budget=None, plan_attempt=None, plan_rest=True, robots=None,
+                  site_denied=False):
     """对一个未获取源依次尝试全部备选方案，返回 {comments, attempt}（与 run_plan 同构）。"""
     import community_comments as cc
     now = cc._now_utc(now)
     max_age_days = cc.COMMENT_MAX_AGE_DAYS if max_age_days is None else max_age_days
-    budget = budget or p.PlanBudget(requests=RESCUE_REQUEST_BUDGET, seconds=RESCUE_WALL_BUDGET)
+    budget = budget or new_budget()
     attempt = {'strategy': 'rescue_chain', 'status': 'unavailable', 'matched_comments': 0,
                'rescue_steps': [], 'endpoint': ''}
     tried = {str(r.get('endpoint')) for r in (plan_attempt or {}).get('plan_steps') or ()
              if isinstance(r, dict) and r.get('endpoint')
-             and r.get('status') not in ('step_budget', 'skipped', 'budget_exhausted')}
-    chain = [('plan_rest', s) for s in _pending_plan_steps(comm, plan_attempt)] if plan_rest else []
-    chain += [('generic', s) for s in generic_steps(comm)]
+             and r.get('status') not in ('step_budget', 'skipped', 'budget_exhausted',
+                                         'source_budget')}
+    # 通用备选在前（每套只花 1 次请求，保证每个源都把它们试完），方案链剩余步骤在后
+    # （RSSHub 这类步骤一步要花好几次请求，用剩下的定额去补）。
+    chain = [('generic', s) for s in generic_steps(comm)]
+    if plan_rest:
+        chain += [('plan_rest', s) for s in _pending_plan_steps(comm, plan_attempt)]
     for origin, step_record in chain:
         record = {'origin': origin, 'kind': step_record['kind'],
                   'strategy': step_record['strategy'], 'verified': step_record['verified']}
         try:
             candidates, status, endpoint = _run_step(
-                step_record, comm, session, timeout, now, max_age_days, budget, tried)
+                step_record, comm, session, timeout, now, max_age_days, budget, tried,
+                robots=robots, site_denied=site_denied)
         except Exception as exc:  # 单步异常只影响这一步
             candidates, status, endpoint = [], f'error_{type(exc).__name__}', ''
+        if status == 'budget_exhausted' and not budget.exhausted:
+            status = 'source_budget'
         record.update({'status': status, 'endpoint': endpoint, 'candidates': len(candidates)})
         attempt['rescue_steps'].append(record)
-        if status == 'budget_exhausted':
+        if status in ('budget_exhausted', 'source_budget'):
             break
         if not candidates:
             continue
@@ -281,28 +303,33 @@ def rescue_source(comm, session, timeout=RESCUE_TIMEOUT, now=None, max_age_days=
 
 
 def run_rescue(communities, session, timeout=RESCUE_TIMEOUT, now=None, max_age_days=None,
-               budget=None, plan_attempts=None, verbose=False, plan_rest=True):
+               budget=None, plan_attempts=None, verbose=False, plan_rest=True, robots=None,
+               denied_keys=()):
     """逐源救援；返回 (outcomes, stats)。单源失败不影响其它源。"""
-    budget = budget or p.PlanBudget(requests=RESCUE_REQUEST_BUDGET, seconds=RESCUE_WALL_BUDGET)
+    budget = budget or new_budget()
     plan_attempts = plan_attempts or {}
+    denied_keys = set(denied_keys or ())
     outcomes = {}
-    for comm in communities:
+    todo = [c for c in communities if c.get('key')]
+    for position, comm in enumerate(todo):
         key = comm.get('key')
-        if not key:
-            continue
         if not budget.allow():
             outcomes[key] = {'comments': [], 'attempt': {
                 'strategy': 'rescue_chain', 'status': 'budget_exhausted',
                 'matched_comments': 0, 'rescue_steps': []}}
             continue
+        budget.begin_source(len(todo) - position)     # 每源定额：后面的源不会被前面的饿死
         try:
             outcome = rescue_source(comm, session, timeout=timeout, now=now,
                                     max_age_days=max_age_days, budget=budget,
-                                    plan_attempt=plan_attempts.get(key), plan_rest=plan_rest)
+                                    plan_attempt=plan_attempts.get(key), plan_rest=plan_rest,
+                                    robots=robots, site_denied=key in denied_keys)
         except Exception as exc:
             outcome = {'comments': [], 'attempt': {
                 'strategy': 'rescue_chain', 'status': f'error_{type(exc).__name__}',
                 'matched_comments': 0, 'rescue_steps': []}}
+        finally:
+            budget.end_source()
         outcomes[key] = outcome
         if verbose:
             attempt = outcome['attempt']
