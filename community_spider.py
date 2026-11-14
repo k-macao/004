@@ -447,7 +447,7 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
                         autothrottle: bool = True, max_blocked_retries: int = 2,
                         download_delay: float = 0.15, now=None, comment_strategies: bool = True,
                         plan_strategies: bool = True,
-                        post_limiter=None):
+                        post_limiter=None, rescue_strategies=None):
     """跑一轮社区抓取：返回 (结果字典, 统计字典)。
 
     结果字典形如 {key: {'snippet': ..., 'status': ..., 'adaptive': ..., 'selector': ...}}；
@@ -617,11 +617,61 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
             if verbose:
                 print(f'  ⚠️ 逐源方案链失败（{type(exc).__name__}），保留既有结果', file=sys.stderr)
 
+    # 多方案备选提取（community_rescue）：以上各层都没拿到内容的源，逐源再走一条备选链
+    # （方案链剩余步骤 → 阅读器代理 → Google/Bing 站点检索 → 名称检索）。只救「未获取」，
+    # 不覆盖任何已有证据；全部失败仍如实保持未获取。
+    rescue_stats = {'attempted_sources': 0, 'rescued_sources': 0, 'rescued_keys': [],
+                    'matched_comments': 0, 'requests_count': 0, 'attempts': {}}
+    # 未显式指定时跟随方案层开关：关掉方案层 = 回到原有行为，救援层也不偷偷补数据。
+    if rescue_strategies is None:
+        rescue_strategies = plan_strategies
+    if rescue_strategies:
+        try:
+            import community_rescue as rescue_mod
+            if rescue_mod.enabled():
+                targets = [c for c in communities
+                           if c.get('key') and not (spider.results.get(c.get('key')) or {}).get('ok')]
+                if targets:
+                    import community_plans as plans_mod
+                    outcomes, rescue_stats = rescue_mod.run_rescue(
+                        targets, session, timeout=min(timeout, rescue_mod.RESCUE_TIMEOUT), now=now,
+                        budget=plans_mod.PlanBudget(
+                            requests=rescue_mod.RESCUE_REQUEST_BUDGET,
+                            seconds=rescue_mod.RESCUE_WALL_BUDGET, step_delay=download_delay),
+                        plan_attempts=plan_stats.get('attempts') or {}, verbose=verbose,
+                        plan_rest=plan_strategies)
+                    for key, outcome in outcomes.items():
+                        item = spider.results.get(key)
+                        if item is None:
+                            continue
+                        item['rescue_attempt'] = outcome['attempt']
+                        comments = outcome['comments']
+                        if not comments or item.get('ok'):
+                            continue
+                        first = comments[0]
+                        item.update({
+                            'ok': True, 'http_ok': True,
+                            'status': first.get('http_status') or 0,
+                            'bytes': first.get('response_bytes') or 0,
+                            'url': first['url'], 'title': first['post_title'],
+                            'snippet': first['text'],
+                            'topic_hits': count_topic_hits(first['post_title'] + ' ' + first['text']),
+                            'selector': first['strategy'], 'adaptive': False, 'error': '',
+                            'content_kind': first['kind'], 'strategy': first['strategy'],
+                            'comments': comments,
+                            'matched_comments': outcome['attempt'].get('matched_comments', 0),
+                        })
+        except Exception as exc:  # 救援层是补强路径，任何异常都不得打断整轮采集
+            rescue_stats['error'] = type(exc).__name__
+            if verbose:
+                print(f'  ⚠️ 备选提取层失败（{type(exc).__name__}），保留既有结果', file=sys.stderr)
+
     stats = result.stats.to_dict()
     for field in ('requests_count', 'blocked_requests_count', 'robots_disallowed_count',
                   'failed_requests_count', 'response_bytes'):
         stats[field] = stats.get(field, 0) + comment_stats.get(field, 0)
-    stats['requests_count'] = stats.get('requests_count', 0) + plan_stats.get('requests_count', 0)
+    stats['requests_count'] = (stats.get('requests_count', 0) + plan_stats.get('requests_count', 0)
+                               + rescue_stats.get('requests_count', 0))
     for status, count in comment_stats.get('response_status_count', {}).items():
         status_counts = stats.setdefault('response_status_count', {})
         status_counts[status] = status_counts.get(status, 0) + count
@@ -630,6 +680,7 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     stats['requests_per_second'] = round(stats['requests_count'] / elapsed, 2) if elapsed else 0
     stats['comment_fetch'] = comment_stats
     stats['plan_fetch'] = plan_stats
+    stats['rescue_fetch'] = rescue_stats
     stats.update({
         'engine': sc.ENGINE_NAME,
         'backend': backend_name,

@@ -147,6 +147,30 @@ python3 -m unittest tests.test_community_plans                  # 47 项回归�
 `docs/community-49-plans.md` 与 `docs/community-49-routes.md` 都由代码生成，**禁止手改**；
 测试会断言文档与 `PLANS` 注册表逐字一致，改了方案忘了重新生成就会红。
 
+## 未获取源的多方案备选提取（救援层）
+
+RSS 优先、专用适配器/通用摘录、逐源方案链三层都没拿到内容的源，由 `community_rescue.py`
+**逐源再走一条备选链**，第一个产出合格证据的方案胜出，其余不再发请求：
+
+| 顺序 | 方案（`strategy`） | 做什么 | 核验状态 |
+|---|---|---|---|
+| 1 | 方案链剩余步骤（`origin=plan_rest`） | 该源 `PLANS` 里因 `PLAN_MAX_STEPS` 没轮到的步骤，已试过的不重复 | 同原步骤 |
+| 2 | `reader_excerpt` | 公开阅读器代理（`r.jina.ai`）渲染该源页面后的正文摘录，针对 JS 空壳页 | `needs_check` |
+| 3 | `gnews_site_carrier` | Google News `site:域名` 检索 | `carrier` |
+| 4 | `bing_news_carrier` | Bing 新闻 RSS `site:域名` 检索，与 Google 互为备份 | `carrier` |
+| 5 | `gnews_name_carrier` | Google News 按社区名称检索 | `carrier` |
+
+- 49 源每源至少 5 套可执行方案（`python3 community_rescue.py` 自检）。
+- 口径不放宽：条目须命中财经主题词、带时间的须在 7 天窗内、链接须为 http(s)；阅读器代理返回
+  风控/验证页或原样 HTML 时整页作废。备选方案取到的内容一律是 `page_excerpt`（未核验为评论），
+  检索载体是聚合检索结果，**不是站点原生内容，也不代表该社区立场**。
+- 只救「未获取」，不覆盖任何已有证据；全部失败仍是「未获取」，记录里写明试过几套
+  （`rescue_attempt.rescue_steps` 逐步列出方案、端点与状态）。
+- 独立预算：`COMMUNITY_RESCUE_REQUESTS`（默认 150 次请求）、`COMMUNITY_RESCUE_BUDGET`
+  （默认 300 秒）、`COMMUNITY_RESCUE_TIMEOUT`（单请求 8 秒）；`COMMUNITY_READER_BASE` 可换代理。
+- 开关：`COMMUNITY_RESCUE=0` 或 `community_data.py --no-rescue`；`--no-plans` 时救援层默认同时关闭。
+- 备选端点在本执行环境**未做在线实测**，逻辑由 `tests/test_community_rescue.py` 用模拟报文覆盖。
+
 ## 3. 四小时快照、帖子间隔与重新分析
 
 - `community_snapshot.py` 是常规入口：首次采集后，把 49 源结果分别写入各自的 SQLite 数据库
