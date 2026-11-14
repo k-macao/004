@@ -525,6 +525,7 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
         "comments": comments,
         "matched_comments": evidence.get('matched_comments', 0),
         "comment_attempt": evidence.get('comment_attempt') or {},
+        "rescue_attempt": evidence.get('rescue_attempt') or {},
         "fetch_date": fetch_date,
         "source": source,
     }
@@ -592,7 +593,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
                              verbose: bool = True, autothrottle: bool = True,
                              max_blocked_retries: int = 2, download_delay: float = 0.15,
                              comment_strategies: bool = True, plan_strategies: bool = True,
-                             post_limiter=None) -> dict:
+                             post_limiter=None, rescue_strategies=None) -> dict:
     """运行 49 源抓取并构建完整 community_data 数据集（实抓入库，失败诚实降级为 unavailable）。"""
     now = now or datetime.now(timezone.utc)
     if market is None:
@@ -643,7 +644,8 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         crawldir=crawldir, session=session, verbose=verbose, backend=backend,
         autothrottle=autothrottle, max_blocked_retries=max_blocked_retries,
         download_delay=download_delay, now=now, comment_strategies=comment_strategies,
-        plan_strategies=plan_strategies, post_limiter=post_limiter)
+        plan_strategies=plan_strategies, post_limiter=post_limiter,
+        rescue_strategies=rescue_strategies)
 
     live_snippets = [
         spider_mod.strip_noise((results.get(c["key"]) or {}).get("snippet") or "")[:300]
@@ -675,10 +677,15 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         else:
             checked = comm['key'] in checked_keys
             reason = format_unavailable_reason(hit) if checked else '调试限制未请求此源'
+            tried = len((hit.get('rescue_attempt') or {}).get('rescue_steps') or [])
+            if checked and tried:
+                reason += f'；另试 {tried} 套备选方案均未取到'
             failed.append(comm["name"])
             record = build_unavailable_record(
                 comm, fetch_date=fetch_date if checked else '', reason=reason, checked=checked)
             record['comment_attempt'] = hit.get('comment_attempt') or {}
+            if hit.get('rescue_attempt'):
+                record['rescue_attempt'] = hit['rescue_attempt']
             communities_out.append(record)
             if verbose:
                 print(f'  ⚠️ {comm["name"]: <18} 未获取（{reason}）—— 不编造热评', file=sys.stderr)
@@ -707,6 +714,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
             "严格真实口径：仅 source=live 的采样评论或公开页摘录参与多空计数",
             "评论按单站有限样本排序；PTT 为高推帖回复而非按回复点赞排序，普通页面摘录未核验为评论",
             "未抓到或风控拦截源一律标记 verdict_class=unavailable（未获取），不回填模板、不编造指标",
+            "未获取源逐源再试多套备选方案（方案链剩余步骤/阅读器代理/Google 与 Bing 检索载体），取到的一律按公开页摘录入库",
         ],
     }
 
@@ -781,6 +789,8 @@ def main():
     ap.add_argument('--no-comments', action='store_true', help='关闭多方案评论采样，仅保留公开页摘录')
     ap.add_argument('--no-plans', action='store_true',
                     help='关闭逐源独立抓取方案链（community_plans），仅保留 RSS 优先/适配器/通用摘录')
+    ap.add_argument('--no-rescue', action='store_true',
+                    help='关闭未获取源的多方案备选提取（community_rescue）')
     ap.add_argument('--demo', action='store_true', help='写入显式标注的本地演示数据（非实盘抓取）')
     ap.add_argument('--offline', action='store_true', help='断网降级：写出诚实「未获取」结构，不篡改旧日期')
     args = ap.parse_args()
@@ -801,7 +811,8 @@ def main():
         adaptive=not args.no_adaptive, storage_file=args.adaptive_db,
         obey_robots=args.robots, crawldir=args.crawl_dir or None,
         backend=args.backend, limit=args.limit, verbose=True,
-        comment_strategies=not args.no_comments, plan_strategies=not args.no_plans)
+        comment_strategies=not args.no_comments, plan_strategies=not args.no_plans,
+        rescue_strategies=False if args.no_rescue else None)
 
     with open(args.json, 'w', encoding='utf-8') as f:
         json.dump(out, f, ensure_ascii=False, indent=2)

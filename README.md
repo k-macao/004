@@ -51,6 +51,26 @@ python3 tools/wechat_push.py --push --scheduled   # ⑤ 推送完整报告到微
   定时推送对社区核验问题仅警告。
 - 本地联调可用 `python3 market_data.py --demo && python3 community_data.py --demo` 生成模拟行情+社区。
 
+## 🛟 未获取源多方案备选提取 + 🈶 英文内容中文备注
+
+- **多方案备选提取**：49 个社区源里当次没抓到内容的，由 `community_rescue.py` 逐源再试一条备选链
+  （方案链剩余步骤 → 阅读器代理渲染页 → Google News 站点检索 → Bing 新闻站点检索 → Google News
+  名称检索），每源至少 5 套方案。取到的内容按公开页摘录入库（未核验为评论，检索载体不代表该社区
+  立场）；全部失败仍标「未获取」，不编造。详见
+  [多方案社区评论抓取](docs/community-comment-strategies.md)。
+- **英文内容中文备注**：社区卡片、02 栏快讯标题、05 栏 RSS 标题里的英文内容，由 `zh_notes.py`
+  自动补一行中文备注，写入数据层 `zh_note` 字段，网页与微信只读取。方案依次为
+  DeepSeek 批量机翻（`DEEPSEEK_API_KEY`）→ MyMemory 公共接口 → 离线财经术语对照。
+  术语对照不是翻译，页面标「中文备注·术语」；机翻标「中文备注」。联网只在
+  `build_site.py` / `tools/wechat_push.py` 的 CLI 入口发生，默认仅 CI 联网（`ZH_NOTES_ONLINE=1|0`
+  可覆盖），本地默认只用离线术语表。
+
+```bash
+python3 community_rescue.py                              # 自检：49 源各有几套方案
+python3 zh_notes.py --offline --text "Fed signals rate cut"   # 单段文字试备注
+python3 -m unittest tests.test_community_rescue tests.test_zh_notes -v
+```
+
 ## 🌡️ 00 栏：每日 VIX 恐慌指数 (Daily VIX Fear Gauge)
 
 本栏放在网页与微信正文的最开头，每次构建直接读取 `market_data.json → quotes.VIX`，展示

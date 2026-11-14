@@ -60,6 +60,8 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
+import zh_notes
+
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_OUT = os.path.join(REPO_ROOT, 'rssfeeds_data.json')
 FIXTURE_DIR = os.path.join(REPO_ROOT, 'tests', 'fixtures')
@@ -2300,7 +2302,10 @@ def render_web(data):
                         if idx == 0 and raw_snip and not raw_snip.startswith('离线回放摘要') else '')
                 pub = (f' <span style="color:var(--muted);font-size:10.5px;">'
                        f'· {_esc(it.get("publisher"))}</span>' if it.get('publisher') else '')
-                lis.append(f'    <li>{date_html}{title_html}{pub}{snip}</li>')
+                zh_label, zh_note = zh_notes.note_of(it)
+                zh_html = (f'<span class="pub-meta zh-note" style="display:block;">'
+                           f'{_esc(zh_label)}：{_esc(zh_note)}</span>' if zh_note else '')
+                lis.append(f'    <li>{date_html}{title_html}{pub}{snip}{zh_html}</li>')
             body = (ai_line + '<ul class="pixel-list" style="margin:4px 0 0;">\n'
                     + '\n'.join(lis) + '\n  </ul>')
             rows.append(f'<article class="pub-card">{head}{body}</article>')

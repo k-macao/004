@@ -78,6 +78,7 @@ if REPO_ROOT not in sys.path:
 import sentiment_match as smatch                           # noqa: E402  采集→匹配→脱敏展示层
 import vix_daily                                           # noqa: E402  00 节「每日 VIX 恐慌指数」统一口径
 import panorama                                            # noqa: E402  01 节「每日全球全景扫描」推理引擎
+import zh_notes
 import macro_data as macro_data_mod                        # noqa: E402  02 节快讯可用性判定（兜底口径单一事实源）
 import community_data as community_mod                     # noqa: E402  03 节 49 源严格真实口径与离线降级目录
 import forecast as forecast_mod                            # noqa: E402  04 节「AI 预测 · 未来函数」推理引擎
@@ -419,6 +420,15 @@ def build_quant_html(quant):
     )
 
 
+def zh_note_html(obj, tag='div'):
+    """英文内容的中文备注行（数据层 zh_note 字段，纯读取）；没有备注返回空串。"""
+    label, note = zh_notes.note_of(obj)
+    if not note:
+        return ''
+    return (f'<{tag} class="pub-meta zh-note" style="display:block;">'
+            f'{_esc(label)}：{_esc(note)}</{tag}>')
+
+
 def community_evidence_html(c):
     """Render bounded comment samples with no hyperlink and no status/scope disclaimers."""
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
@@ -437,7 +447,7 @@ def community_evidence_html(c):
             head = f'【{title}】' if title else ''
             pub_lbl = str(item.get('published_label') or '').strip()
             meta_span = f' <span class="pub-meta">{_esc(pub_lbl)}</span>' if pub_lbl else ''
-            parts.append(f'    <li>{head}{text}{meta_span}</li>\n')
+            parts.append(f'    <li>{head}{text}{meta_span}{zh_note_html(item, "span")}</li>\n')
         parts.append('  </ul>\n')
     return ''.join(parts)
 
@@ -459,6 +469,8 @@ def build_community_html(communities, market=None):
         quant = c.get('quant')
 
         evidence_html = community_evidence_html(c)
+        note_html = zh_note_html(c)
+        quote_note = f'  {note_html}\n' if note_html else ''
         quant_html = build_quant_html(quant)
         verdict_block = (
             f'  <div class="pub-verdict"><strong>▶ 极性判读：</strong>{verdict}</div>\n'
@@ -469,6 +481,7 @@ def build_community_html(communities, market=None):
             f'<article class="pub-card" data-verdict="{_esc(vclass)}">\n'
             f'  <div class="pub-card-head"><span class="pub-name">{icon} {cid}. {name}</span><span class="pub-chip">{label}</span></div>\n'
             f'  <p class="pub-quote">{quote}</p>\n'
+            f'{quote_note}'
             f'{evidence_html}'
             f'{verdict_block}'
             f'{quant_line}'
@@ -537,6 +550,7 @@ def build_macro_html(macro_data, now=None, market=None):
             rows.append(
                 f'  <li>{d_html}{ttl}'
                 + (f' <span style="color:var(--muted);font-size:11px;">{snip}</span>' if snip else '')
+                + zh_note_html(it, 'span')
                 + '</li>'
             )
         parts.append(f'<div class="pub-sub" style="margin-top:10px;">◆ {_esc(label)}</div>')
@@ -1150,6 +1164,14 @@ def main():
         print('提示: 未找到 rssfeeds_data.json，05 节显示「今日未获取」；'
               '可先运行 python3 rss_feeds.py --mock 生成，'
               '或用 --rss-fetch / RSSFEEDS_AUTO_FETCH=1 开启构建期补抓', file=sys.stderr)
+
+    # 英文内容自动中文备注：联网机翻只在这个 CLI 入口发生（CI 默认开，ZH_NOTES_ONLINE 覆盖），
+    # 结果写回三份数据产物，后续 wechat_push 读到的是同一份备注；渲染函数只读 zh_note 字段。
+    # --check 不联网也不写文件；内存里的数据再离线补一遍（机翻结果走进程内缓存，不重复请求）。
+    if not args.check:
+        zh_notes.bootstrap({'community': args.community, 'macro': args.macro, 'rss': args.rss})
+    for kind, dataset in (('community', community_data), ('macro', macro_data), ('rss', rss_data)):
+        zh_notes.annotate_dataset(kind, dataset, online=False)
 
     tokens = build_tokens(data, now, community_data, sentiment_data, rss_data=rss_data)
 
