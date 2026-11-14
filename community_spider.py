@@ -39,6 +39,7 @@ import time
 from urllib.parse import urlparse
 
 import scrapling_core as sc
+import obscura_render
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_STORAGE = os.path.join(REPO_ROOT, '.scrapling', 'community_adaptive.db')
@@ -187,7 +188,7 @@ def real_scrapling_transport():
 
 def resolve_backend(backend: str = 'auto'):
     """返回 (后端名, transport 或 None)：'scrapling' = 真实包，'port' = 标准库移植层。"""
-    if backend == 'port':
+    if backend in ('port', 'obscura'):
         return 'port', None
     transport = real_scrapling_transport()
     if transport is not None:
@@ -287,7 +288,9 @@ class CommunitySpider(sc.Spider):
     fp_keep_fragments = False
 
     def __init__(self, communities, storage_file: str = DEFAULT_STORAGE, adaptive: bool = True,
-                 crawldir=None, interval: float = 300.0, session=None, verbose: bool = True):
+                 crawldir=None, interval: float = 300.0, session=None, verbose: bool = True,
+                 obscura_binary=None):
+        self.obscura_binary = obscura_binary
         self.communities = list(communities)
         self.start_urls = [c['url'] for c in self.communities]
         self.adaptive = adaptive
@@ -307,6 +310,19 @@ class CommunitySpider(sc.Spider):
     # ---- 解析：标题 → 候选规则 → 自适应回捞 → 关键词打分兜底 ----
     def parse(self, response):
         meta = response.request.meta if response.request else {}
+        rendered = False
+        # The HTTP status belongs to the preceding static request, not to the
+        # browser navigation. Never use this path for comments, APIs or robots.
+        if self.obscura_binary and response.ok:
+            try:
+                html = obscura_render.render(response.url, self.request_timeout, self.obscura_binary)
+                original = response
+                response = sc.Response(url=original.url, content=html, status=original.status,
+                                       reason=original.reason, encoding='utf-8')
+                response.request = original.request
+                rendered = True
+            except Exception:  # retain the verified static page on renderer failure
+                pass
         key = meta.get('key') or ''
         name = meta.get('name') or key
         rule = SITE_RULES.get(key, ())
@@ -385,7 +401,8 @@ class CommunitySpider(sc.Spider):
             'ok': valid_ok, 'topic_hits': topic_hits,
             'title': title, 'snippet': snippet if valid_ok else '', 'selector': used_selector if valid_ok else '',
             'adaptive': adaptive_hit and valid_ok, 'bytes': len(response.body or b''),
-            'content_kind': 'page_excerpt', 'strategy': 'scrapling_page',
+            'content_kind': 'page_excerpt', 'strategy': 'obscura_page' if rendered else 'scrapling_page',
+            'http_status_source': 'static_preflight' if rendered else 'response',
             'error': err_reason,
         }
         yield self.results[key]
@@ -437,7 +454,12 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     单源失败不会抛异常，只是该源没有 live 片段（由社区数据层诚实标注未获取）。
     """
     communities = list(communities) if communities else load_communities(limit)
+    binary = obscura_render.executable() if session is None and backend in ('auto', 'obscura') else None
     backend_name, transport = ('injected', None) if session is not None else resolve_backend(backend)
+    if binary:
+        backend_name = 'obscura+' + backend_name
+    elif backend == 'obscura' and session is None:
+        print('  ⚠️ 未安装 Obscura，保留静态采集', file=sys.stderr)
     if session is None:
         # Share one transport with the comment adapters so injected sessions,
         # timeouts and the selected backend apply to every HTTP request.
@@ -461,7 +483,8 @@ def fetch_live_snippets(communities=None, limit: int = 0, timeout: float = 10.0,
     spider_communities = [c for c in communities if c.get('key') not in rss_ok_keys]
 
     spider = CommunitySpider(spider_communities, storage_file=storage_file, adaptive=adaptive,
-                             crawldir=crawldir, session=session, verbose=verbose)
+                             crawldir=crawldir, session=session, verbose=verbose,
+                             obscura_binary=binary)
     spider.name = 'community'
     spider.request_timeout = timeout
     spider.request_retries = retries
@@ -677,8 +700,8 @@ def main():
     parser.add_argument('--adapt-db', default=DEFAULT_STORAGE, help='自适应指纹库路径')
     parser.add_argument('--robots', action='store_true', help='遵从 robots.txt')
     parser.add_argument('--crawl-dir', default='', help='开启断点续爬（保存 checkpoint 的目录）')
-    parser.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling'),
-                        help='传输层：auto=装了 scrapling 包就用它，否则用标准库移植层')
+    parser.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling', 'obscura'),
+                        help='auto=有 Obscura 时渲染公开页；obscura=优先渲染；port/scrapling=静态传输')
     parser.add_argument('--no-comments', action='store_true', help='只抓公开页摘录，关闭多方案评论采样')
     parser.add_argument('--self-test', action='store_true', help='离线自检（零联网）')
     args = parser.parse_args()

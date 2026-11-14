@@ -776,8 +776,8 @@ def main():
     ap.add_argument('--no-adaptive', action='store_true', help='关闭自适应指纹回捞')
     ap.add_argument('--robots', action='store_true', help='遵从 robots.txt（含 crawl-delay）')
     ap.add_argument('--crawl-dir', default='', help='开启断点续爬：checkpoint 落盘目录')
-    ap.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling'),
-                    help='传输层：auto=装了 scrapling 包就用真包，否则用标准库移植层')
+    ap.add_argument('--backend', default='auto', choices=('auto', 'port', 'scrapling', 'obscura'),
+                    help='auto=有 Obscura 时渲染公开页；obscura=优先渲染；port/scrapling=静态传输')
     ap.add_argument('--no-comments', action='store_true', help='关闭多方案评论采样，仅保留公开页摘录')
     ap.add_argument('--no-plans', action='store_true',
                     help='关闭逐源独立抓取方案链（community_plans），仅保留 RSS 优先/适配器/通用摘录')
