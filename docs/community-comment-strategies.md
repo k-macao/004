@@ -81,10 +81,25 @@ Discuss.com.hk 的采样请求经过项目爬虫的每域并发上限和退避�
 
 ### 执行与预算
 
-- 每源最多尝试 `PLAN_MAX_STEPS`（默认 3）个步骤；整轮请求预算 `PLAN_REQUEST_BUDGET`（默认 90）、
+- 每源最多尝试 `PLAN_MAX_STEPS`（默认 3）个步骤；整轮请求预算 `PLAN_REQUEST_BUDGET`（默认 400）、
   墙钟预算 `PLAN_WALL_BUDGET`（默认 420 秒），可用 `COMMUNITY_PLAN_MAX_STEPS` /
   `COMMUNITY_PLAN_REQUESTS` / `COMMUNITY_PLAN_BUDGET` / `COMMUNITY_PLAN_DELAY` 覆盖。
-  预算耗尽时该源记 `budget_exhausted`，**不是**「抓不到」，两者在诊断里分开。
+- **每源定额**：单个源最多 `PLAN_SOURCE_REQUESTS`（默认 8，`COMMUNITY_PLAN_SOURCE_REQUESTS`）次请求，
+  且不超过「剩余预算 ÷ 剩余源数」；墙钟同样按剩余源数均分，用不完的额度留给后面的源。
+  这样排在后面的源不会因为前面的源把预算花光而一步都轮不到。单源定额用完记 `source_budget`，
+  整轮预算耗尽记 `budget_exhausted`，两者都**不是**「抓不到」，在诊断里分开。
+- 一个步骤最多展开 `PLAN_STEP_URLS`（默认 4）个 URL；每条 RSSHub 路由只试最健康的
+  `RSSHUB_INSTANCES_PER_ROUTE`（默认 2，`COMMUNITY_RSSHUB_INSTANCES`）个实例。实例返回 403/429/5xx
+  或空内容记一次失败并在本轮内往后排，404（路由不存在）不算实例故障。
+- **robots**：开启 `obey_robots` 时，RSS 优先、方案链、备选层与基础爬虫共用同一个
+  `RobotsTxtManager`。检索载体步骤始终允许；目录页已被 robots 拒绝的源只能走检索载体
+  （不走 RSSHub、直连页面或阅读器代理）；其余直连 URL 逐条判定，阅读器代理按**原站 URL** 判定。
+  被拦下的步骤记 `robots_disallowed`。
+- **内容类型**：订阅源条目一律是 `feed_item`（订阅条目），不再标成热帖回复；
+  只有真实评论接口 / 回复采样才是 `comment` / `thread_reply`。
+- **外壳过滤**：页面摘录若被 `community_judge` 判为页面外壳（导航、登录提示、版权行）或过短片段，
+  不算拿到内容：采集时记 `shell_content` 并继续走后面的方案；渲染时这类条目不进卡片、不计入多空
+  （追加样本里有合格内容则顶替为卡片引文，否则该源按未取到处理）。只有标题的条目照常保留。
 - 步骤之间的间隔**沿用调用方的 `download_delay`**（默认 0.15 秒，`COMMUNITY_PLAN_DELAY` 可覆盖）。
   这一层发的是**源级列表/订阅请求**，与既有爬虫同一套礼貌口径；它与「帖详情读取至少间隔 10 秒」的
   帖子限速器不是同一口径（同上文「来源列表页…不受这一帖子间隔约束」），
@@ -154,12 +169,14 @@ RSS 优先、专用适配器/通用摘录、逐源方案链三层都没拿到内
 
 | 顺序 | 方案（`strategy`） | 做什么 | 核验状态 |
 |---|---|---|---|
-| 1 | 方案链剩余步骤（`origin=plan_rest`） | 该源 `PLANS` 里因 `PLAN_MAX_STEPS` 没轮到的步骤，已试过的不重复 | 同原步骤 |
-| 2 | `reader_excerpt` | 公开阅读器代理（`r.jina.ai`）渲染该源页面后的正文摘录，针对 JS 空壳页 | `needs_check` |
-| 3 | `gnews_site_carrier` | Google News `site:域名` 检索 | `carrier` |
-| 4 | `bing_news_carrier` | Bing 新闻 RSS `site:域名` 检索，与 Google 互为备份 | `carrier` |
-| 5 | `gnews_name_carrier` | Google News 按社区名称检索 | `carrier` |
+| 1 | `reader_excerpt` | 公开阅读器代理（`r.jina.ai`）渲染该源页面后的正文摘录，针对 JS 空壳页 | `needs_check` |
+| 2 | `gnews_site_carrier` | Google News `site:域名` 检索 | `carrier` |
+| 3 | `bing_news_carrier` | Bing 新闻 RSS `site:域名` 检索，与 Google 互为备份 | `carrier` |
+| 4 | `gnews_name_carrier` | Google News 按社区名称检索 | `carrier` |
+| 5 | 方案链剩余步骤（`origin=plan_rest`） | 该源 `PLANS` 里因 `PLAN_MAX_STEPS` 没轮到的步骤，已试过的不重复 | 同原步骤 |
 
+- 先走 4 套各 1 次请求的通用方案，再走可能很贵的方案链剩余步骤；备选层预算
+  `RESCUE_REQUEST_BUDGET`（默认 300）、每源 `RESCUE_SOURCE_REQUESTS`（默认 6），49 源全失败时每源也都能把 4 套通用方案试完。
 - 49 源每源至少 5 套可执行方案（`python3 community_rescue.py` 自检）。
 - 口径不放宽：条目须命中财经主题词、带时间的须在 7 天窗内、链接须为 http(s)；阅读器代理返回
   风控/验证页或原样 HTML 时整页作废。备选方案取到的内容一律是 `page_excerpt`（未核验为评论），

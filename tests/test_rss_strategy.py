@@ -127,7 +127,8 @@ class TestRssFeedFetch(unittest.TestCase):
         self.assertEqual(result['attempt']['status'], 'ok')
         self.assertEqual(len(result['comments']), 2)
         self.assertEqual(result['comments'][0]['strategy'], 'rss_feed')
-        self.assertIn('非回复点赞', result['comments'][0]['metric']['label'])
+        self.assertIn('订阅条目', result['comments'][0]['metric']['label'])
+        self.assertEqual(result['comments'][0]['kind'], 'feed_item', 'RSS 条目不是回复')
 
     def test_rss_global_mapping_used_when_community_field_empty(self):
         comm = dict(cd.COMMUNITIES[cd.COMMUNITIES.index(next(c for c in cd.COMMUNITIES if c['key'] == 'REDDIT'))],
@@ -201,7 +202,7 @@ class TestRssInSpiderPipeline(unittest.TestCase):
         hit = results['PTT']
         self.assertTrue(hit['ok'])
         self.assertEqual(hit['strategy'], 'rss_feed')
-        self.assertEqual(hit['content_kind'], 'thread_reply')
+        self.assertEqual(hit['content_kind'], 'feed_item')
         self.assertEqual(calls, ['https://example.com/ptt.rss'])
         self.assertIn('南向资金', hit['snippet'])
 

@@ -32,6 +32,8 @@ import re
 import sys
 
 CONTENT_LABELS = {'body': '正文', 'headline': '标题', 'shell': '页面外壳', 'fragment': '过短片段'}
+# 不算内容的两类：不展示、不计入多空
+DROP_CONTENT = ('shell', 'fragment')
 SIGNAL_LABELS = {'signal': '有信号', 'weak': '弱信号', 'none': '无信号'}
 DIRECTION_LABELS = {'bull': '偏多', 'bear': '偏空', 'mixed': '多空分歧', 'neutral': '无方向'}
 
@@ -65,7 +67,8 @@ SLOGAN_TERMS = ('为您提供', '為您提供', '一站式', '专业的', '領�
 
 def _weight(text):
     """跨语种的「信息量」近似：一个 CJK 字算 1，一个拉丁词算 2。"""
-    return len(_CJK.findall(text)) + 2 * len(_WORD.findall(text))
+    return (len(_CJK.findall(text)) + 2 * len(_WORD.findall(text))
+            + 2 * len(re.findall(r'\d[\d,.]*', text)))
 
 
 def _has_sentence(text):
@@ -102,7 +105,10 @@ def judge_content(text, title='', kind='page_excerpt', strategy=''):
     shell_hits = [t for t in SHELL_TERMS if t in lowered]
     slogan_hits = [t for t in SLOGAN_TERMS if t in lowered]
 
-    if weight < (6 if kind in ('comment', 'thread_reply') else 10):
+    # 过短：6 字以下一律算；6–10 字只有提到市场对象的短标题才留下（按标题处理）。
+    import community_spider as spider
+    if weight < 6 or (weight < 10 and kind not in ('comment', 'thread_reply')
+                      and spider.count_topic_hits(text) <= 0):
         return 'fragment', [f'信息量过少（约 {weight} 字）']
     if _menu_like(text):
         return 'shell', ['多个短词被分隔符隔开，像导航/菜单']
@@ -122,9 +128,9 @@ def judge_content(text, title='', kind='page_excerpt', strategy=''):
         return 'body', ['成句的评论/回复原话']
     if kind == 'demo':
         return 'body', ['成句文本（演示样本）']
-    if weight < 24:
-        return 'fragment', [f'页面摘录过短（约 {weight} 字）']
-    return 'body', ['成句的页面段落']
+    if weight < 12:
+        return 'headline', [f'只有一句很短的话（约 {weight} 字），按标题处理']
+    return 'body', ['成句的订阅条目' if kind == 'feed_item' else '成句的页面段落']
 
 
 def judge_signal(text, content, ctype=''):
@@ -283,6 +289,78 @@ def judge_dataset(data):
     return summary
 
 
+def _hide(record, judge):
+    """整源没有任何可算内容：移出展示与多空计数，保留判定依据供核查。"""
+    record.update({
+        'available': False, 'verdict_class': 'unavailable', 'verdict_label': '未获取',
+        'verdict': '', 'quant': None,
+        'filtered': {'content': judge.get('content'), 'content_label': judge.get('content_label'),
+                     'reasons': list(judge.get('reasons') or [])},
+    })
+    record.pop('judge', None)
+
+
+def _promote(record, item, comments):
+    """卡片引文不算内容、但追加样本里有可用内容：把第一条可用样本提为引文。"""
+    text = str(item.get('text') or '').strip()
+    title = str(item.get('post_title') or '').strip()
+    kind = item.get('kind') or record.get('content_kind') or 'page_excerpt'
+    quote = (f'【{title[:80]}】{text}' if title and title not in text else text)
+    if item.get('text_truncated'):
+        quote += '…'
+    record.update({
+        'comments': comments, 'quote': quote, 'content_kind': kind,
+        'strategy': item.get('strategy') or record.get('strategy') or '',
+        'analysis_input': {'snippet': text[:300],
+                           'title': '' if kind in ('comment', 'thread_reply', 'feed_item') else title[:80]},
+        'promoted': True,
+    })
+    for key in ('zh_note', 'zh_note_by', 'zh_note_src'):
+        record.pop(key, None)
+        if key in item:
+            record[key] = item[key]
+
+
+def filter_dataset(data):
+    """把「页面外壳 / 过短片段」移出展示与多空计数（就地修改），返回过滤统计。
+
+    - 追加样本里的外壳/过短条目直接去掉；
+    - 卡片引文是外壳/过短：追加样本里有可用内容就把它提为引文，否则整源隐藏
+      （`available=False`、`verdict_class='unavailable'`，原判定存进 `filtered`）；
+    - 「标题」类内容（含新闻检索条目）保留，只由标签标明。
+    调用方需在此之后重算立场（引文可能换了），见 community_data.reanalyze_snapshot。
+    """
+    stats = {'hidden_sources': [], 'promoted_sources': [], 'dropped_items': 0}
+    if not isinstance(data, dict) or not isinstance(data.get('communities'), list):
+        return stats
+    for record in data['communities']:
+        if not isinstance(record, dict) or not record.get('available'):
+            continue
+        inputs = record.get('analysis_input')
+        if (record.get('source') == 'demo' or not isinstance(inputs, dict)
+                or not str(inputs.get('snippet') or '').strip()):
+            continue      # 演示数据与没有保存原文的旧格式记录：无法重判，原样保留
+        judge_record(record)
+        comments = [c for c in (record.get('comments') or []) if isinstance(c, dict)]
+        extras = [c for c in comments[1:]
+                  if (c.get('judge') or {}).get('content') not in DROP_CONTENT]
+        dropped = len(comments[1:]) - len(extras)
+        key = record.get('key') or record.get('name') or ''
+        if record['judge']['content'] not in DROP_CONTENT:
+            if dropped:
+                record['comments'] = comments[:1] + extras
+                stats['dropped_items'] += dropped
+            continue
+        stats['dropped_items'] += dropped + 1
+        if extras:
+            _promote(record, extras[0], extras)
+            stats['promoted_sources'].append(key)
+        else:
+            _hide(record, record['judge'])
+            stats['hidden_sources'].append(key)
+    return stats
+
+
 def rows(data):
     """逐条判定的平铺表（供 CLI / Markdown 导出）。"""
     out = []
@@ -359,7 +437,8 @@ def main(argv=None):
     ap.add_argument('--md', help='另存 Markdown 判定表')
     ap.add_argument('--write', action='store_true', help='把判定写回 JSON 文件')
     ap.add_argument('--text', help='只判定这一段文字')
-    ap.add_argument('--kind', default='page_excerpt', choices=('comment', 'thread_reply', 'page_excerpt'))
+    ap.add_argument('--kind', default='page_excerpt',
+                    choices=('comment', 'thread_reply', 'feed_item', 'page_excerpt'))
     args = ap.parse_args(argv)
     if args.text:
         print(json.dumps(judge_item(args.text, kind=args.kind), ensure_ascii=False, indent=2))

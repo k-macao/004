@@ -891,10 +891,10 @@ def fetch_rss_feed(comm, session, timeout=10, now=None, max_age_days=COMMENT_MAX
             'published_label': entry['published_label'],
             'http_status': status,
             'response_bytes': len(body or b''),
-            'kind': 'thread_reply',
+            'kind': 'feed_item',     # 订阅条目（帖子/文章标题 + 摘要），不是回复
             'strategy': 'rss_feed',
             'metric': {'type': 'rss_item', 'value': 0,
-                       'label': 'RSS 订阅条目（非回复点赞）'},
+                       'label': 'RSS 订阅条目（无站内热度指标）'},
             'scope': 'RSS 订阅源最新条目，命中财经主题词方入库，不代表全站排行',
             '_rank': 0, '_order': index,
         })
