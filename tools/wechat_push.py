@@ -63,6 +63,7 @@ import sentiment_match as smatch                          # noqa: E402  采集�
 import vix_daily                                          # noqa: E402  00 栏「每日 VIX 恐慌指数」统一口径
 import panorama                                           # noqa: E402  01 栏「每日全球全景扫描」推理引擎
 import macro_data as macro_data_mod                       # noqa: E402  02 栏快讯可用性判定（兜底口径单一事实源）
+import community_judge                                    # noqa: E402  逐条判定标签（渲染只读 judge 字段）
 import zh_notes                                           # noqa: E402  英文内容中文备注（渲染只读 zh_note 字段）
 import community_data as community_mod                    # noqa: E402  49 大社区兜底数据集（缺 community_data.json 时同构生成）
 import community_snapshot as community_snapshot_mod        # noqa: E402  四小时快照时效
@@ -325,6 +326,15 @@ def zh_note_wechat(obj, limit=140):
             f'{_esc_w(label)}：{_esc_w(_clip_text(note, limit))}</div>')
 
 
+def judge_tag_wechat(obj):
+    """逐条判定短标签（正文/标题/页面外壳 · 有无信号），读数据层 judge 字段。"""
+    text = community_judge.tag((obj or {}).get('judge'))
+    if not text:
+        return ''
+    return (f'<div style="color:{WECHAT_MUTED};font-size:10.5px;line-height:1.7">'
+            f'◇ {_esc_w(text)}</div>')
+
+
 def community_evidence_wechat(c, level='full'):
     """Compact, escaped provenance with no hyperlink and no status/scope disclaimers."""
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
@@ -347,6 +357,7 @@ def community_evidence_wechat(c, level='full'):
             result += (f'<div style="font-size:10.5px;line-height:1.7">· {head}{_esc_w(text)}'
                        f'{meta_html}</div>')
             result += zh_note_wechat(item, 100)
+            result += judge_tag_wechat(item)
     return result
 
 
@@ -392,7 +403,7 @@ def community_card(c, level='full', quotes=None):
             if raw_verdict else ''
         )
         body = (f'<div style="margin-top:6px;line-height:1.8">{_esc_w(_clip_text(raw_quote, 240))}</div>'
-                f'{zh_note_wechat(c, 120)}{v_box}')
+                f'{zh_note_wechat(c, 120)}{judge_tag_wechat(c)}{v_box}')
     else:  # full
         v_box = (
             f'<div style="background:{WECHAT_PANEL_SOFT};border:1px solid #24314b;border-left:3px solid {signal};'
@@ -401,7 +412,7 @@ def community_card(c, level='full', quotes=None):
             if raw_verdict else ''
         )
         body = (f'<div style="margin-top:6px;line-height:1.8">{_esc_w(raw_quote)}</div>'
-                f'{zh_note_wechat(c, 220)}{v_box}')
+                f'{zh_note_wechat(c, 220)}{judge_tag_wechat(c)}{v_box}')
 
     quant_html = quant_html_inline(quant) if level == 'full' else (
         quant_metrics_line(quant) if level in ('standard', 'compact_plus') else '')
@@ -697,6 +708,7 @@ def build_single_wechat_html(now=None):
             'quote': c.get('quote', ''),
             'zh_note': c.get('zh_note') or '',
             'zh_note_by': c.get('zh_note_by') or '',
+            'judge': c.get('judge') if is_avail else None,
             'verdict': c.get('verdict', '') if is_avail else '',
             'quant': c.get('quant') if is_avail else None,
             'meta': meta,

@@ -79,6 +79,7 @@ import sentiment_match as smatch                           # noqa: E402  采集�
 import vix_daily                                           # noqa: E402  00 节「每日 VIX 恐慌指数」统一口径
 import panorama                                            # noqa: E402  01 节「每日全球全景扫描」推理引擎
 import zh_notes
+import community_judge
 import macro_data as macro_data_mod                        # noqa: E402  02 节快讯可用性判定（兜底口径单一事实源）
 import community_data as community_mod                     # noqa: E402  03 节 49 源严格真实口径与离线降级目录
 import forecast as forecast_mod                            # noqa: E402  04 节「AI 预测 · 未来函数」推理引擎
@@ -429,6 +430,14 @@ def zh_note_html(obj, tag='div'):
             f'{_esc(label)}：{_esc(note)}</{tag}>')
 
 
+def judge_tag_html(obj, tag='div'):
+    """逐条判定短标签（正文/标题/页面外壳 · 有无信号），读数据层 judge 字段；没有返回空串。"""
+    text = community_judge.tag((obj or {}).get('judge'))
+    if not text:
+        return ''
+    return f'<{tag} class="pub-meta judge-tag" style="display:block;">◇ {_esc(text)}</{tag}>'
+
+
 def community_evidence_html(c):
     """Render bounded comment samples with no hyperlink and no status/scope disclaimers."""
     comments = [x for x in (c.get('comments') or []) if isinstance(x, dict)][:3]
@@ -447,7 +456,7 @@ def community_evidence_html(c):
             head = f'【{title}】' if title else ''
             pub_lbl = str(item.get('published_label') or '').strip()
             meta_span = f' <span class="pub-meta">{_esc(pub_lbl)}</span>' if pub_lbl else ''
-            parts.append(f'    <li>{head}{text}{meta_span}{zh_note_html(item, "span")}</li>\n')
+            parts.append(f'    <li>{head}{text}{meta_span}{zh_note_html(item, "span")}{judge_tag_html(item, "span")}</li>\n')
         parts.append('  </ul>\n')
     return ''.join(parts)
 
@@ -471,6 +480,9 @@ def build_community_html(communities, market=None):
         evidence_html = community_evidence_html(c)
         note_html = zh_note_html(c)
         quote_note = f'  {note_html}\n' if note_html else ''
+        judge_html = judge_tag_html(c)
+        if judge_html:
+            quote_note += f'  {judge_html}\n'
         quant_html = build_quant_html(quant)
         verdict_block = (
             f'  <div class="pub-verdict"><strong>▶ 极性判读：</strong>{verdict}</div>\n'
@@ -1099,6 +1111,13 @@ def main():
 
     now = datetime.now(timezone.utc)
     community_data = community_mod.reanalyze_snapshot(community_data, now=now)
+    _js = (community_data or {}).get('judge_summary') if isinstance(community_data, dict) else None
+    if _js and _js.get('items'):
+        print(f'  ◇ 社区内容逐条判定：{_js["items"]} 条 —— 正文 {_js["content"]["body"]} / 标题 '
+              f'{_js["content"]["headline"]} / 页面外壳 {_js["content"]["shell"]} / 过短 '
+              f'{_js["content"]["fragment"]}；有信号 {_js["signal"]["signal"]} / 弱信号 '
+              f'{_js["signal"]["weak"]} / 无信号 {_js["signal"]["none"]}；正文且有信号覆盖 '
+              f'{_js["usable_sources"]} 源')
 
     # 02 节快讯产物：缺失 / 写坏 / 旧快照时**就地补抓一次**（构建期兜底）。
     # 线上 workflow 至今没有 macro_data.py 这一步（补丁待有 workflows 权限的账号应用），
