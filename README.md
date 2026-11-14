@@ -888,3 +888,22 @@ Secrets（仓库 Settings → Secrets and variables → Actions）：
   4. `.github/workflows/m.yml` 增加 `community_data.py` 步骤，CI 每次自动抓取 14 社区。
   5. `report.html` 模板增加注入标记，保留 `{{CD_xx}}` 占位符兼容旧逻辑。
 - **验证**：`python3 market_data.py --demo && python3 community_data.py --demo && python3 build_site.py` 后，`report.html` 中 14 个社区正文均为“8 月 30 日”当天，`最新读取 2026-08-30`，微信推送同理。
+
+### Obscura 公开页渲染（社区舆情）
+
+安装 [Obscura](https://github.com/h4ckf0r0day/obscura) 后，`community_data.py` 和
+`community_spider.py` 的 `--backend auto` 会在静态请求成功后优先用 Obscura 渲染
+社区公开页，再按现有规则抽取；也可使用 `--backend obscura`，或用 `OBSCURA_BIN`
+指定可执行文件。`--backend port` / `scrapling` 不使用浏览器。浏览器缺失、超时、
+输出无效或最终 URL 不同则回退静态页。示例：
+
+```bash
+python3 community_data.py --backend obscura --limit 5 --timeout 10
+python3 -m unittest discover -s tests -p 'test_obscura_render.py'
+```
+
+这不是全量迁移：RSS、新闻/量化 API、社区评论适配器及专项方案仍使用原有方式；
+Obscura CLI 的渲染结果不提供可供本链路核验的 HTTP 状态和重定向信息，因此页面先
+执行静态请求，状态注明来自 `static_preflight`，无法救回静态请求被拦的页面。普通
+页面摘录仍不等于评论。执行页面 JS 会带来额外请求与资源开销；请遵守站点政策并按
+需启用 robots、限速和进程隔离。此处未开启 stealth，也未对本项目验证内存或速度收益。
