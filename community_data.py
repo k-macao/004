@@ -501,7 +501,7 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
             meta = (f"公开页实抓摘录（{len(clean_snip)} 字{adapt_note} · 未核验为评论）"
                     f"· {ctype} · 抓取核验 {fetch_date}")
 
-    return {
+    record = {
         "id": comm["id"],
         "key": comm["key"],
         "name": comm["name"],
@@ -529,6 +529,10 @@ def build_live_record(comm: dict, snippet: str, fetch_date: str, title: str = ''
         "fetch_date": fetch_date,
         "source": source,
     }
+    # 逐条判定「是否正文 / 是否有信号」（确定性规则，写进记录与每条追加样本）。
+    import community_judge
+    community_judge.judge_record(record)
+    return record
 
 
 def reanalyze_snapshot(data, now=None):
@@ -561,6 +565,9 @@ def reanalyze_snapshot(data, now=None):
                                         peer_snippets=peers, content_kind=kind)
         record.update(analysis)
         reanalyzed += 1
+    # 旧快照没有逐条判定，或规则更新后需要重判：每次渲染前按保存的原文重算（不联网）。
+    import community_judge
+    community_judge.judge_dataset(result)
     result['counts'] = count_verdicts([r for r in records if isinstance(r, dict)])
     result['analysis_stats'] = {'reanalyzed': reanalyzed, 'legacy_retained': legacy}
     if reanalyzed:
@@ -690,6 +697,8 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
             if verbose:
                 print(f'  ⚠️ {comm["name"]: <18} 未获取（{reason}）—— 不编造热评', file=sys.stderr)
 
+    import community_judge
+    judge_summary = community_judge.judge_dataset({'communities': communities_out})
     counts = count_verdicts(communities_out)
     return {
         "generated_at": now.strftime('%Y-%m-%d %H:%M:%S UTC'),
@@ -699,6 +708,7 @@ def generate_all_communities(market=None, demo_mode: bool = False, now=None,
         "hsi_snapshot": hsi,
         "communities": communities_out,
         "counts": counts,
+        "judge_summary": judge_summary,
         "summary": {
             "ok": ok_count,
             "live_ok": ok_count,
