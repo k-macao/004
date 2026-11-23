@@ -19,6 +19,9 @@
     预测区间 / 点位区间 / 置信度 / 驱动拆解）与明日盘面倾向；目标日严格晚于行情基准日，
     预测先落盘 forecast_history.json、等目标日行情到位才结算命中率，绝不用当次行情给当次预测打分；
     行情缺席时降级为「今日未获取 —— 本栏不预测」，不回填上一版预测。
+  • 06 栏方程式新闻 · 全球快讯: 由 eqn_news.py 在推送前读取当次产物（MCP
+    https://api.eqn.news/public/mcp 与 REST /v1/news 同一份报文），按剩余字符预算在
+    「完整版 → 标准版 → 缩略版」里选一档；缺产物时整栏留空，不回填历史标题。
   • 全板块 AI 深度详尽分析: 宏观、利率、港股资金流、49 大社区论坛逐一展开长文深度战术研判。
   • 电竞指挥中心 × 战术 HUD 风格：深海军蓝底 + 冷白正文，电光青 / 荧光绿 / 战术紫 / 警戒红分层强调；
     多空卡片按信号着色，所有样式均内联以适配 PushPlus / 微信阅读。
@@ -70,6 +73,7 @@ import community_snapshot as community_snapshot_mod        # noqa: E402  四小�
 import char_charts                                        # noqa: E402  推送字符配图（matplotlib 图种的字符版）
 import forecast as forecast_mod                           # noqa: E402  04 栏「AI 预测 · 未来函数」推理引擎
 import rss_feeds as rss_mod                               # noqa: E402  05 栏「49 大财经 RSS 情报源」目录/抓取/兜底
+import eqn_news as eqn_mod                                # noqa: E402  06 栏「方程式新闻」快讯（MCP/REST 同一份产物）
 
 try:
     # 单一事实源：是否对外展示「量化平台现成舆情/新闻因子接入评测（9 阶段实测）」区块
@@ -215,6 +219,43 @@ def bootstrap_rss_feeds(allow_fetch=None):
     return res
 
 
+def eqn_path():
+    """06 栏方程式快讯产物路径（环境变量 EQN_DATA 可覆盖）。"""
+    return os.environ.get('EQN_DATA', os.path.join(REPO_ROOT, 'eqn_news_data.json'))
+
+
+def bootstrap_eqn(allow_fetch=None):
+    """**只在 CLI 入口调用**：产物缺失/写坏/旧快照时就地补抓一次（与 02 / 05 栏同一策略）。
+
+    联网是入口的副作用，不能藏在渲染函数里，否则 CI 里单元测试会真的联网。
+    """
+    res = eqn_mod.ensure(eqn_path(), allow_fetch=allow_fetch)
+    if res['action'] == 'fetched':
+        print(f'  🔄 微信推送：构建期补抓方程式快讯 {res["items"]} 条 '
+              f'（{res["elapsed_ms"]} ms）→ {res["path"]}', file=sys.stderr)
+    elif res['action'] == 'refetch_unavailable':
+        print(f'  ⚠️ 微信推送：方程式快讯补抓后仍无可用条目（{res["reason"]}）', file=sys.stderr)
+    return res
+
+
+def load_eqn():
+    """读取 eqn_news_data.json（06 栏方程式快讯）。**纯读取，绝不联网**。
+
+    缺失/写坏/旧快照一律返回 {}，06 栏留空 —— 不回填历史标题（与 02 / 05 栏同一口径）。
+    """
+    data = eqn_mod.load_json(eqn_path())
+    avail = eqn_mod.availability(data)
+    if not avail['ok']:
+        if avail['reason'] == 'no_file':
+            print('  ⚠️ 微信推送：未找到 eqn_news_data.json → 06 栏留空',
+                  file=sys.stderr)
+        else:
+            print(f'  ⚠️ 微信推送：方程式快讯不可用（{avail["reason"]}）→ 06 栏留空',
+                  file=sys.stderr)
+        return {}
+    return data
+
+
 def load_rss_feeds():
     """读取 rssfeeds_data.json（05 栏 49 大财经 RSS 情报源）。**纯读取，绝不联网**。
 
@@ -253,6 +294,25 @@ def fit_rss_block(html, rss_data):
     rendered = rss_mod.render_wechat(rss_data, level='compact')
     block = wechat_box(rendered) if rendered else ''
     return html.replace(RSS_SLOT, block, 1)
+
+
+def fit_eqn_block(html, eqn_data):
+    """把 06 栏按剩余字符预算放进微信单页（完整 → 标准 → 缩略）；无可用数据时留空。"""
+    if EQN_SLOT not in html:
+        return html
+    if not eqn_data or not eqn_mod.availability(eqn_data).get('ok'):
+        return html.replace(EQN_SLOT, '', 1)
+    budget = CONTENT_SAFE_LIMIT - (len(html) - len(EQN_SLOT)) - EQN_MARGIN
+    for level, label in (('full', '完整版'), ('standard', '标准版'), ('compact', '缩略版')):
+        rendered = eqn_mod.render_wechat(eqn_data, level=level)
+        block = wechat_box(rendered) if rendered else ''
+        if len(block) <= budget:
+            if level != 'full':
+                print(f'  ✂️ 微信推送 06 栏：剩余预算 {budget} 字符，本次采用「{label}」')
+            return html.replace(EQN_SLOT, block, 1)
+    rendered = eqn_mod.render_wechat(eqn_data, level='compact')
+    block = wechat_box(rendered) if rendered else ''
+    return html.replace(EQN_SLOT, block, 1)
 
 
 def _esc_w(t):
@@ -439,6 +499,8 @@ FORECAST_MARGIN = 1200
 # 05 栏（49 大财经 RSS 情报源）在正文里的占位槽：正文先留槽，量完其余部分再决定详略。
 RSS_SLOT = '<!--RSS-SLOT-->'
 RSS_MARGIN = 1200
+EQN_SLOT = '<!--EQN-SLOT-->'
+EQN_MARGIN = 800
 # PushPlus 使用全内联样式，配色和网页报告共享电竞 HUD 色板。
 WECHAT_BG = '#060811'
 WECHAT_PANEL = '#10172a'
@@ -489,7 +551,7 @@ def forecast_block_candidates(fc_data, neon=WECHAT_NEON, green=WECHAT_GREEN, ink
     return out
 
 
-def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0):
+def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0, eqn_min=0):
     """把可用社区卡片塞进微信单页的剩余预算里（完整 → 标准 → 精简 → 紧凑 → 名录）。"""
     if COMMUNITY_SLOT not in html:
         return html
@@ -499,7 +561,8 @@ def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0)
         try:
             candidates = forecast_block_candidates(fc_data)
             full_fc = next((len(b) for lbl, b in candidates if lbl == '完整版'), 0)
-            reserves = [full_fc + rss_min, min(len(b) for _lbl, b in candidates) + rss_min]
+            reserves = [full_fc + rss_min + eqn_min,
+                        min(len(b) for _lbl, b in candidates) + rss_min + eqn_min]
         except Exception:
             reserves = [0]
     levels = [('完整版', 'full'), ('标准版', 'standard'), ('精简版', 'compact_plus'),
@@ -517,11 +580,12 @@ def fit_community_block(html, communities, fc_data=None, quotes=None, rss_min=0)
 
 
 def fit_forecast_block(html, fc_data, neon=WECHAT_NEON, green=WECHAT_GREEN, ink=WECHAT_INK,
-                       rss_min=0):
+                       rss_min=0, eqn_min=0):
     """把 04 栏塞进微信单页剩余字符预算；无可用预测或超预算时不输出状态指引。"""
     if FORECAST_SLOT not in html:
         return html
-    budget = (CONTENT_SAFE_LIMIT - (len(html) - len(FORECAST_SLOT)) - FORECAST_MARGIN - rss_min)
+    budget = (CONTENT_SAFE_LIMIT - (len(html) - len(FORECAST_SLOT))
+              - FORECAST_MARGIN - rss_min - eqn_min)
     candidates = forecast_block_candidates(fc_data, neon=neon, green=green, ink=ink)
     for label, block in candidates:
         if len(block) <= budget:
@@ -560,6 +624,8 @@ def build_single_wechat_html(now=None):
     _xd = load_macro_data()
     # ---------- 动态 RSS 情报源注入 (rssfeeds_data.json) — 05 栏唯一文案来源 ----------
     _rss = load_rss_feeds()
+    # ---------- 动态方程式快讯注入 (eqn_news_data.json) — 06 栏唯一文案来源 ----------
+    _eqn = load_eqn()
     # 兜底保障（单一拦截点）：快讯不可用时把条目**就地清空**，而不是只在 02 栏渲染兜底文案。
     # 否则一份过期快照仍会从 07 栏结论、01 栏全景扫描的证据链里漏出去 —— 兜底必须是全栏一致的。
     _xd_avail = macro_data_mod.availability(_xd, now=now)
@@ -1013,6 +1079,9 @@ def build_single_wechat_html(now=None):
   {h('05 / 全球 49 大财经 RSS 情报源')}
   {RSS_SLOT}
 
+  {h('06 / 方程式新闻 · 全球快讯')}
+  {EQN_SLOT}
+
   {h('07 / 核心结论')}
   {verdict_section_body}
   <div style="background:#151e33;border:1px solid #2b3855;border-left:3px solid {WECHAT_DANGER};border-radius:4px;padding:10px 14px;margin-top:10px;font-size:12px;color:#c1cce4;line-height:1.8;">
@@ -1027,9 +1096,14 @@ def build_single_wechat_html(now=None):
 </div>'''
     _rss_compact = rss_mod.render_wechat(_rss, level='compact')
     _rss_min = len(wechat_box(_rss_compact)) if _rss_compact else 0
+    # 06 栏的「缩略版」是它在单页里的最小占位：社区 / 预测两栏做预算时先把它预留出来，
+    # 避免 49 源或 AI 预测把整页吃满后 06 栏被挤没了（与 05 栏的 rss_min 同一思路）。
+    _eqn_compact = eqn_mod.render_wechat(_eqn, level='compact')
+    _eqn_min = len(wechat_box(_eqn_compact)) if _eqn_compact else 0
     html = fit_community_block(html, communities, fc_data=_fc, quotes=_quotes,
-                               rss_min=_rss_min)
-    html = fit_forecast_block(html, _fc, rss_min=_rss_min)
+                               rss_min=_rss_min, eqn_min=_eqn_min)
+    html = fit_forecast_block(html, _fc, rss_min=_rss_min, eqn_min=_eqn_min)
+    html = fit_eqn_block(html, _eqn)
     html = fit_rss_block(html, _rss)
 
     return html.strip(), ts, ts_full
@@ -1240,12 +1314,15 @@ def main():
                     help='禁用构建期宏观快讯自动补抓（缺产物时 02 栏直接显示「今日未获取」）')
     ap.add_argument('--rss-no-fetch', action='store_true',
                     help='禁用构建期 RSS 情报源自动补抓（缺产物时 05 栏直接显示「今日未获取」）')
+    ap.add_argument('--eqn-no-fetch', action='store_true',
+                    help='禁用构建期方程式快讯自动补抓（缺产物时 06 栏留空）')
     args = ap.parse_args()
 
     # 构建期补抓只在 CLI 入口做（渲染函数保持纯读取，单测才不会被迫联网 —— 见
     # bootstrap_macro_data() 注释）。deploy/wechat/daily 三个 job 都从这里进来。
     bootstrap_macro_data(allow_fetch=False if args.macro_no_fetch else None)
     bootstrap_rss_feeds(allow_fetch=False if args.rss_no_fetch else None)
+    bootstrap_eqn(allow_fetch=False if args.eqn_no_fetch else None)
     # 英文内容中文备注：联网机翻只在 CLI 入口；build_site 已备注过的原文不会重复翻译。
     zh_notes.bootstrap({
         'community': os.environ.get('COMMUNITY_DATA', os.path.join(REPO_ROOT, 'community_data.json')),

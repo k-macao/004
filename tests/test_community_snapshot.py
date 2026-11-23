@@ -230,7 +230,9 @@ class TestRenderTimeAnalysis(unittest.TestCase):
             args = ['build_site.py', '--community', community_file, '--out', out,
                     '--data', os.path.join(tmp, 'market.json'), '--macro', os.path.join(tmp, 'macro.json'),
                     '--sentiment', os.path.join(tmp, 'sentiment.json'), '--macro-no-fetch',
-                    '--rss', rss_file, '--rss-no-fetch', '--forecast-no-history']
+                    '--rss', rss_file, '--rss-no-fetch',
+                    '--eqn', os.path.join(tmp, 'eqn.json'), '--eqn-no-fetch',
+                    '--forecast-no-history']
             # CI enables RSS bootstrap by default. This community-only test
             # must neither fetch feeds nor create a shared repository artifact.
             with (mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RSSFEEDS_AUTO_FETCH': '1'}),

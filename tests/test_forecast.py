@@ -391,6 +391,7 @@ class TestForecastRendering(unittest.TestCase):
                'RSSFEEDS_DATA': os.path.join(self._tmp.name, 'missing_rss.json'),
                'MACRO_AUTO_FETCH': '0',
                'RSSFEEDS_AUTO_FETCH': '0',
+               'EQN_AUTO_FETCH': '0',
                'FORECAST_HISTORY': self.hist}
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
@@ -413,7 +414,8 @@ class TestForecastRendering(unittest.TestCase):
         missing = os.path.join(self._tmp.name, 'missing.json')
         env = {k: missing for k in ('MARKET_DATA', 'MACRO_DATA', 'SENTIMENT_DATA',
                                     'COMMUNITY_DATA', 'RSSFEEDS_DATA')}
-        env.update({'FORECAST_HISTORY': self.hist, 'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0'})
+        env.update({'FORECAST_HISTORY': self.hist, 'MACRO_AUTO_FETCH': '0',
+                      'RSSFEEDS_AUTO_FETCH': '0', 'EQN_AUTO_FETCH': '0'})
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
@@ -497,6 +499,7 @@ class TestForecastRendering(unittest.TestCase):
             'RSSFEEDS_DATA': missing,
             'MACRO_AUTO_FETCH': '0',
             'RSSFEEDS_AUTO_FETCH': '0',
+            'EQN_AUTO_FETCH': '0',
         }
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)

@@ -55,6 +55,13 @@ AI 预测注入 (04 节):
   - 每条社区数据可携带 quant 字段，包含 sentiment/event/relevance/novelty
   - build_community_html 会在 AI 研判后追加 quant-metrics 区块
 
+方程式快讯注入 (06 节):
+  - 由 eqn_news.py 读取当次 eqn_news_data.json（MCP https://api.eqn.news/public/mcp
+    与 REST /v1/news 同一份产物），渲染最新快讯（含上游 AI 摘要）注入
+    模板 <!-- EQNNEWS --> 占位处（尾部哨兵保证幂等）；位置在 05 之后、07 之前
+  - 产物缺失/写坏/旧快照时由 CLI 入口的 eqn_news.ensure() 就地补抓；
+    抓不到则整栏留空，不回填历史标题
+
 用法:
   python3 market_data.py && python3 community_data.py && python3 macro_data.py && python3 build_site.py
                                                        # 常规构建（行情+社区+宏观快讯动态）
@@ -84,6 +91,7 @@ import macro_data as macro_data_mod                        # noqa: E402  02 节�
 import community_data as community_mod                     # noqa: E402  03 节 49 源严格真实口径与离线降级目录
 import forecast as forecast_mod                            # noqa: E402  04 节「AI 预测 · 未来函数」推理引擎
 import rss_feeds as rss_mod                                # noqa: E402  05 节「49 大财经 RSS 情报源」目录/抓取/兜底
+import eqn_news as eqn_mod                                 # noqa: E402  06 节「方程式新闻」快讯可用性判定与渲染
 
 try:
     # 单一事实源：是否对外展示「量化平台现成舆情/新闻因子接入评测（9 阶段实测）」区块
@@ -129,6 +137,12 @@ RSS_MARK = '<!-- RSSFEEDS -->'
 RSS_BEGIN = '<!-- RSSFEEDS:BEGIN -->'
 RSS_END = '<!-- RSSFEEDS:END -->'
 RSS_CLOSE = '<!-- /RSSFEEDS -->'
+
+# 06 节「方程式新闻 · 全球快讯」注入标记（05 之后、07 之前；同一套幂等写法）
+EQN_MARK = '<!-- EQNNEWS -->'
+EQN_BEGIN = '<!-- EQNNEWS:BEGIN -->'
+EQN_END = '<!-- EQNNEWS:END -->'
+EQN_CLOSE = '<!-- /EQNNEWS -->'
 VERDICT_BEGIN = '<!-- VERDICT:BEGIN -->'
 VERDICT_END = '<!-- VERDICT:END -->'
 
@@ -629,6 +643,40 @@ def inject_rss_feeds(template, rss_html):
     return template
 
 
+def build_eqn_html(eqn_data):
+    """06 节「方程式新闻 · 全球快讯」：只读当次 eqn_news_data.json，缺数据直接留空。
+
+    是否注入由 inject_eqn() 统一汇报（与 02 / 05 节同一套日志口径）。
+    """
+    return eqn_mod.render_web(eqn_data)
+
+
+def inject_eqn(template, eqn_html):
+    """把 06 节「方程式新闻」注入模板占位处（与 RSSFEEDS / MACROLIST 同一套幂等写法）。
+
+    主标记 `<!-- EQNNEWS -->`；兼容 `<!-- EQNNEWS:BEGIN/END -->` 成对标记；
+    注入时尾部留 `<!-- /EQNNEWS -->` 哨兵，重复构建原地替换而非追加。
+    """
+    block = f'{EQN_MARK}\n{eqn_html}\n{EQN_CLOSE}'
+    if EQN_BEGIN in template and EQN_END in template:
+        pattern = re.compile(re.escape(EQN_BEGIN) + r'.*?' + re.escape(EQN_END), re.S)
+        new_html, count = pattern.subn(lambda _m: block, template, count=1)
+        if count:
+            print('  📰 已动态注入 06 节方程式快讯（成对标记替换）')
+            return new_html
+    if EQN_MARK in template:
+        if EQN_CLOSE in template:
+            pattern = re.compile(re.escape(EQN_MARK) + r'.*?' + re.escape(EQN_CLOSE), re.S)
+            new_html, count = pattern.subn(lambda _m: block, template, count=1)
+            if count:
+                print('  📰 已动态注入 06 节方程式快讯（单标记替换）')
+                return new_html
+        print('  📰 已动态注入 06 节方程式快讯（单标记插入）')
+        return template.replace(EQN_MARK, block, 1)
+    print('  ⚠️ 未找到 EQNNEWS 标记，跳过 06 节方程式快讯注入', file=sys.stderr)
+    return template
+
+
 def build_vix_html(market_data):
     """00 节「每日 VIX 恐慌指数」：只读当次行情，统一解释口径与缺失降级。"""
     data = vix_daily.analyze(market_data)
@@ -1047,6 +1095,24 @@ def main():
                     help='强制开启构建期 RSS 情报源自动补抓（本地默认不联网，CI 默认开）')
     ap.add_argument('--rss-mock', action='store_true',
                     help='RSS 情报源补抓走离线回放 tests/fixtures（联调用）')
+    ap.add_argument('--eqn', default='eqn_news_data.json',
+                    help='方程式新闻快讯 JSON 路径（eqn_news.py 生成，06 节注入源）')
+    ap.add_argument('--eqn-channel', default=eqn_mod.DEFAULT_CHANNEL,
+                    help=f'方程式新闻频道 key（默认 {eqn_mod.DEFAULT_CHANNEL}；all=全部频道）')
+    ap.add_argument('--eqn-limit', type=int, default=eqn_mod.LIMIT_DEFAULT,
+                    help='方程式快讯单轮最多条数，构建期补抓时使用')
+    ap.add_argument('--eqn-days', type=int, default=eqn_mod.MAX_AGE_DAYS_DEFAULT,
+                    help='方程式快讯时效窗口（天），构建期补抓时使用')
+    ap.add_argument('--eqn-timeout', type=int, default=eqn_mod.AUTO_FETCH_TIMEOUT,
+                    help='方程式快讯构建期补抓的单请求超时秒数')
+    ap.add_argument('--eqn-via', choices=('rest', 'mcp'), default='rest',
+                    help='取数通道：rest（默认，官方推荐轮询）| mcp（Streamable HTTP 协议）')
+    ap.add_argument('--eqn-no-fetch', action='store_true',
+                    help='禁用构建期方程式快讯自动补抓（缺产物时 06 节留空）')
+    ap.add_argument('--eqn-fetch', action='store_true',
+                    help='强制开启构建期方程式快讯自动补抓（本地默认不联网，CI 默认开）')
+    ap.add_argument('--eqn-mock', action='store_true',
+                    help='方程式快讯补抓走离线回放 tests/fixtures（联调用）')
     ap.add_argument('--forecast-history', default=None,
                     help='AI 预测存档路径（默认 forecast_history.json；FORECAST_HISTORY 可覆盖）')
     ap.add_argument('--forecast-no-history', action='store_true',
@@ -1070,7 +1136,8 @@ def main():
             and VIX_BEGIN not in template and PANORAMA_MARK not in template
             and PANORAMA_BEGIN not in template and FORECAST_MARK not in template
             and FORECAST_BEGIN not in template and RSS_MARK not in template
-            and RSS_BEGIN not in template):
+            and RSS_BEGIN not in template and EQN_MARK not in template
+            and EQN_BEGIN not in template):
         print(f'错误: {args.template} 中没有 {{占位符}}，疑似已构建过的产物。\n'
               f'仓库中的 report.html 应保持模板版本；恢复: git checkout -- report.html',
               file=sys.stderr)
@@ -1184,6 +1251,43 @@ def main():
               '可先运行 python3 rss_feeds.py --mock 生成，'
               '或用 --rss-fetch / RSSFEEDS_AUTO_FETCH=1 开启构建期补抓', file=sys.stderr)
 
+    # 06 节方程式快讯产物：缺失 / 写坏 / 旧快照时就地补抓一次（与 02 / 05 节同一套兜底）。
+    # 补抓只在 CLI 入口（main）里做，渲染函数保持纯读取；--check 永不联网。
+    eqn_allow = False if (args.check or args.eqn_no_fetch) else (
+        True if args.eqn_fetch else None)
+    eqn_res = eqn_mod.ensure(
+        args.eqn, channel=args.eqn_channel, limit=args.eqn_limit,
+        max_age_days=args.eqn_days, timeout=args.eqn_timeout, mock=args.eqn_mock,
+        quiet=False, now=now, allow_fetch=eqn_allow, via=args.eqn_via)
+    eqn_data = eqn_res['data'] or {}
+    if not isinstance(eqn_data, dict):
+        print(f'警告: {args.eqn} 结构异常（{type(eqn_data).__name__}），'
+              '06 节走留空兜底', file=sys.stderr)
+        eqn_data = {}
+    if eqn_res['action'] == 'fetched':
+        print(f'  🔄 构建期补抓方程式快讯成功：{eqn_res["items"]} 条入库 '
+              f'（{eqn_res["elapsed_ms"]} ms）→ {args.eqn}')
+    elif eqn_res['action'] == 'refetch_unavailable':
+        print(f'  ⚠️ 构建期补抓方程式快讯：{eqn_res["elapsed_ms"]} ms 后仍无可用条目'
+              f'（{eqn_res["reason"]}）→ 06 节留空，不回填历史标题')
+    elif eqn_res['action'] == 'no_refetch':
+        print('  ℹ️ 方程式快讯当次已抓取过但窗口内 0 条，跳过重复补抓')
+    elif eqn_res['action'] == 'disabled':
+        print('提示: 未找到 eqn_news_data.json，06 节留空；'
+              '可先运行 python3 eqn_news.py --mock 生成，'
+              '或用 --eqn-fetch / EQN_AUTO_FETCH=1 开启构建期补抓', file=sys.stderr)
+
+    # 兜底保障（单一拦截点）：快讯不可用时把条目**就地清空**，
+    # 保证 06 节之外没有旧闻从任何路径漏出去 —— 兜底必须是全栏一致的。
+    eqn_avail = eqn_mod.availability(eqn_data, now=now)
+    if not eqn_avail['ok'] and (eqn_data or {}).get('items'):
+        eqn_data = dict(eqn_data)
+        eqn_data['items'] = []
+        eqn_data['summary'] = dict(eqn_data.get('summary') or {}, items=0, with_ai=0)
+        eqn_data['unavailable'] = eqn_avail
+        print(f'  🛟 方程式快讯判定为不可用（{eqn_avail["reason"]}），已清空条目：'
+              f'{eqn_avail["detail"]}')
+
     # 英文内容自动中文备注：联网机翻只在这个 CLI 入口发生（CI 默认开，ZH_NOTES_ONLINE 覆盖），
     # 结果写回三份数据产物，后续 wechat_push 读到的是同一份备注；渲染函数只读 zh_note 字段。
     # --check 不联网也不写文件；内存里的数据再离线补一遍（机翻结果走进程内缓存，不重复请求）。
@@ -1207,6 +1311,7 @@ def main():
         data, macro_data, sentiment_data, community_data, rss_data=rss_data, now=now))
     template = inject_macro_list(template, build_macro_html(macro_data, now=now, market=data))
     template = inject_rss_feeds(template, rss_mod.render_web(rss_data))
+    template = inject_eqn(template, build_eqn_html(eqn_data))
     template = inject_sentiment(template, build_sentiment_html(sentiment_data, market=data))
     template = inject_forecast(template, build_forecast_html(
         data, macro_data, sentiment_data, community_data, rss_data=rss_data, now=now,
@@ -1255,6 +1360,14 @@ def main():
     else:
         rss_status = f"未获取（{rss_avail['reason']}）—— 05 节走兜底，不回填历史标题"
     print(f"   RSS 情报源: {rss_status}")
+    eqn_avail2 = eqn_mod.availability(eqn_data, now=now)
+    if eqn_avail2['ok']:
+        eqn_summ = (eqn_data or {}).get('summary') or {}
+        eqn_status = (f"频道 {(eqn_data or {}).get('channel')} · "
+                      f"入库 {eqn_summ.get('items')} 条 · 含 AI {eqn_summ.get('with_ai')} 条")
+    else:
+        eqn_status = f"留空（{eqn_avail2['reason']}）—— 不回填历史标题"
+    print(f"   方程式快讯: {eqn_status}")
     print(f"   宏观快讯: {_macro_status(macro_data)}"
           + (f" · 入库 {macro_summ.get('kept_items')} 条" if macro_data else ''))
 

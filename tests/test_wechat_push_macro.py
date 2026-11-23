@@ -70,6 +70,7 @@ def _no_data_env(tmpdir):
         'MARKET_DATA': missing, 'COMMUNITY_DATA': missing, 'SENTIMENT_DATA': missing,
         'MACRO_DATA': missing, 'RSSFEEDS_DATA': missing, 'FORECAST_HISTORY': missing,
         'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0',
+        'EQN_AUTO_FETCH': '0',
     }
 
 
@@ -120,6 +121,7 @@ class TestMacroSection(unittest.TestCase):
             'FORECAST_HISTORY': paths['forecast_history.json'],
             'MACRO_AUTO_FETCH': '0',
             'RSSFEEDS_AUTO_FETCH': '0',
+            'EQN_AUTO_FETCH': '0',
             'SENTIMENT_SHOW_API_EVAL': '0',
         }
         html = _render(env, now=now)

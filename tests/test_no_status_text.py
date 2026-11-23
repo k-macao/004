@@ -174,6 +174,7 @@ class TestNoStatusText(unittest.TestCase):
              '--sentiment', sent_p,
              '--macro', macro_p, '--macro-no-fetch',
              '--rss', rss_p, '--rss-no-fetch',
+             '--eqn', os.path.join(self._tmp.name, 'missing-eqn.json'), '--eqn-no-fetch',
              '--forecast-no-history'],
             capture_output=True, text=True, timeout=180, cwd=self._tmp.name,
             env={k: v for k, v in os.environ.items()
@@ -234,6 +235,7 @@ class TestNoStatusText(unittest.TestCase):
              '--sentiment', missing,
              '--macro', missing, '--macro-no-fetch',
              '--rss', missing, '--rss-no-fetch',
+             '--eqn', missing, '--eqn-no-fetch',
              '--forecast-no-history'],
             capture_output=True, text=True, timeout=180, cwd=self._tmp.name)
         self.assertEqual(proc.returncode, 0, proc.stderr)

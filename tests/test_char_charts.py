@@ -84,13 +84,14 @@ class TestPushFigures(unittest.TestCase):
             'MARKET_DATA', 'COMMUNITY_DATA', 'SENTIMENT_DATA',
             'MACRO_DATA', 'RSSFEEDS_DATA', 'FORECAST_HISTORY',
         )
-        flag_keys = ('MACRO_AUTO_FETCH', 'RSSFEEDS_AUTO_FETCH')
+        flag_keys = ('MACRO_AUTO_FETCH', 'RSSFEEDS_AUTO_FETCH', 'EQN_AUTO_FETCH')
         for k in data_keys + flag_keys:
             saved[k] = os.environ.get(k)
         missing = os.path.join(REPO_ROOT, 'tests', 'fixtures', 'no-such-chart.json')
         os.environ.update({k: missing for k in data_keys})
         os.environ['MACRO_AUTO_FETCH'] = '0'
         os.environ['RSSFEEDS_AUTO_FETCH'] = '0'
+        os.environ['EQN_AUTO_FETCH'] = '0'
         if extra_env:
             os.environ.update(extra_env)
         try:

@@ -332,7 +332,8 @@ class TestPanoramaRendering(unittest.TestCase):
                'RSSFEEDS_DATA': missing,
                'FORECAST_HISTORY': missing,
                'MACRO_AUTO_FETCH': '0',
-               'RSSFEEDS_AUTO_FETCH': '0'}
+               'RSSFEEDS_AUTO_FETCH': '0',
+               'EQN_AUTO_FETCH': '0'}
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:
@@ -359,7 +360,8 @@ class TestPanoramaRendering(unittest.TestCase):
         missing = os.path.join(self._tmp.name, 'missing.json')
         env = {k: missing for k in ('MARKET_DATA', 'MACRO_DATA', 'SENTIMENT_DATA',
                                     'COMMUNITY_DATA', 'RSSFEEDS_DATA', 'FORECAST_HISTORY')}
-        env.update({'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0'})
+        env.update({'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0',
+                      'EQN_AUTO_FETCH': '0'})
         saved = {k: os.environ.get(k) for k in env}
         os.environ.update(env)
         try:

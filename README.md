@@ -22,7 +22,8 @@ python3 verify_quotes.py --json verify_report.json --text   # ①′ 全来源�
 python3 community_snapshot.py        # ② 到期采集49社区 → community_data.json；四小时内复用，多方案采样、失败标记未获取
 python3 macro_data.py                # ②′ 动态抓取宏观/财经快讯 → macro_data.json (网页 02 节 + 微信 02 栏正文；只保留 7 天内、发布日期可解析的条目)
 python3 rss_feeds.py                 # ②″ 抓取 49 大财经 RSS 情报源 → rssfeeds_data.json (每源最多 10 条；网页 05 节 + 微信 05 栏；只保留 14 天内条目)
-python3 build_site.py                # ③ 动态建站 → report.html (注入行情+社区+宏观快讯+RSS 情报源+日期/时间戳，49源动态注入；
+python3 eqn_news.py                  # ②‴ 抓取方程式新闻 EquationNews 快讯 → eqn_news_data.json (网页 06 节 + 微信 06 栏；默认频道 main，7 天窗口)
+python3 build_site.py                # ③ 动态建站 → report.html (注入行情+社区+宏观快讯+RSS 情报源+方程式快讯+日期/时间戳，49源动态注入；
                                      #    同时现算 04 栏 AI 预测(下一交易日) 并把预测写进 forecast_history.json —— 先存档后结算)
 python3 tools/wechat_push.py --embed # ④ 内嵌最新推送负载进 report.html
 python3 tools/wechat_push.py --push --scheduled   # ⑤ 推送完整报告到微信
@@ -469,6 +470,52 @@ python3 -m unittest tests.test_rss_feeds  # 回归（零联网）
 守住「分母是全量目录」「RSS 大面积失败必须压覆盖度与置信度」「01 与 04 口径一致」
 「RSS 缺失只扣它自己那一路的权重」「网页统计面板必须渲染」。
 
+## 📰 06 栏：方程式新闻 · 全球快讯 (EquationNews Intel Flash)
+
+在 05 栏之后新增的一栏，接入**方程式新闻**的公开快讯（<https://api.eqn.news/public/mcp>），
+把**秒级-分钟级**的消息流（交易所公告 / 加密重大行情 / 美股异动 / 宏观快讯）纳入日报，
+与 05 栏的小时级 RSS 形成时效互补。网页 06 节对应模板占位区 `<!-- EQNNEWS -->`
+（哨兵 `<!-- /EQNNEWS -->` 保证重复构建幂等），微信推送 06 栏由 `fit_eqn_block()` 按剩余预算选详略。
+
+**端点（公开、只读、免密钥）**
+
+| 通道 | 地址 | 用途 |
+|---|---|---|
+| MCP 连接器 | <https://api.eqn.news/public/mcp> | Streamable HTTP · 工具 `list_news` / `get_news`，供 Claude / Codex / Cursor 这类 AI 助手直连；本模块 `--via mcp` 也可走这条协议 |
+| REST 轮询 | <https://api.eqn.news/public/v1/news> | 官方口径「程序定时拉取请用 REST」：参数与返回字段和 MCP 完全一致，更快；**本模块默认走它** |
+| 频道表 | <https://api.eqn.news/public/v1/channels> | 15 个频道 key（`main` / `tradfi` / `binance` / `tfmoves` / `major` / `korea` / `elon` …） |
+| RSS | <https://api.eqn.news/public/rss> | 主频道中文订阅（最近 50 条） |
+
+- **默认频道 `main`**（`EQN_CHANNEL` 可改）；`--channel all` 抓全部频道，`--query` / `--coin` 走关键词 / 币种检索。
+  两条通道只是传输不同，归一化后的产物结构相同（条目含 `zh` / `en` / `coins` / `ai.summary` / `ai.overview`）。
+
+**口径（与 02 / 05 栏同一套反陈旧纪律）**
+
+- **只展示当次真实抓到的条目**：抓不到就整栏留空，**不回填历史标题**；缺产物时网页 06 节与微信 06 栏都直接不渲染。
+- **时效窗口**默认 7 天（`--days` 可收紧），超窗条目在数据层丢弃并计入 `stale_dropped`；
+  无日期条目保留但永远垫底、计数 `undated_kept`，不冒充最新。
+- **快照新鲜度**超过 1 天判 `stale_snapshot`；四态（`no_file` / `bad_type` / `no_items` / `stale_snapshot`）
+  由 `eqn_news.availability()` 单点判定，网页与微信共用。
+- **单频道失败不阻断**：06 栏留空，其余栏目照常。
+- **构建期自动补抓**：`build_site.py` 与 `tools/wechat_push.py` 的 **CLI 入口**先调 `eqn_news.ensure()`，
+  产物缺失/写坏/旧快照时就地抓一轮并落盘（`EQN_AUTO_FETCH=1|0`，默认只在 CI 里自动开；
+  `--eqn-fetch` / `--eqn-no-fetch` / `--eqn-mock` 显式覆盖，`--check` 永不联网）。
+  渲染函数（`render_web` / `render_wechat` / `load_json`）是**纯读取**，绝不联网。
+- **AI 内容**：条目自带的 `ai.summary` / `ai.overview` 是上游生成的，页面标注「AI 生成，仅供参考」；
+  没有 AI 内容的条目照常展示原文，不硬凑摘要。内容层同样**零外链**（隐藏链接口径与 05 节一致）。
+
+```bash
+python3 eqn_news.py                      # 抓取 → eqn_news_data.json（频道 main，7 天窗口）
+python3 eqn_news.py --channel tradfi --limit 20 --text
+python3 eqn_news.py --via mcp --mock      # 走 MCP 协议 / 离线回放
+python3 eqn_news.py --self-test           # 归一 / 时效 / 双通道 / 四态 / 渲染自检（不联网）
+python3 -m unittest tests.test_eqn_news   # 06 栏回归（24 项，零联网）
+```
+
+**预算**：微信单页 95,000 字符门禁不变。06 栏先在社区（03）与预测（04）两栏做预算时按「缩略版」**预留空间**
+（`eqn_min`），再由 `fit_eqn_block()` 在「完整版 → 标准版 → 缩略版」里选一档；
+05 栏仍在最后按剩余预算收敛，任何一档都不删条目、总长度不越线。
+
 ## 🗣️ 社区热评：多项目组合
 
 | 方案 | 覆盖 | 排序与限制 |
@@ -794,6 +841,8 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `tests/test_wechat_push_macro.py` | 宏观快讯渲染回归（推送 02 栏 + 网页 02 节，9 项）：必须渲染当次快讯且每条带日期；**四种不可用形态都要落到同一段「今日未获取」兜底文案**；过期快照不得从 01 / 07 栏漏出；网页 `MACROLIST` 注入幂等；正文/注入区禁止再出现 628.69 亿、8 月 12 日、25,440.17 等写死历史内容 |
 | `rss_feeds.py` | **49 大财经 RSS 情报源（05 栏）**：唯一事实源 —— 目录 49 条 / 六大板块 / 每条落成具体可请求端点（原生 RSS → RSSHub 路由 → Google News 检索载体，`verified` 标注核验状态）；抓取（**并发 8 路**、超时、逐端点回退、RSSHub 实例可换、每轮请求上限、`--budget` 软墙钟）、RSS2/Atom/RDF 解析、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`RSSFEEDS_AUTO_FETCH`）、**开头 AI 解盘层**（`analyze()` / `analysis_text()` / `render_analysis_web()` / `render_analysis_wechat()`：每源 10 条 → 一句话结论 + 三条主线 + 逐源人话，DeepSeek 优先 / 本地规则 `local-rules-v2` 回退）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染。`--catalog` / `--mock` / `--offline` / `--only` / `--budget` / `--text` / `--analysis` / `--limit` / `--self-test` |
 | `docs/rss-49-feeds.md` | **49 源目录与端点核对表**（`python3 rss_feeds.py --catalog-md docs/rss-49-feeds.md` 生成，禁止手改）：六大板块逐源列语种 / 主端点 / 回退端点 / 核验状态 / 口径说明；`tests/test_rss_feeds.py` 断言文档与 `CATALOG` 不漂移 |
+| `eqn_news.py` | **方程式新闻 EquationNews 全球快讯（06 栏）**：唯一事实源 —— MCP 连接器 `https://api.eqn.news/public/mcp`（AI 助手直连）与 REST 轮询 `https://api.eqn.news/public/v1/news`（默认，参数/字段一致）双通道取数；归一化（新→旧、无日期垫底、中文缺失回退英文）、时效过滤（超窗丢弃、无日期垫底不冒充最新）、`availability()` 四态判定、`ensure()` 构建期补抓（`EQN_AUTO_FETCH`）、网页 `render_web()` 与微信 `render_wechat(level)` 两端渲染；`--channel` / `--limit` / `--days` / `--query` / `--coin` / `--via rest\|mcp` / `--mock` / `--offline` / `--text` / `--self-test` |
+| `tests/test_eqn_news.py` | **06 栏回归（24 项，零联网）**：归一化与排序、AI 摘要/总览提取、超窗丢弃 + 无日期垫底、REST URL 拼装与上限收敛、MCP JSON-RPC 解包（桩件）、可用性四态、缺产物整栏留空且零链接零状态文案、微信三档收敛与 95,000 门禁、构建期补抓边界（CI 才开 / no_items 不重抓 / 失败不抛异常）、网页注入幂等且位于 05 之后 07 之前 |
 | `tests/test_rss_feeds.py` | **05 栏回归（79 项，零联网）**：目录就是那份 49 源清单（10-10-11-8-6-4、编号 1..49、无裸域名、必备源齐全）、三种报文解析与端点回退、超窗丢弃 + 无日期永不冒充最新、四种不可用形态统一兜底（缺产物/写坏/0 条/旧快照，且**不得出现任何历史标题**）、网页 `RSSFEEDS` 注入幂等且不串进 02 节、微信 05 栏预算降级（完整→标准→名录→缩略）**一源不删**且整页仍在 95,000 门禁内、渲染路径绝不联网、`build_site.py` 端到端补抓落盘、**开头 AI 解盘**（每源 10 条 / 确定性 / 证据只用真实条目且不同源 / 各档不丢结论 / 缺数据不硬编 / 无买卖字样） |
 | `community_data.py` | **社区数据层**：49 源经多方案评论采样与 Scrapling 公开页回退生成记录；失败标为未获取；`reanalyze_snapshot()` 根据已存文本重算，`offline_dataset()` 提供 49 源未获取兜底。 |
 | `community_snapshot.py` | **四小时采集快照**：到期采集、原子落盘，失败也限频；页面和推送共用快照，运行期文件不入库。 |
@@ -822,7 +871,7 @@ python3 build_site.py                            # ⑤ 建站时把「因子读�
 | `docs/forecast-ci-cache.patch` | **待人工应用的 workflow 补丁**（GitHub App 无 `workflows` 权限）：三个 job 各加一对 `actions/cache` restore/save 步骤持久化 `forecast_history.json`，打通 04 栏的命中率回看 |
 | `panorama.py` | **01 栏「每日全球全景扫描」推理引擎**：把当次的 `market_data.json` + `macro_data.json` + `sentiment_data.json` + `community_data.json` 合成为**推动股价的 5 大力量**（重点 / 次要 / 噪音 · 利好 / 利空 / 中性 · 0~100 力量分）、三大关注面小结（宏观事件 / 板块轮动 / 情绪变化）与**是否可以做多**的合成分结论，；纯标准库纯函数、不联网不落盘，构建期由 `build_site.py` 与 `tools/wechat_push.py` 直接调用（**因此无需改 CI workflow**）。`python3 panorama.py` 打印文本摘要、`--json` 导出结构化结果、`--self-test` 规则自检 |
 | `tests/test_panorama.py` | 01 栏回归（13 项，零联网）：5 大力量与栏目要素齐全、多/空/横盘三种行情结论必须不同、噪音不计入做多合成分、突发风险分下调做多结论、四路数据缺失时降级为「本栏不编故事」、网页 `PANORAMA` 注入幂等、旧栏目名与写死历史内容不得回归 |
-| `build_site.py` | **动态建站**：把 `report.html` 模板中的 `{{占位符}}` 替换为最新行情/抓取日期/时间戳（含 03 节社区口径 `{{COMMUNITY_TOTAL}}` / `{{COMMUNITY_TYPE_TOTAL}}` / `{{CF_*}}`：源数、类型数与多空家数现算，缺数据才退回模板 14 源口径），把 `panorama.py` 的全景扫描注入 01 节 `<!-- PANORAMA -->` 占位区（哨兵 `<!-- /PANORAMA -->` 保证幂等），把 `community_data.json` 的 49 条最新研判注入 `<!-- COMMUNITY_LIST -->` 标记，把 `macro_data.json` 的快讯注入 02 节 `<!-- MACROLIST -->` 占位区（缺数据→「今日未获取」，回填哨兵 `<!-- /MACROLIST -->` 保证幂等），并把「因子读数 + 标的匹配（不含来源）」注入 `<!-- SENTIMENT_LIST -->` 标记，并把 `forecast.py` 的下一交易日预测注入 04 节 `<!-- FORECAST -->` 占位区（哨兵 `<!-- /FORECAST -->` 保证幂等，同时把当次预测写进 `forecast_history.json`；`--forecast-no-history` / `--check` 不落盘） |
+| `build_site.py` | **动态建站**：把 `report.html` 模板中的 `{{占位符}}` 替换为最新行情/抓取日期/时间戳（含 03 节社区口径 `{{COMMUNITY_TOTAL}}` / `{{COMMUNITY_TYPE_TOTAL}}` / `{{CF_*}}`：源数、类型数与多空家数现算，缺数据才退回模板 14 源口径），把 `panorama.py` 的全景扫描注入 01 节 `<!-- PANORAMA -->` 占位区（哨兵 `<!-- /PANORAMA -->` 保证幂等），把 `community_data.json` 的 49 条最新研判注入 `<!-- COMMUNITY_LIST -->` 标记，把 `macro_data.json` 的快讯注入 02 节 `<!-- MACROLIST -->` 占位区（缺数据→「今日未获取」，回填哨兵 `<!-- /MACROLIST -->` 保证幂等），并把「因子读数 + 标的匹配（不含来源）」注入 `<!-- SENTIMENT_LIST -->` 标记，并把 `forecast.py` 的下一交易日预测注入 04 节 `<!-- FORECAST -->` 占位区（哨兵 `<!-- /FORECAST -->` 保证幂等，同时把当次预测写进 `forecast_history.json`；`--forecast-no-history` / `--check` 不落盘），并把 `eqn_news.py` 的方程式快讯注入 06 节 `<!-- EQNNEWS -->` 占位区（位于 05 之后、07 之前；缺数据→整栏留空，哨兵 `<!-- /EQNNEWS -->` 保证幂等） |
 | `report.html` | 报告**模板源文件**（**电竞指挥中心 × 战术 HUD** · 深色海军蓝底 + 霓虹青 / 能量绿 / 战术紫 / 洋红高亮 · 响应式战情卡片），内含"手动推送"按钮与 01 节 `<!-- PANORAMA -->`、`<!-- COMMUNITY_LIST:BEGIN/END -->`、02 节 `<!-- MACROLIST -->`、04 节 `<!-- FORECAST -->` 动态注入标记；仓库中始终保持模板版本，构建产物不提交（误提交构建产物时 `git checkout -- report.html` 恢复） |
 | `tools/wechat_push.py` | 微信推送工具：读取 `market_data.json` + `community_data.json` 双动态数据，转为微信兼容的**深色电竞 HUD 单页内联样式 HTML**，以深海军蓝 + 电光青 / 荧光绿 / 战术紫 / 警戒红呈现，经 PushPlus **一对一**专属推送（仅 Token 本人接收）；**03 栏由 `fit_community_block()` 为 49 源按剩余预算选详略**（完整版 → 标准版 → 精简版 → 紧凑版 → 名录版，每一档都保留全部源与「最新读取」标记）；04 栏由 `fit_forecast_block()` 在「完整版 → 精简版 → 一行摘要 → 只留指引」之间选一版；两者合计仍落在 95,000 推送门禁之内 |
 | `.github/workflows/m.yml` | CI：动态抓取行情+校验+社区+宏观快讯 → 动态建站（三注入） → 部署 Pages + 一键触发微信单页推送 + **每天北京时间 09:00 定时自动推送** |
