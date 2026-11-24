@@ -290,7 +290,8 @@ class TestWechatAndWebShareBootstrappedData(unittest.TestCase):
         missing = os.path.join(self._tmp.name, 'missing.json')
         guard = _EnvGuard({'MARKET_DATA': missing, 'COMMUNITY_DATA': missing,
                            'SENTIMENT_DATA': missing, 'RSSFEEDS_DATA': missing,
-                           'FORECAST_HISTORY': missing, 'RSSFEEDS_AUTO_FETCH': '0'})
+                           'FORECAST_HISTORY': missing, 'RSSFEEDS_AUTO_FETCH': '0',
+                           'EQN_AUTO_FETCH': '0'})
         guard.__enter__()
         self.addCleanup(guard.restore)
 
@@ -352,7 +353,8 @@ class TestBuildSiteEndToEnd(unittest.TestCase):
              '--sentiment', self.missing, '--macro', self.macro,
              '--rss', self.rss, '--rss-no-fetch', '--forecast-no-history', *extra],
             capture_output=True, text=True, timeout=180,
-            env=dict(os.environ, GITHUB_ACTIONS='true', MACRO_AUTO_FETCH='0', RSSFEEDS_AUTO_FETCH='1'),
+            env=dict(os.environ, GITHUB_ACTIONS='true', MACRO_AUTO_FETCH='0',
+                 RSSFEEDS_AUTO_FETCH='1', EQN_AUTO_FETCH='0'),
             cwd=self._tmp.name)
         self.assertFalse(os.path.exists(self.rss), '宏观快讯测试不得触发 RSS 补抓')
         return result
@@ -384,7 +386,8 @@ class TestBuildSiteEndToEnd(unittest.TestCase):
              '--data', self.missing, '--community', self.missing,
              '--sentiment', self.missing, '--macro', self.macro],
             capture_output=True, text=True, timeout=120,
-            env=dict(os.environ, GITHUB_ACTIONS='true', MACRO_AUTO_FETCH=''),
+            env=dict(os.environ, GITHUB_ACTIONS='true', MACRO_AUTO_FETCH='',
+                 EQN_AUTO_FETCH='0'),
             cwd=self._tmp.name)
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(os.path.exists(self.macro), '--check 是纯校验，绝不联网补抓')

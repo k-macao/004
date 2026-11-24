@@ -137,6 +137,7 @@ class TestVixWechatIntegration(unittest.TestCase):
                 'FORECAST_HISTORY': missing,
                 'MACRO_AUTO_FETCH': '0',
                 'RSSFEEDS_AUTO_FETCH': '0',
+                'EQN_AUTO_FETCH': '0',
             }
             old = {key: os.environ.get(key) for key in env}
             os.environ.update(env)

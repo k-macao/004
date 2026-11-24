@@ -383,7 +383,8 @@ class TestWechatSection(unittest.TestCase):
         return {'MARKET_DATA': market, 'COMMUNITY_DATA': missing,
                 'SENTIMENT_DATA': missing, 'MACRO_DATA': missing,
                 'RSSFEEDS_DATA': rss, 'FORECAST_HISTORY': missing,
-                'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0'}
+                'MACRO_AUTO_FETCH': '0', 'RSSFEEDS_AUTO_FETCH': '0',
+                'EQN_AUTO_FETCH': '0'}
 
     def _render(self, rss_payload):
         env = self._env(rss_payload)
@@ -401,7 +402,7 @@ class TestWechatSection(unittest.TestCase):
         html = self._render(_mock_data())
         self.assertIn('05 / 全球 49 大财经 RSS 情报源', html)
         rss_part = html_mod.unescape(
-            html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0])
+            html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('06 / 方程式新闻', 1)[0])
         for c in rf.CATALOG:
             self.assertIn(c['name'], rss_part, f'{c["key"]} 必须出现在微信 05 栏')
         self.assertIn('RSS 情报源', html)
@@ -410,7 +411,7 @@ class TestWechatSection(unittest.TestCase):
 
     def test_empty_snapshot_degrades_and_never_backfills(self):
         html = self._render(None)
-        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0]
+        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('06 / 方程式新闻', 1)[0]
         self.assertEqual('', _plain(rss_part).strip())
         for bad in STALE_MARKERS:
             self.assertNotIn(bad, rss_part)
@@ -420,7 +421,7 @@ class TestWechatSection(unittest.TestCase):
     def test_stale_snapshot_is_not_pushed(self):
         html = self._render(_stale_payload())
         self.assertNotIn('九天前的旧闻 ABCXYZ', html)
-        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0]
+        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('06 / 方程式新闻', 1)[0]
         self.assertEqual('', _plain(rss_part).strip())
 
     def test_budget_ladder_keeps_every_source(self):
@@ -442,7 +443,7 @@ class TestWechatSection(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
                 html, _t, _tf = wp.build_single_wechat_html(now=NOW)
         fetch.assert_not_called()
-        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('07 / 核心结论', 1)[0]
+        rss_part = html.split('05 / 全球 49 大财经 RSS 情报源', 1)[1].split('06 / 方程式新闻', 1)[0]
         self.assertEqual('', _plain(rss_part).strip())
 
 
@@ -645,7 +646,7 @@ class TestBootstrapAndBuildSite(unittest.TestCase):
              '--macro', missing, '--rss', self.path,
              '--macro-no-fetch', '--rss-mock', '--rss-fetch', '--forecast-no-history'],
             capture_output=True, text=True, timeout=240, cwd=self._tmp.name,
-            env=dict(os.environ, RSSFEEDS_AUTO_FETCH='0'))
+            env=dict(os.environ, RSSFEEDS_AUTO_FETCH='0', EQN_AUTO_FETCH='0'))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertTrue(os.path.exists(self.path), '构建期补抓应把产物落到 --rss 指定路径')
         with open(out, encoding='utf-8') as f:
@@ -664,7 +665,8 @@ class TestBootstrapAndBuildSite(unittest.TestCase):
              '--data', missing, '--community', missing, '--sentiment', missing,
              '--macro', missing, '--rss', self.path],
             capture_output=True, text=True, timeout=180, cwd=self._tmp.name,
-            env=dict(os.environ, GITHUB_ACTIONS='true', RSSFEEDS_AUTO_FETCH=''))
+            env=dict(os.environ, GITHUB_ACTIONS='true', RSSFEEDS_AUTO_FETCH='',
+                 EQN_AUTO_FETCH='0'))
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertFalse(os.path.exists(self.path), '--check 是纯校验，绝不联网补抓')
 

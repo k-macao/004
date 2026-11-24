@@ -1,0 +1,161 @@
+{
+  "recorded_from": "https://api.eqn.news/public/v1/news?channel=main",
+  "note": "离线回放样本（字段形态按线上真实报文誊写，条目为演示内容）：_time 字段由 eqn_news.build(mock=True) 按 _age_hours 改写成「当前往前第 n 小时」，避免演示数据被时效窗口清空。",
+  "items": [
+    {
+      "no": 16137,
+      "_age_hours": 2,
+      "time": "2026-11-20T06:15:32.540Z",
+      "channels": ["main", "binance"],
+      "source": "Binance EN",
+      "zh": "Binance Futures 将上线多个 TradFi USDⓈ 保证金永续合约（2026-11-20）",
+      "en": "Binance Futures Will Launch Multiple TradFi USDⓈ-Margined Perpetual Contracts (2026-11-20)",
+      "coins": [],
+      "url": "https://eqn.news/main/16137",
+      "source_url": "https://api.eqn.news/public/archive/bn-2364",
+      "ai": {
+        "summary": {
+          "type": "futures",
+          "points": [
+            {"zh": "11-20 09:30/09:35/09:40 (UTC) 依次上线 JNJUSDT、AMDLUSDT、NIOUSDT 三个 USDT 本位永续合约。", "en": "On 11-20 at 09:30/09:35/09:40 (UTC), JNJUSDT, AMDLUSDT and NIOUSDT perpetual contracts will be listed successively."},
+            {"zh": "三个合约最高杠杆均为 20x，最小名义价值 5 USDT。", "en": "All three contracts have a maximum leverage of 20x and a minimum notional value of 5 USDT."}
+          ]
+        },
+        "overview": null,
+        "notice": "AI-generated, for reference only; may contain errors."
+      }
+    },
+    {
+      "no": 16935,
+      "_age_hours": 5,
+      "time": "2026-11-23T13:56:07.211Z",
+      "channels": ["main"],
+      "source": "AggrNews",
+      "zh": "*英伟达董事会恢复黄仁勋总裁、首席执行官及董事会职务：彭博社",
+      "en": "*NVIDIA BOARD REINSTATES JENSEN HUANG AS PRESIDENT, CEO & BOARD: BBG",
+      "coins": [],
+      "url": "https://eqn.news/main/16935",
+      "source_url": "https://x.com/AggrNews/status/2124864564651065765",
+      "ai": {
+        "summary": null,
+        "overview": {
+          "status": "ready",
+          "updated_at": "2026-11-23T19:59:26.702Z",
+          "following": false,
+          "zh": {
+            "paragraphs": [
+              {"text": "英伟达23日宣布，董事会一致同意黄仁勋自22日起复任总裁、首席执行官和董事。", "sources": ["英伟达"]},
+              {"text": "美东14时42分，英伟达报164.18美元，涨30.79%。", "sources": ["Stock Analysis"]}
+            ]
+          },
+          "en": {
+            "paragraphs": [
+              {"text": "Nvidia announced on the 23rd that its board unanimously agreed to reinstate Huang as president, chief executive officer and director effective the 22nd.", "sources": ["Nvidia"]}
+            ]
+          },
+          "changes": "更新英伟达股价：突破168.60美元 → 164.18美元"
+        },
+        "notice": "AI-generated, for reference only; may contain errors."
+      }
+    },
+    {
+      "no": 16704,
+      "_age_hours": 9,
+      "time": "2026-11-22T19:35:42.204Z",
+      "channels": ["main"],
+      "source": "EquationNews",
+      "zh": "Fusionist Bridge 漏洞被利用，铸造了 10 千万亿枚 $ACE 代币，估计抽走 104 万美元 USDT",
+      "en": "Fusionist Bridge Exploit Mints 10 Quadrillion $ACE token, Drains an Estimated $1.04M in USDT",
+      "coins": ["ACE"],
+      "url": "https://eqn.news/main/16704",
+      "source_url": null,
+      "ai": {
+        "summary": null,
+        "overview": {
+          "status": "ready",
+          "updated_at": "2026-11-23T01:39:54.242Z",
+          "following": false,
+          "zh": {
+            "paragraphs": [
+              {"text": "北京时间11月23日，链游Fusionist在BNB链上遇袭。攻击者滥用跨链桥铸币权，抛售无抵押代币。", "sources": ["Blockaid", "Fusionist"]},
+              {"text": "The Block估算攻击者套现约200万USDT。", "sources": ["The Block"]}
+            ]
+          },
+          "en": {
+            "paragraphs": [
+              {"text": "On November 23 Beijing time, blockchain game Fusionist was attacked on the BNB Chain.", "sources": ["Blockaid"]}
+            ]
+          },
+          "changes": "更新 套现估算约104万USDT → 约200万USDT"
+        },
+        "notice": "AI-generated, for reference only; may contain errors."
+      }
+    },
+    {
+      "no": 17075,
+      "_age_hours": 12,
+      "time": "2026-11-23T19:44:15.864Z",
+      "channels": ["elon"],
+      "source": "elonmusk [reply]",
+      "zh": "@XFreeze 是的",
+      "en": "@XFreeze Yes",
+      "coins": [],
+      "url": "https://eqn.news/monitor/17075",
+      "source_url": "https://x.com/elonmusk/status/2124952155060580633",
+      "ai": null
+    },
+    {
+      "no": 16036,
+      "_age_hours": 26,
+      "time": "2026-11-19T16:49:03.100Z",
+      "channels": ["main", "tfmoves"],
+      "source": "Tree News",
+      "zh": "",
+      "en": "*ANTHROPIC OPENS AT $111.50, IPO AT $83: BBG",
+      "coins": [],
+      "url": "https://eqn.news/main/16036",
+      "source_url": "https://x.com/TreeNewsFeed/status/2123458534968852688",
+      "ai": null
+    },
+    {
+      "no": 15990,
+      "_age_hours": 50,
+      "time": "2026-11-21T08:10:00.000Z",
+      "channels": ["korea"],
+      "source": "Korean Exchange KO",
+      "zh": "특정 코인 모니터링 라벨 대상 편입 안내",
+      "en": "Notice on inclusion in the monitoring label for specific coins",
+      "coins": ["BANK", "INIT"],
+      "url": "https://eqn.news/monitor/15990",
+      "source_url": null,
+      "ai": null
+    },
+    {
+      "no": 15001,
+      "_age_hours": 260,
+      "time": "2026-11-13T02:00:00.000Z",
+      "channels": ["main"],
+      "source": "Sample Wire",
+      "zh": "这条已超出时效窗口，用于验证超窗丢弃",
+      "en": "This one is outside the freshness window and should be dropped",
+      "coins": [],
+      "url": "https://eqn.news/main/15001",
+      "source_url": null,
+      "ai": null
+    },
+    {
+      "no": 15002,
+      "_age_hours": null,
+      "time": null,
+      "channels": ["pricechange"],
+      "source": "Sample Wire",
+      "zh": "日期未标注的示例条目（应保留并垫底）",
+      "en": "",
+      "coins": ["BTC"],
+      "url": "https://eqn.news/main/15002",
+      "source_url": null,
+      "ai": null
+    }
+  ],
+  "next_cursor": "1792676405217-16137"
+}

@@ -67,6 +67,7 @@ class TestReportTimestamps(unittest.TestCase):
                     '--sentiment', str(root / 'missing-sentiment.json'),
                     '--macro', str(root / 'missing-macro.json'), '--macro-no-fetch',
                     '--rss', str(root / 'missing-rss.json'), '--rss-no-fetch',
+                    '--eqn', str(root / 'missing-eqn.json'), '--eqn-no-fetch',
                     '--forecast-no-history']
             # Exercise the real CLI render path even on an Actions runner.
             with (mock.patch.dict(os.environ, {'GITHUB_ACTIONS': 'true'}),

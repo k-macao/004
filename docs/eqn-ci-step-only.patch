@@ -1,0 +1,86 @@
+# 应用方式（需 repo 成员或有 workflows 权限的账号 —— Agent 的 GitHub App 缺该权限，
+#            含 .github/workflows/** 的提交会被远端直接 reject，已实测确认):
+#   git apply docs/eqn-ci-step-only.patch && git commit -am "ci: 接入 eqn_news.py 方程式快讯抓取步骤"
+# 内容: deploy / wechat / daily 三个 job 各加一步 eqn_news.py 抓取（--json eqn_news_data.json
+#       --days 7 --text），失败不阻断，摘要写入 Step Summary。
+# 注: 即使本补丁一直不应用，build_site.py / tools/wechat_push.py 也会在构建期通过
+#     eqn_news.ensure() 自动补抓，06 栏照样能拿到快讯（本补丁的价值是一手数据源 + 可观测性）。
+
+--- a/.github/workflows/m.yml
++++ b/.github/workflows/m.yml
+@@ -12,6 +12,9 @@
+ #   market_data.py      → market_data.json      (Yahoo Finance / Stooq 多源回退抓取最新行情)
+ #   community_snapshot.py → community_store/*.sqlite3 (49 独立库；四小时一次；帖子间隔 10 秒)
+ #   community_store.py → community_data.json (从库导出静态快照，页面和推送读取后重新分析)
++#   eqn_news.py       → eqn_news_data.json      (网页 06 节 + 微信 06 栏方程式新闻快讯；公开免密钥，
++#                                                抓不到则整栏留空，绝不回填历史标题。即使本步骤被删/失败，
++#                                                build_site.py / wechat_push.py 也会在构建期就地补抓一次)
+ #   tools/probe_sentiment_apis.py → docs/sentiment-api-eval.md (量化平台舆情接口实测评分)
+ #   sentiment_factors.py → sentiment_data.json (聚宽/米筐/掘金/优矿 + 免费兜底源舆情·新闻因子；境内取不到则 --mock 降级)
+ #   build_site.py       → report.html           (把行情+社区+抓取日期注入页面与推送内容)
+@@ -198,6 +201,21 @@
+           cat rss_summary.txt
+           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+ 
++      - name: 📰 动态抓取方程式新闻快讯 (eqn_news.py → eqn_news_data.json · 网页 06 节 + 微信 06 栏数据源)
++        # 公开只读接口（MCP https://api.eqn.news/public/mcp / REST /v1/news，默认走 REST）；
++        # 失败不阻断：06 栏留空，build_site.py 的 ensure() 也会在构建期就地补抓一次。
++        run: |
++          set +e
++          timeout 60 python3 eqn_news.py --json eqn_news_data.json --days 7 --text > eqn_summary.txt 2>&1
++          rc=$?
++          set -e
++          if [ $rc -ne 0 ] || [ ! -s eqn_news_data.json ]; then
++            echo "⚠️ 方程式快讯当次抓取失败（rc=$rc）：06 栏将留空，不回填历史标题（构建与推送不因此中断）" | tee -a eqn_summary.txt
++            echo "::warning title=06 数据未获取::eqn_news.py 抓取失败 rc=$rc 或产物为空"
++          fi
++          cat eqn_summary.txt
++          { echo '### 📰 06 栏 方程式新闻 · 全球快讯（仅保留 7 天内条目）'; echo '```'; cat eqn_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
++
+ 
+       - name: 🏗️ 动态构建报告 (build_site.py → report.html · 行情+社区双注入)
+         # 上一步若没写出产物，build_site 的 ensure() 会就地补抓 —— 补抓同样要用
+@@ -335,6 +353,21 @@
+           cat rss_summary.txt
+           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+ 
++      - name: 📰 动态抓取方程式新闻快讯 (eqn_news.py → eqn_news_data.json · 网页 06 节 + 微信 06 栏数据源)
++        # 公开只读接口（MCP https://api.eqn.news/public/mcp / REST /v1/news，默认走 REST）；
++        # 失败不阻断：06 栏留空，build_site.py 的 ensure() 也会在构建期就地补抓一次。
++        run: |
++          set +e
++          timeout 60 python3 eqn_news.py --json eqn_news_data.json --days 7 --text > eqn_summary.txt 2>&1
++          rc=$?
++          set -e
++          if [ $rc -ne 0 ] || [ ! -s eqn_news_data.json ]; then
++            echo "⚠️ 方程式快讯当次抓取失败（rc=$rc）：06 栏将留空，不回填历史标题（构建与推送不因此中断）" | tee -a eqn_summary.txt
++            echo "::warning title=06 数据未获取::eqn_news.py 抓取失败 rc=$rc 或产物为空"
++          fi
++          cat eqn_summary.txt
++          { echo '### 📰 06 栏 方程式新闻 · 全球快讯（仅保留 7 天内条目）'; echo '```'; cat eqn_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
++
+ 
+ 
+       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区双注入)
+@@ -450,6 +483,21 @@
+           cat rss_summary.txt
+           { echo '### 📡 05 栏 49 大财经 RSS 情报源（仅保留 14 天内、日期可解析的条目）'; echo '```'; cat rss_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+ 
++      - name: 📰 动态抓取方程式新闻快讯 (eqn_news.py → eqn_news_data.json · 网页 06 节 + 微信 06 栏数据源)
++        # 公开只读接口（MCP https://api.eqn.news/public/mcp / REST /v1/news，默认走 REST）；
++        # 失败不阻断：06 栏留空，build_site.py 的 ensure() 也会在构建期就地补抓一次。
++        run: |
++          set +e
++          timeout 60 python3 eqn_news.py --json eqn_news_data.json --days 7 --text > eqn_summary.txt 2>&1
++          rc=$?
++          set -e
++          if [ $rc -ne 0 ] || [ ! -s eqn_news_data.json ]; then
++            echo "⚠️ 方程式快讯当次抓取失败（rc=$rc）：06 栏将留空，不回填历史标题（构建与推送不因此中断）" | tee -a eqn_summary.txt
++            echo "::warning title=06 数据未获取::eqn_news.py 抓取失败 rc=$rc 或产物为空"
++          fi
++          cat eqn_summary.txt
++          { echo '### 📰 06 栏 方程式新闻 · 全球快讯（仅保留 7 天内条目）'; echo '```'; cat eqn_summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
++
+       - name: 🏗️ 动态构建报告 (build_site.py · 行情+社区+宏观快讯注入)
+         env:
+           RSSHUB_BASE: ${{ vars.RSSHUB_BASE }}
